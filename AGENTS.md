@@ -686,9 +686,11 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 - **插件支持从链接安装** (协议第 13 节的裸 URL 那一条): `plugin/PluginDownload.kt` 只收 https
   (每一跳都重查)、边读边数 32 MB 上限、下到 cache 之后交给 `PluginInstaller` 走**与本地包完全
   同一条链**; 设置页那一段多一行「从链接装入」, `lw_plugin` 的 `install` 多收一个 `url` (与 `path`
-  二选一)。签好名的 `.lwp` 随仓库发在 `plugins/` 下 (旧版本跟 Release 走), 那是给它一条稳定的
+  二选一)。签好名的 `.lwp` **当时**发在 `plugins/` 下 (旧版本跟 Release 走), 那是给它一条稳定的
   https 地址 —— 这台机器上 `github.com` 与 `raw.githubusercontent.com` 都不通, 所以文档里写的是
-  `cdn.jsdelivr.net/gh/yuloong07-star/Luwi@main/plugins/…` 那一条
+  `cdn.jsdelivr.net/gh/yuloong07-star/Luwi@main/plugins/…` 那一条。**2026-10-11 主人定了新口径:
+  不要放 Luwi 仓库** —— 那几个 `.lwp` 撤掉了, 插件包的家只有一个 (`yuloong07-star/luwi-plugins`
+  的 `packages/`, 钉内容 tag), `plugins/` 只留一页指路, 见下面插件第四步那一节
 - **插件段多了「安装伴侣 APK」** (2026-10-11 主人: "插件里新增安装伴侣APK功能"; **同一天傍晚又按主人
   的意思撤掉了** —— 新包把地址写在 `entry.apk` 里、装完顺手就装上, 那一行只剩给没带地址的老包兜底):
   companion 插件装的
@@ -781,7 +783,8 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   `samples/whale-widget` **已经收进 `archive/samples/whale-widget/`** —— 2026-10-11 主人点头之后
   搬的, 它不再是 Gradle 模块, 能构建的拷贝在 luwi-plugins 仓库)、`samples/art-ball-theme/`
   (浮标外观) 与 `samples/inline-timer/`
-  (番茄钟, Java 源码 + `tools/build-dex.ps1` 出 `main.dex`); 签好的包在 `plugins/` 下; 判据是
+  (番茄钟, Java 源码 + `tools/build-dex.ps1` 出 `main.dex`); 签好的包**只在 `luwi-plugins` 仓库的
+  `packages/`** (Luwi 这边不放, 2026-10-11 主人定的口径; `plugins/` 只剩一页指路); 判据是
   `tools/check-plugins.mjs` (87 条) 与 `app/src/test/.../plugin/PluginV2Test.kt` (公钥身份那一段读数
   与签名工具打印的那一串是同一个数)
 - **浮标外观那一档也接上了** (`plugin/theme/BallTheme.kt` + `BallView` 那条外部图 / 帧序列分支):

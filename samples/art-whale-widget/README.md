@@ -19,7 +19,8 @@
 
 ## 装它
 
-Luwi → 设置 → 插件 → **从链接装入**, 粘仓库里那一份 `plugins/art-whale-widget-2.0.0.lwp` 的地址;
+Luwi → 设置 → 插件 → **从链接装入**, 粘 `luwi-plugins` 仓库里那一份的地址
+(`…@plugins-2.7.6/packages/art-whale-widget-2.0.0.lwp` —— 插件包只住那个仓库, Luwi 这边不放);
 装完 Luwi 会自己把 `anim` 槽挂到它, 并弹一句"要放到桌面吗" (系统那张"添加到主屏幕"的确认卡)。
 
 **同一时刻只有一只插件能占 `anim` 槽** (同槽互斥): 装了两只会动的插件, 桌面上只能上其中一只,
@@ -31,7 +32,7 @@ Luwi → 设置 → 插件 → **从链接装入**, 粘仓库里那一份 `plugi
 cd samples\art-whale-widget
 python tools\build-frames.py
 node ..\..\tools\lw-plugin-sign.mjs sign --dir plugin --key ..\..\..\backups\lw-publisher-key.pem `
-  --out ..\..\.lwtmp\art-whale --zip ..\..\plugins\art-whale-widget-2.0.0.lwp
+  --out ..\..\.lwtmp\art-whale --zip ..\..\.lwtmp\art-whale\art-whale-widget-2.0.0.lwp
 ```
 
 签名的私钥在开发机的 `backups/` 里, **不进仓库**。
