@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 动画槽登记表: 组件选择器里看到的名字来自主 APK 的 string, 编译期定死 (Android 的限制) -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/settings_widget_slot_anim_desc"
+    android:initialLayout="@layout/lw_widget_slot_anim"
+    android:minWidth="110dp"
+    android:minHeight="130dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

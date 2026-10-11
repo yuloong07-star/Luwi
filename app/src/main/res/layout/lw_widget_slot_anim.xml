@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  动画槽那一格 (方案 3.1): 一台 ViewFlipper 一张一帧, 由它自己翻
+
+  **为什么不用 drawable 动画**: 2026-10-10 在伴侣那一份上实测, `animation-list` 与动态 GIF 两条路
+  都停在第一帧, 只有 `ViewFlipper` 的 `autoStart` 在动 (`onAttachedToWindow` 里 `startFlipping`,
+  与 drawable 动画那条链无关)。这一份是同一套做法搬到宿主槽里
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/lw_slot_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ViewFlipper
+        android:id="@+id/lw_slot_flipper"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:autoStart="true"
+        android:flipInterval="100" />
+
+    <TextView
+        android:id="@+id/lw_slot_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:background="#66000000"
+        android:paddingStart="6dp"
+        android:paddingTop="2dp"
+        android:paddingEnd="6dp"
+        android:paddingBottom="2dp"
+        android:textColor="#FFFFFFFF"
+        android:textSize="11sp" />
+
+</FrameLayout>

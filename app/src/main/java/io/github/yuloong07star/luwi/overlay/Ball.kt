@@ -15,6 +15,8 @@ import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
+import android.graphics.Bitmap
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import io.github.yuloong07star.luwi.R
 import kotlin.math.abs
 
@@ -379,6 +381,20 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
     /** 这一口呼吸的底色 (环色): 会话轮换换了色就要拿新的重开一遍 */
     private var breatheBase: Int = NEUTRAL
 
+    /**
+     * 外观插件那一档 (协议 10.1 / 方案 3.2): 挑中一个主题插件时, 球体那一层换成它给的图
+     *
+     * **读不到一律回内置** —— 这与"删掉插件回退内置画法"是同一件事。挑的是哪一个由
+     * [BallTheme.currentId] 说了算 (设置页里那一行), 心跳每一拍顺手读一次那个小文件: 主人换了外观
+     * 当场就该看得见, 不用等状态变化
+     */
+    private var themeKey: String = ""
+    private var faceFrame: Bitmap? = null
+    private var faceFrames: List<Bitmap> = emptyList()
+    private var faceIndex = 0
+    private var faceIntervalMs = 0
+    private val faceAdvance = Runnable { advanceFace() }
+
     /** 平台自己那一档门槛: 标准灵敏度用它, 防误触那一档拿它当垫底 (见 [BallFeel]) */
     private val platformSlop = ViewConfiguration.get(context).scaledTouchSlop
 
@@ -476,6 +492,10 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
         val changed = next != word
         val color = ring ?: next?.ring() ?: NEUTRAL
         val recolored = color != lastColor
+        // 外观插件那一档: 挑中哪一个的那一行文件改了, 这一拍就重画 (不必等状态变化)
+        val themeNow = runCatching { BallTheme.currentId(context) }.getOrDefault("")
+        val rethemed = themeNow != themeKey
+        themeKey = themeNow
         word = next
         lastColor = color
         circle.setStroke(dp(STROKE_DP), color)
@@ -483,7 +503,7 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
         breathe(color, next == BallWord.SPEAKING || next == BallWord.LISTENING)
         val text = next?.label(context).orEmpty()
         val size = if (next == null) LABEL_SP else WORD_SP
-        if (!changed && !recolored && label.text.isNotEmpty()) return
+        if (!changed && !recolored && !rethemed && label.text.isNotEmpty()) return
         // 字换了才值得闪一下; 只换色 (会话轮换) 直接落色, 不该看着像闪了一下
         if (!changed || !animate) {
             label.animate().cancel()
@@ -544,6 +564,7 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
         fill = null
         breathe?.cancel()
         breathe = null
+        stopFace()
     }
 
     /**
@@ -552,12 +573,69 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
      * [color] 与描边那一个环色同源 (见 [show]) —— 空闲时它是那颗标的白 (文字不可见, 这个色用不上)
      */
     private fun apply(next: BallWord?, text: String, size: Float, color: Int) {
-        glyph.visibility = if (next == null) VISIBLE else GONE
-        label.visibility = if (next == null) GONE else VISIBLE
+        val themed = applyTheme(next)
+        glyph.visibility = if (next == null && !themed) VISIBLE else GONE
+        label.visibility = if (next != null && (!themed || !hideBuiltinText)) VISIBLE else GONE
         label.text = text
         label.setTextColor(color)
         label.setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
         label.alpha = 1f
+    }
+
+    /** 主题那一份说不说"把内置那三个字也藏起来" (只在有主题时才有意义) */
+    private var hideBuiltinText = false
+
+    /**
+     * 球体那一层换成插件给的那张图 (方案 3.1 的 `theme/ball.json`)
+     *
+     * @return true 表示这一档生效了 (调用方就不用再画标记 / 字)
+     */
+    private fun applyTheme(next: BallWord?): Boolean {
+        val state = next?.name?.lowercase() ?: "idle"
+        val face = runCatching { BallTheme.face(context, state) }.getOrNull()
+        stopFace()
+        if (face == null) {
+            hideBuiltinText = false
+            core.background = circle
+            return false
+        }
+        hideBuiltinText = face.hideBuiltinText
+        val maxPx = dp(BALL_DRAW_DP).coerceAtLeast(96)
+        val frames = face.frames?.let { spec ->
+            BallTheme.framesOf(context, state, spec)?.mapNotNull { file -> BallTheme.decode(file, maxPx) }
+        }.orEmpty()
+        if (frames.size >= 2) {
+            faceFrames = frames
+            faceIndex = 0
+            faceIntervalMs = face.frames?.intervalMs ?: 100
+            core.background = android.graphics.drawable.BitmapDrawable(resources, frames[0])
+            postDelayed(faceAdvance, faceIntervalMs.toLong())
+            return true
+        }
+        val bitmap = BallTheme.decode(face.file, maxPx)
+        if (bitmap == null) {
+            hideBuiltinText = false
+            core.background = circle
+            return false
+        }
+        faceFrame = bitmap
+        core.background = android.graphics.drawable.BitmapDrawable(resources, bitmap)
+        return true
+    }
+
+    /** 帧序列那一拍: 换下一张, 排下一拍 */
+    private fun advanceFace() {
+        if (faceFrames.size < 2) return
+        faceIndex = (faceIndex + 1) % faceFrames.size
+        core.background = android.graphics.drawable.BitmapDrawable(resources, faceFrames[faceIndex])
+        postDelayed(faceAdvance, faceIntervalMs.toLong())
+    }
+
+    private fun stopFace() {
+        removeCallbacks(faceAdvance)
+        faceFrames = emptyList()
+        faceFrame = null
+        faceIndex = 0
     }
 
     /** 按下 / 拖动那两档尺寸: 手指按住要有回应, 拖起来要像"拿起来了" (缩的是球体那一层) */

@@ -3,6 +3,9 @@ package io.github.yuloong07star.luwi.plugin
 import android.content.Context
 import android.os.Bundle
 import io.github.yuloong07star.luwi.plugin.api.LwPluginResults
+import io.github.yuloong07star.luwi.plugin.widget.WidgetHost
+import io.github.yuloong07star.luwi.plugin.widget.WidgetPush
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import io.github.yuloong07star.luwi.tool.LwNotify
 import io.github.yuloong07star.luwi.tool.LwSpeak
 import io.github.yuloong07star.luwi.tool.LwSystem
@@ -81,6 +84,10 @@ internal object PluginCapabilityRuntime {
                 }
             }
             "files.own" -> own(context, manifest, args)
+            // 桌面那几格的内容 (方案 3.3): 带代码的域可以自己推 —— 番茄钟那种"每秒都要变"的组件
+            // 于是不需要伴侣 APK
+            "ui.widget" -> pushWidget(context, manifest, args)
+            "ui.theme" -> theme(context, manifest)
             "session.post" -> {
                 val text = args.getString("text").orEmpty()
                 if (text.isBlank()) {
@@ -130,4 +137,69 @@ internal object PluginCapabilityRuntime {
     /** `lw_*` 那套工具回的都是 `{"text": …}`; 能力这一侧只要那一句话 */
     private fun sentence(json: JsonObject): Bundle =
         LwPluginResults.ok(json["text"]?.jsonPrimitive?.contentOrNull ?: json.toString())
+
+    /**
+     * `ui.widget`: 把标题 / 正文 / 图 / 按钮推给桌面那几格
+     *
+     * 一个字段都不给 = **清掉之前推的那一份**, 回到包里 `widget.json` 那一段 (于是"临时推一个状态"
+     * 与"回到静态样子"都有路走)
+     */
+    private fun pushWidget(context: Context, manifest: PluginManifest, args: Bundle): Bundle {
+        val content = WidgetPush.Content(
+            label = args.getString("label").orEmpty().take(40),
+            title = args.getString("title").orEmpty().take(60),
+            text = args.getString("text").orEmpty().take(300),
+            image = args.getString("image").orEmpty().take(200),
+            buttons = widgetButtons(args),
+        )
+        if (content.label.isBlank() && content.title.isBlank() && content.text.isBlank() &&
+            content.image.isBlank() && content.buttons.isEmpty()
+        ) {
+            WidgetPush.clear(context, manifest.id)
+            WidgetHost.refreshHolding(context, manifest.id)
+            return LwPluginResults.ok("已经把推上去的那一份清掉, 回到包里那一份")
+        }
+        WidgetPush.write(context, manifest.id, content)
+        WidgetHost.refreshHolding(context, manifest.id)
+        return LwPluginResults.ok("已经把内容推给桌面上那几格")
+    }
+
+    /** 图文槽那两颗按钮: 一串 `{label, action, tool}`; 不合法的那一颗直接拒, 不静默丢 */
+    @Suppress("DEPRECATION")
+    private fun widgetButtons(args: Bundle): List<WidgetPush.Content.Button> {
+        val raw = args.getParcelableArrayList<Bundle>("buttons") ?: return emptyList()
+        if (raw.size > 2) throw IllegalArgumentException("桌面上最多两颗按钮")
+        return raw.map { one ->
+            val label = one.getString("label").orEmpty().take(10)
+            val action = one.getString("action").orEmpty().ifBlank { "open" }
+            val tool = one.getString("tool").orEmpty().take(32)
+            if (action !in setOf("open", "tool", "none")) {
+                throw IllegalArgumentException("按钮的 action 只能是 open / tool / none, 这一颗写的是 \"$action\"")
+            }
+            if (action == "tool" && !Regex("^[a-z][a-z0-9_]{1,31}$").matches(tool)) {
+                throw IllegalArgumentException("按钮要调工具就得给 tool (例如 timer_start)")
+            }
+            WidgetPush.Content.Button(label, action, tool)
+        }
+    }
+
+    /**
+     * `ui.theme`: 浮标外观 (协议 10.1)
+     *
+     * 它是一件**被动**的能力: 外观是主人在设置页那一行里挑的, 插件调不出"给我换上" —— 所以这里
+     * 如实说清"现在用哪一套、去哪儿换", 不假装自己掌握着开关
+     */
+    private fun theme(context: Context, manifest: PluginManifest): Bundle {
+        val active = BallTheme.currentId(context)
+        if (active == manifest.id) {
+            val name = BallTheme.active(context)?.spec?.name.orEmpty().ifBlank { manifest.name }
+            return LwPluginResults.ok("现在用的就是它的外观「$name」")
+        }
+        val current = active.takeIf { it.isNotBlank() }
+            ?.let { id -> PluginStore.manifest(context, id)?.name ?: id }
+            ?: "内置画法"
+        return LwPluginResults.ok(
+            "${manifest.name} 带了浮标外观; 现在用的是「$current」—— 在设置页「浮标外观」那一行里挑",
+        )
+    }
 }

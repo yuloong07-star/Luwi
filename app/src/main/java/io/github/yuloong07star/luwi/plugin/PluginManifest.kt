@@ -1,6 +1,7 @@
 package io.github.yuloong07star.luwi.plugin
 
 import io.github.yuloong07star.luwi.plugin.api.LwPluginApi
+import io.github.yuloong07star.luwi.plugin.widget.WidgetSpec
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -35,6 +36,12 @@ internal data class PluginManifest(
     val toolPrefix: String,
     val entryPackage: String,
     val entryService: String,
+    val entryApk: String,
+    val entryDex: String,
+    val entryClass: String,
+    val entryActivity: String,
+    /** `widget/widget.json` 那一份 (方案 3.1); 没有这一段就是"这只插件不上桌面" */
+    val widget: WidgetSpec?,
     val publisherName: String,
     val publisherKey: String,
     val publisherSignature: String,
@@ -50,9 +57,30 @@ internal data class PluginManifest(
     /** 声明了哪些能力 (两个档合起来, 顺序照表里的顺序) */
     val declared: List<String> get() = requested + dangerous
 
+    /**
+     * 把包里那份 `widget/widget.json` 挂上 (方案 3.1)
+     *
+     * 与 plugin.json 里那段 `widget` 二选一: 两处都写就是写错了, 装的时候当场说清
+     */
+    fun withPackageWidget(directory: java.io.File): PluginManifest {
+        val file = java.io.File(directory, "widget/widget.json")
+        if (!file.isFile) return this
+        if (widget != null) {
+            throw IllegalArgumentException(
+                "widget 写了两处: plugin.json 里有一段, 包里又有 widget/widget.json —— 留一处就行",
+            )
+        }
+        val raw = try {
+            kotlinx.serialization.json.Json.parseToJsonElement(file.readText()).jsonObject
+        } catch (error: Throwable) {
+            throw IllegalArgumentException("widget/widget.json 不是一份 JSON 对象: ${error.message}")
+        }
+        return copy(widget = WidgetSpec.parse(raw, "widget/widget.json"))
+    }
+
     companion object {
-        /** 这一版收的 kind; 其余三种的拒绝话术在 [parse] 里 */
-        val SUPPORTED_KINDS = setOf("companion")
+        /** 这一版收的 kind; `dex` 是 `inline` 的别名 (进同一个域), 其余拒绝话术在 [parse] 里 */
+        val SUPPORTED_KINDS = setOf("companion", "art", "inline")
 
         /** 保留前缀 (协议第 6 节): 内置工具永远是 `lw_*` */
         val RESERVED_PREFIXES = setOf("lw", "dsh", "agent")
@@ -63,8 +91,13 @@ internal data class PluginManifest(
         private val SHA256_RULE = Regex("^sha256:[0-9a-f]{64}$")
         private val PARAM_TYPES = setOf("string", "integer", "number", "boolean", "array", "object")
 
-        /** 解析并校验; 不合法就抛一句点名的话 */
-        fun parse(text: String, lwVersion: String): PluginManifest {
+        /**
+         * 解析并校验; 不合法就抛一句点名的话
+         *
+         * @param directory 包解开之后的目录: 给了就把里面那份 `widget/widget.json` 一起读上
+         *   (只解清单的场合可以不给)
+         */
+        fun parse(text: String, lwVersion: String, directory: java.io.File? = null): PluginManifest {
             val root = try {
                 kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
             } catch (error: Throwable) {
@@ -98,13 +131,16 @@ internal data class PluginManifest(
                 throw IllegalArgumentException("api 只认 ${LwPluginApi.API_VERSION}, 这一份写的是 \"$api\"")
             }
 
-            val kind = root.string("kind")
+            val rawKind = root.string("kind")
+            // `dex` 与 `inline` 是一件事的两个名字 (方案第 6 节定死的): 解析时当别名收, 记录里归一到 inline
+            val kind = if (rawKind == "dex") "inline" else rawKind
             if (kind !in PluginManifest.SUPPORTED_KINDS) {
-                val later = when (kind) {
-                    "dex", "script", "theme" -> "那三种要等 P2 / P3, 这一版只收 companion"
-                    else -> "kind 只能是 companion"
+                val later = when (rawKind) {
+                    "script" -> "script 域还没接通 (P3), 这一版收 companion / art / inline"
+                    "theme" -> "theme 已经并进 art 域: kind 改成 art, 外观放在 theme/ 与 widget/ 里"
+                    else -> "kind 只能是 companion / art / inline (dex 是 inline 的别名)"
                 }
-                throw IllegalArgumentException("这一版只收 companion 插件, 这一份写的是 \"$kind\" —— $later")
+                throw IllegalArgumentException("这一份的 kind 是 \"$rawKind\" —— $later")
             }
 
             val prefix = root.string("toolPrefix")
@@ -115,10 +151,31 @@ internal data class PluginManifest(
                 throw IllegalArgumentException("toolPrefix 不能是保留字 (${RESERVED_PREFIXES.joinToString(" / ")}), 换一个")
             }
 
-            val entry = root["entry"]?.jsonObject
-                ?: throw IllegalArgumentException("companion 插件必须有 entry")
-            val entryPackage = entry.string("package")
-            val entryService = entry.string("service")
+            // 三个域的 entry 各是各的 (方案第 3 节): companion 要 package + service, inline 要 dex +
+            // class, art 没有宿主 —— 它有 entry 那一段就是写错了
+            val entry = root["entry"] as? JsonObject ?: JsonObject(emptyMap())
+            if (kind == "art" && entry.isNotEmpty()) {
+                throw IllegalArgumentException("art 域没有宿主, entry 那一段要留空 (它只有 theme/ 与 widget/ 那些资源)")
+            }
+            val entryPackage = if (kind == "companion") entry.string("package") else ""
+            val entryService = if (kind == "companion") entry.string("service") else ""
+            val entryDex = if (kind == "inline") entry.string("dex") else ""
+            val entryClass = if (kind == "inline") entry.string("class") else ""
+            if (kind == "inline") {
+                // 包内相对路径那一条纪律对 dex 也管 (运行 3.2 的同一份校验)
+                PluginPaths.requireRelative(entryDex, "entry.dex")
+            }
+            // 伴侣 APK 的地址 (协议第 8.1 节, 2026-10-11 加): 有它, 装完 `.lwp` 就能顺手把那另一半也
+            // 装上, 而不是让一个人自己去找那个包。**可选** —— 老包没有这一项照样收, 只是回到手动那条路
+            val entryApk = if (kind == "companion") entry.stringOrEmpty("apk").trim() else ""
+            if (entryApk.isNotEmpty() && !entryApk.startsWith("https://", ignoreCase = true)) {
+                throw IllegalArgumentException(
+                    "entry.apk 只收 https 的链接 (与协议第 13 节同一条口径), 这一份写的是 \"$entryApk\"",
+                )
+            }
+            // 自带界面那一条 (方案 3.4): 伴侣不许带 LAUNCHER, 入口在插件页那颗「打开」上 ——
+            // 于是那个 Activity 的名字要写在清单里, 可选 (老包没有它, 界面沿用 launcher 那条路)
+            val entryActivity = if (kind == "companion") entry.stringOrEmpty("activity").trim() else ""
 
             val publisher = root["publisher"]?.jsonObject
             val publisherName = publisher?.stringOrEmpty("name").orEmpty()
@@ -161,6 +218,22 @@ internal data class PluginManifest(
                 throw IllegalArgumentException("工具名在同一个插件里重了")
             }
 
+            // `art` 域那两条纪律 (方案 3.2): 不许带代码, 也不许声明能力 —— 它拿不到任何系统权限,
+            // 能做的就是"把图放到你看得见的地方"
+            if (kind == "art") {
+                if (requested.isNotEmpty() || dangerous.isNotEmpty()) {
+                    throw IllegalArgumentException(
+                        "art 域不许声明任何能力 (它没有宿主, 一件也做不到), 这一份声明了 " +
+                            (requested + dangerous).joinToString(", "),
+                    )
+                }
+                if (tools.isNotEmpty()) {
+                    throw IllegalArgumentException(
+                        "art 域不许带工具 —— 它连宿主都没有, 跑不了任何代码",
+                    )
+                }
+            }
+
             val ui = root["ui"]
             if (ui != null && ui != JsonNull) {
                 val keys = (ui as? JsonObject)?.keys.orEmpty()
@@ -169,6 +242,12 @@ internal data class PluginManifest(
                         "这一版还没有声明式设置与面板 (P4), ui 这一段要么不写要么写成空对象, 现在写着 ${keys.joinToString(", ")}",
                     )
                 }
+            }
+
+            // 桌面那一段 (方案 3.1): 可以直接写在 plugin.json 里, 也可以单独放一份
+            // `widget/widget.json` (见 [withPackageWidget]); 两处都写就是写错了
+            val inlineWidget = (root["widget"] as? JsonObject)?.let { raw ->
+                if (raw.isEmpty()) null else WidgetSpec.parse(raw, "plugin.json 的 widget")
             }
 
             val files = buildMap {
@@ -187,7 +266,7 @@ internal data class PluginManifest(
                 }
             }
 
-            return PluginManifest(
+            val manifest = PluginManifest(
                 raw = root,
                 id = id,
                 name = name,
@@ -198,6 +277,11 @@ internal data class PluginManifest(
                 toolPrefix = prefix,
                 entryPackage = entryPackage,
                 entryService = entryService,
+                entryApk = entryApk,
+                entryDex = entryDex,
+                entryClass = entryClass,
+                entryActivity = entryActivity,
+                widget = inlineWidget,
                 publisherName = publisherName,
                 publisherKey = publisherKey,
                 publisherSignature = publisherSignature,
@@ -206,6 +290,7 @@ internal data class PluginManifest(
                 tools = tools,
                 files = files,
             )
+            return if (directory == null) manifest else manifest.withPackageWidget(directory)
         }
 
         private fun requireVersion(field: String, value: String) {

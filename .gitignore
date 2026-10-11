@@ -13,8 +13,10 @@ local.properties
 /lwplugin-api/build
 /samples/companion/build
 # 第三份模块 (鲸鱼娘小组件) 的构建产物: 它是 2026-10-10 那一批加的, 上面那几条按路径锚定的规则
-# 一样盖不到它 —— 而它里面躺着 16 MB 的伴侣 APK
-/samples/whale-widget/build
+# 一样盖不到它 —— 而它里面躺着 16 MB 的伴侣 APK。
+# **2026-10-11 方案 v2 起那一份收进了 archive/samples/whale-widget/** (不再是 Gradle 模块),
+# 这一条跟着挪过去: 归档时整目录 `git mv` 把它原来的 build/ 一起带了过去
+/archive/samples/whale-widget/build
 /captures
 .externalNativeBuild
 .cxx

@@ -1,0 +1,18 @@
+{
+  "slot": "anim",
+  "name": "鲸鱼娘",
+  "frames": {
+    "dir": "art/dance-1",
+    "count": 32,
+    "fps": 10
+  },
+  "tap": "next",
+  "sets": [
+    {
+      "key": "slow",
+      "dir": "art/dance-1-slow",
+      "count": 32,
+      "fps": 5
+    }
+  ]
+}

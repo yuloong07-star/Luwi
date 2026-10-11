@@ -14,6 +14,7 @@ import io.github.yuloong07star.luwi.plugin.api.ILwPlugin
 import io.github.yuloong07star.luwi.plugin.api.ILwPluginContext
 import io.github.yuloong07star.luwi.plugin.api.LwPluginApi
 import io.github.yuloong07star.luwi.plugin.api.LwPluginResults
+import io.github.yuloong07star.luwi.plugin.inline.InlineHost
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -62,12 +63,23 @@ internal object PluginHost {
     /**
      * 接上并把它叫起来
      *
+     * 按 `kind` 路由到三个域 (方案第 3 节): `companion` 去绑那个 APK, `inline` 去 `:plugin` 进程里
+     * 加载它的 dex, 而 `art` **没有宿主** —— 它落地就算完成
+     *
      * @return null 表示接好了, 否则是一句点名的话 (并且这个插件不会留在启用状态)
      */
     fun connect(context: Context, manifest: PluginManifest, grants: Set<String>): String? {
         disconnect(context, manifest.id)
         problems.remove(manifest.id)
+        return when (manifest.kind) {
+            "art" -> null
+            "inline" -> InlineHost.connect(context, manifest, grants)
+            else -> connectCompanion(context, manifest, grants)
+        }
+    }
 
+    /** companion 那一档: 绑它的 Service */
+    private fun connectCompanion(context: Context, manifest: PluginManifest, grants: Set<String>): String? {
         val installed = runCatching {
             context.packageManager.getPackageInfo(manifest.entryPackage, 0)
         }.getOrNull()
@@ -98,12 +110,22 @@ internal object PluginHost {
             disconnect(context, manifest.id)
             return note(manifest.id, "伴侣的 Service ${BIND_TIMEOUT_SECONDS} 秒里没有回应")
         }
-
-        val mismatch = compare(manifest, runCatching { plugin.describe() }.getOrNull())
-        if (mismatch != null) {
+        val problem = activate(context, manifest, plugin, grants)
+        if (problem != null) {
             disconnect(context, manifest.id)
-            return note(manifest.id, mismatch)
+            return note(manifest.id, problem)
         }
+        return null
+    }
+
+    /**
+     * 接上之后的共同那一段: 自述对照 → `attach` → `enable`
+     *
+     * companion 与 inline 走的是同一份 —— 两个域的差别只在"插件那个对象从哪来"
+     */
+    fun activate(context: Context, manifest: PluginManifest, plugin: ILwPlugin, grants: Set<String>): String? {
+        val mismatch = compare(manifest, runCatching { plugin.describe() }.getOrNull())
+        if (mismatch != null) return mismatch
 
         val attach = Bundle().apply {
             putBinder(LwPluginApi.Attach.CONTEXT, contextBinder(context, manifest))
@@ -116,20 +138,23 @@ internal object PluginHost {
         val attached = runCatching { plugin.lifecycle(LwPluginApi.Event.ATTACH, attach) }
         if (attached.isFailure || !LwPluginResults.isOk(attached.getOrNull())) {
             val why = attached.exceptionOrNull()?.message ?: LwPluginResults.text(attached.getOrNull())
-            disconnect(context, manifest.id)
-            return note(manifest.id, "伴侣的 attach 没走通: $why")
+            return "插件的 attach 没走通: $why"
         }
         val enabled = runCatching { plugin.lifecycle(LwPluginApi.Event.ENABLE, Bundle()) }
         if (enabled.isFailure || !LwPluginResults.isOk(enabled.getOrNull())) {
             val why = enabled.exceptionOrNull()?.message ?: LwPluginResults.text(enabled.getOrNull())
-            disconnect(context, manifest.id)
-            return note(manifest.id, "伴侣的 enable 没走通: $why")
+            return "插件的 enable 没走通: $why"
         }
         return null
     }
 
-    /** 叫停并松开: disable → detach → unbind */
+    /** 叫停并松开: disable → detach → unbind; 两个域都问一遍, 没有会话的那一边是空转 */
     fun disconnect(context: Context, id: String) {
+        disconnectCompanion(context, id)
+        InlineHost.disconnect(context, id)
+    }
+
+    private fun disconnectCompanion(context: Context, id: String) {
         val session = sessions.remove(id) ?: return
         session.plugin?.let { plugin ->
             runCatching { plugin.lifecycle(LwPluginApi.Event.DISABLE, Bundle()) }
@@ -142,9 +167,10 @@ internal object PluginHost {
     /** 收一次工具调用 */
     fun invoke(context: Context, id: String, tool: String, args: Bundle): Bundle {
         val plugin = sessions[id]?.plugin
-            ?: return LwPluginResults.fail(
-                problems[id] ?: "这个插件现在没接上 (先停用再启用一次)",
-            )
+        if (plugin == null) {
+            if (InlineHost.has(id)) return InlineHost.invoke(context, id, tool, args)
+            return LwPluginResults.fail(problems[id] ?: "这个插件现在没接上 (先停用再启用一次)")
+        }
         return runCatching { plugin.invoke(tool, args) }.getOrElse { error ->
             // 插件抛异常绝不带走 LW: 转成一条工具错误文本 (协议 8.2 那条"崩"的兜底)
             Log.w(TAG, "$id 的 $tool 抛了异常", error)
@@ -152,7 +178,7 @@ internal object PluginHost {
         }
     }
 
-    private fun note(id: String, why: String): String {
+    fun note(id: String, why: String): String {
         Log.w(TAG, "$id: $why")
         problems[id] = why
         return why
@@ -190,7 +216,7 @@ internal object PluginHost {
     /** 每个插件一份 context binder: 它知道自己是谁, 于是能校验调用方的 uid */
     private val contexts = ConcurrentHashMap<String, LwPluginContextBinder>()
 
-    private fun contextBinder(context: Context, manifest: PluginManifest): IBinder =
+    fun contextBinder(context: Context, manifest: PluginManifest): IBinder =
         contexts.getOrPut(manifest.id) { LwPluginContextBinder(context, manifest) }
 }
 

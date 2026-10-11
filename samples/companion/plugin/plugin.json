@@ -9,7 +9,8 @@
   "toolPrefix": "hello",
   "entry": {
     "package": "io.github.yuloong07star.luwi.sample.companion",
-    "service": "io.github.yuloong07star.luwi.sample.companion.CompanionPluginService"
+    "service": "io.github.yuloong07star.luwi.sample.companion.CompanionPluginService",
+    "activity": "io.github.yuloong07star.luwi.sample.companion.HelloScreen"
   },
   "capabilities": {
     "requested": ["device.read", "notify.post"],

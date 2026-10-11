@@ -52,10 +52,15 @@ internal object PluginSignature {
         false
     }
 
-    /** 公钥指纹: SPKI-DER 那串字节的 sha256, 小写十六进制 —— 界面与审计里认的就是它 */
+    /**
+     * 公钥指纹: **规范化的公钥身份** (方案 3.3 定死的口径)
+     *
+     * 不是 SPKI 原字节的 sha256 —— 同一把 P-256 公钥, 各家编出来的 SPKI 可能不是逐字节一样的东西,
+     * 拿原字节去比会造成"明明签对了却被拒"的假阴性。白名单 / `.publishers` / 插件页 / 签名工具
+     * 四处认的都是 [PluginTrust.identity] 那一串
+     */
     fun fingerprint(key: String): String = try {
-        val bytes = Base64.decode(key.removePrefix("ecdsa-p256:"), Base64.DEFAULT)
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        PluginTrust.identity(key)
     } catch (error: Throwable) {
         ""
     }

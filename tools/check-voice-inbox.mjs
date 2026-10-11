@@ -121,10 +121,11 @@ check('点名的会话跟着那一行出来', pointed.map((item) => item.to), ['
 check('没有这个键的行读成"没点名"', pointed[1].to, '')
 check('点名那两句还是一句一行', pointed.map((item) => item.text), ['框里问的一句', '没有点名的'])
 
-// 10. "当前对话"那一笔账 (批次 5: 每次发送完成后, 20 分钟内那一场就是可复用的当前对话)
+// 10. "当前对话"那一笔账 (批次 5: 每次发送完成后, 那个时间窗内那一场就是可复用的当前对话)
 //
-// 四条判据: 投出去之后记得住 / 记的是**落盘**的那一份 (宿主重启还认得) / 19 分钟前那一场还在
-// / 21 分钟前那一场就当没有 (**2026-10-07 主人把 1 小时改成 20 分钟**, 见 VOICE_SESSION_MS)
+// 四条判据: 投出去之后记得住 / 记的是**落盘**的那一份 (宿主重启还认得) / 窗内那一场还在
+// / 过了窗就当没有 (**2026-10-07 主人把 1 小时改成 20 分钟, 2026-10-11 又缩到 10 分钟**,
+// 见 VOICE_SESSION_MS —— 这里两边取 9 / 11 分钟, 贴着那 10 分钟的两侧)
 async function sessionOf(text) {
   await api.voiceSessionBump(text)
   return api.voiceCurrentSession()
@@ -134,23 +135,23 @@ const sessionFile = join(dirname(inbox), 'session.json')
 const stored = JSON.parse(await readFile(sessionFile, 'utf8'))
 check('id 按字符串落盘 (64 位不进整数)', typeof stored.id, 'string')
 check('落盘的是同一个 id', stored.id, '184099533039071249')
-// 差一点到点: 19 分钟前那一刻仍然算当前对话
+// 差一点到点: 9 分钟前那一刻仍然算当前对话
 const stillFresh = JSON.parse(await readFile(sessionFile, 'utf8'))
-await writeFile(sessionFile, `${JSON.stringify({ id: stillFresh.id, at: Date.now() - 19 * 60 * 1000 })}\n`)
+await writeFile(sessionFile, `${JSON.stringify({ id: stillFresh.id, at: Date.now() - 9 * 60 * 1000 })}\n`)
 api.voiceSessionReset()
-check('19 分钟前那一场还算当前对话', await api.voiceCurrentSession(), '184099533039071249')
+check('9 分钟前那一场还算当前对话', await api.voiceCurrentSession(), '184099533039071249')
 // 过点: 直接改文件里那个时刻, 再把内存那一笔账清掉重读一次 —— 那与"宿主重启之后读到一份旧账"
 // 是同一条路
 const hourAgo = JSON.parse(await readFile(sessionFile, 'utf8'))
-await writeFile(sessionFile, `${JSON.stringify({ id: hourAgo.id, at: Date.now() - 21 * 60 * 1000 })}\n`)
+await writeFile(sessionFile, `${JSON.stringify({ id: hourAgo.id, at: Date.now() - 11 * 60 * 1000 })}\n`)
 api.voiceSessionReset()
-check('过了 20 分钟就不算当前对话', await api.voiceCurrentSession(), null)
+check('过了 10 分钟就不算当前对话', await api.voiceCurrentSession(), null)
 
-// 11. 目标会话: **浮标只投自己那一场, 而选场只看那 20 分钟** (主人 2026-10-06: "只要是 1 小时内,
-// 无论点球/喊唤醒词 都只在同一场对话"; 2026-10-07 那个数改成 20 分钟)
+// 11. 目标会话: **浮标只投自己那一场, 而选场只看那个时间窗** (主人 2026-10-06: "只要是 1 小时内,
+// 无论点球/喊唤醒词 都只在同一场对话"; 2026-10-07 那个数改成 20 分钟, 2026-10-11 缩到 10 分钟)
 //
-// 四条判据: 20 分钟内那一场浮标对话被复用 (唤醒头句也一样) / 没有当前对话就开一场新的 (落在浮标
-// 工作区) / 过了 20 分钟连唤醒头句也开一场新的 / 那一场不在了就开新的。**"正在界面里用的那一场"与
+// 四条判据: 10 分钟内那一场浮标对话被复用 (唤醒头句也一样) / 没有当前对话就开一场新的 (落在浮标
+// 工作区) / 过了 10 分钟连唤醒头句也开一场新的 / 那一场不在了就开新的。**"正在界面里用的那一场"与
 // "最近动过的那个"都不许被挑中** —— 那正是这句话落进 `/sdcard/DSH` 那场会话的原因 (它一被挑中,
 // "浮标的对话都在 dsh-ball 里"就不成立了)
 const listed = [
@@ -172,19 +173,19 @@ check(
 )
 await api.voiceSessionBump('bbb')
 check(
-  '20 分钟内那一场浮标对话被复用',
+  '10 分钟内那一场浮标对话被复用',
   (await api.voiceTargetSession(controller, signal, false)).sessionId,
   'bbb',
 )
 check(
-  '20 分钟内唤醒词那一句也复用那一场 (不再另开)',
+  '10 分钟内唤醒词那一句也复用那一场 (不再另开)',
   (await api.voiceTargetSession(controller, signal, true)).sessionId,
   'bbb',
 )
 // 11b. **回复框点名的那一场 (`to`)** —— 优先级最高, 但只在它还是活着的根会话时算数
 // (2026-10-06 那条例外: "有回复框时, 框里进的输入走发出回复那个窗口")
 check(
-  '回复框点名的那一场优先于 20 分钟那一场',
+  '回复框点名的那一场优先于 10 分钟那一场',
   await api.voiceTargetSession(controller, signal, false, 'aaa'),
   { sessionId: 'aaa', running: false, why: 'the reply box asked for its own conversation' },
 )
@@ -204,12 +205,12 @@ check(
   true,
 )
 check(
-  '点名的那一场不在了就落回 20 分钟那一场',
+  '点名的那一场不在了就落回 10 分钟那一场',
   await api.voiceTargetSession(controller, signal, false, 'gone'),
   { sessionId: 'bbb', running: false, why: 'the ball conversation, reused' },
 )
 check(
-  '点名指到子代理时不算数 (落回 20 分钟那一场)',
+  '点名指到子代理时不算数 (落回 10 分钟那一场)',
   (await api.voiceTargetSession(controller, signal, false, 'ccc')).sessionId,
   'bbb',
 )
@@ -227,12 +228,12 @@ const hourUp = JSON.parse(await readFile(sessionFile, 'utf8'))
 await writeFile(sessionFile, `${JSON.stringify({ id: hourUp.id, at: Date.now() - 21 * 60 * 1000 })}\n`)
 api.voiceSessionReset()
 check(
-  '过了 20 分钟, 唤醒头句也开一场新的',
+  '过了 10 分钟, 唤醒头句也开一场新的',
   (await api.voiceTargetSession(controller, signal, true)).sessionId,
   null,
 )
 check(
-  '过了 20 分钟, 点名的会话仍然有效 (框在屏上就按框的)',
+  '过了 10 分钟, 点名的会话仍然有效 (框在屏上就按框的)',
   (await api.voiceTargetSession(controller, signal, true, 'aaa')).sessionId,
   'aaa',
 )

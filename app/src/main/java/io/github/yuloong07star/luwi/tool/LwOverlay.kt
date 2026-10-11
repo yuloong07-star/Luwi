@@ -264,6 +264,15 @@ internal object LwOverlay {
             // 双击回复框回到哪一场全靠前者 —— 排障时一眼能看出它是不是空的 (空了才会退回后者)
             put("boxInput", OverlayState.inputSession ?: "")
             put("boxReply", OverlayState.replySession ?: "")
+            // **框收掉之后还算数的那一笔** (2026-10-11, 见 [OverlayState.boxSession]): 按**双击回复框**
+            // 那条路时框本来就是关着的, 所以真正决定它落到哪一场的往往是这一个 —— 上面那两个是空的而
+            // 这一个非空才是常态; 三个都空 = 这一台还没跟任何一场说过话, 那一档去新会话界面
+            put("boxLast", OverlayState.boxSession ?: "")
+            // **此刻按「返回应用」会落到哪一场** (2026-10-11 主人: "走的是正在想的对话"): 有轮在跑时
+            // 是那一场 (与上面 `session` 相同), 没有就是一场新对话 (空) —— 球菜单那行与常驻通知都是
+            // 这一个; 而 `boxTo` 是**双击回复框**那一跳的落点 (框那一套, 2026-10-11 起两扇门分开)
+            put("menuTo", OverlayState.runningSession() ?: "")
+            put("boxTo", OverlayState.viewSession() ?: "")
             // 这两条是排查"状态说开着、屏幕上看不见"用的: 逻辑开着 != 那块窗真的挂上了
             put("attached", OverlayState.channelAttached)
             put("channelHeight", OverlayState.channelHeight)

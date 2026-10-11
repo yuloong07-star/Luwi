@@ -88,6 +88,10 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.DELETE_PACKAGES" />
+    <!-- 桌面组件那两格 (插件方案 v2 的 3.1): 开机 / 解锁 / 覆盖安装之后要把帧图的读权限补还给
+         桌面, 并把组件重画一遍 —— 那条 grantUriPermission 是内存里的授权, 重启就没了。
+         这个接收器**不起 host, 不做开机自启**: 只补授权与重画 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- 通讯录 / 短信 / 通话记录 / 日历: 这一版**声明但不实现功能**, 是留着给以后的能力用。
          全部 optional, 因为本应用一件也不做; 侧载安装时系统会在授权页把它们列出来, 不点也不影响
@@ -272,11 +276,69 @@
 
         <!-- 自动指令那条「到点」的条件: 排一个闹钟, 到点由系统把这一条广播送回来 (2.5.0 批次 8)。
              exported=false —— 只有本应用自己的 PendingIntent 叫得动它; 系统在应用进程不在时也会把
-             进程拉起来送这一条, 所以"到点"不会因为进程被回收而丢。清单里**没有** RECEIVE_BOOT_COMPLETED:
-             重启之后监测随 host 服务一起等主人打开应用, 这一版不做开机自启 -->
+             进程拉起来送这一条, 所以"到点"不会因为进程被回收而丢。重启之后监测随 host 服务一起等
+             主人打开应用, 这一版不做开机自启 —— 清单里那条 RECEIVE_BOOT_COMPLETED 只给桌面组件
+             补授权用 (见 WidgetRegrant), 与监测无关 -->
         <receiver
             android:name=".automation.AutomationAlarmReceiver"
             android:exported="false" />
+
+        <!-- 桌面组件那两个槽 (插件方案 v2 的 3.1): 组件由**主 APK**声明, 插件只往里填内容 ——
+             于是"往桌面加一只鲸鱼娘"不再需要第二个 APK。同槽互斥, 一个槽同一时刻只挂一只插件 -->
+        <receiver
+            android:name=".plugin.widget.WidgetSlotAnim"
+            android:exported="false"
+            android:label="@string/settings_widget_slot_anim_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/lw_widget_slot_anim" />
+        </receiver>
+
+        <receiver
+            android:name=".plugin.widget.WidgetSlotImage"
+            android:exported="false"
+            android:label="@string/settings_widget_slot_image_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/lw_widget_slot_image" />
+        </receiver>
+
+        <!-- 图文槽那两颗按钮里 action: "tool" 那一支: 从桌面点出来, 调插件自己的一条工具 -->
+        <receiver
+            android:name=".plugin.widget.WidgetActionReceiver"
+            android:exported="false" />
+
+        <!-- 开机 / 解锁 / 覆盖安装之后补一轮: 重放帧图的读权限 + 把每个槽重画一遍 -->
+        <receiver
+            android:name=".plugin.widget.WidgetRegrant"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 帧图 / 配图的只读出口 (方案 3.1): 桌面那一格在启动器进程里画, 图住在我们的私有目录里,
+             所以走 content:// 交出去 (位图过 binder 会撞 1 MB 上限); 读权限每一趟组装前重放一次 -->
+        <provider
+            android:name=".plugin.widget.WidgetFramesProvider"
+            android:authorities="io.github.yuloong07star.luwi.lw.widget"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <!-- `inline` 域的宿主 (方案 3.3): 插件与 Luwi 同 uid, 跑在这个独立进程里 ——
+             清单里预先声明这一个进程, 一个插件一个 ClassLoader, 插件之间不共享静态状态 -->
+        <service
+            android:name=".plugin.inline.InlineHostService"
+            android:exported="false"
+            android:process=":plugin" />
     </application>
 
     <queries>
@@ -298,6 +360,12 @@
              对本应用就不可见, TextToSpeech 初始化拿不到默认引擎 -->
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <!-- 桌面是谁 (方案 3.1): 帧图那条授权要放给"现在正在当桌面"的那几个包, 而 targetSdk 33 起
+             不声明这一段就看不见别的包 —— 那是一种静默失败 (组件永远「无法加载」) -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
         </intent>
     </queries>
 

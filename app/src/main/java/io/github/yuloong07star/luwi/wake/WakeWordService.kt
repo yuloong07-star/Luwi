@@ -424,7 +424,7 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
      *
      * 它只在开窗口那一刻取一次 ([OverlayState.replyTarget]), 与 [wakeWindow] 一起被头一句消费掉:
      * 框在屏上时, 点球与喊唤醒词说的那一句都回给"发出那条回复的会话" —— 宿主那侧把它排在时间那
-     * 笔账前面。没有回复框时它是 null, 那一句照旧按 20 分钟那一档走
+     * 笔账前面。没有回复框时它是 null, 那一句照旧按 10 分钟那一档走
      */
     @Volatile
     private var voiceTarget: String? = null
@@ -1250,7 +1250,7 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
      *
      * **唤醒之后的头一句带一个记号**: 记号只给**命中之后的第一句** —— 一句话被 VAD 切成两段时要是
      * 两段都带, 就会多标一句。**它不再决定新开一场** (2026-10-06 主人改口径: "只要是 1 小时内, 无论
-     * 点球/喊唤醒词 都只在同一场对话"; 2026-10-07 这个数改成 20 分钟): 挑会话由宿主那侧按
+     * 点球/喊唤醒词 都只在同一场对话"; 2026-10-07 这个数改成 20 分钟, 2026-10-11 缩到 10 分钟): 挑会话由宿主那侧按
      * `voice/session.json` 那笔账定
      *
      * **投给哪一场由 [VoiceRoute] 一处说了算**: 视频模式常驻时用定格的那一场 ([videoTarget]), 其余
@@ -1380,7 +1380,7 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
      * 手动让它听一句 (浮标上点一下)
      *
      * 与 [hit] 同一条开门路, 只是没有"听到某个词"这件事: 不震动、不报"听到", 而它同样给一句话的
-     * 机会 (投给哪一场见 [openForOneSentence]: 回复框在屏上时是框那一场, 否则由宿主那侧按 20 分钟
+     * 机会 (投给哪一场见 [openForOneSentence]: 回复框在屏上时是框那一场, 否则由宿主那侧按 10 分钟
      * 那一笔账定) —— 球与唤醒词在主人看来是同一件事: "我要说话了"
      */
     private fun listenNow() {

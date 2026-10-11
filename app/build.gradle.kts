@@ -215,8 +215,8 @@ android {
         // 2.7.4: LW 插件第二批 (伴侣 APK 那一层 —— 鲸鱼娘桌面小组件、从链接装入) 与设置页新加的
         // 「技能」那一段 (按已装应用把技能装进 dsh 家), 以及全仓图标换成 Luwi 自己的标记
         // (球上那圈标记 0.378 → 0.65)。这一批在 git 里的开发者标签是 v2.7.0…v2.7.3, 收口时定名 2.7.4
-        versionCode = 13
-        versionName = "2.7.5"
+        versionCode = 14
+        versionName = "2.7.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

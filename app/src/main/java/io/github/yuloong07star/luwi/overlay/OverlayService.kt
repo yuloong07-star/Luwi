@@ -41,6 +41,7 @@ import io.github.yuloong07star.luwi.MainActivity
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.channel.CameraOwner
 import io.github.yuloong07star.luwi.channel.LwModes
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import io.github.yuloong07star.luwi.host.BallReturn
 import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
@@ -103,6 +104,26 @@ internal object OverlayState {
     var inputSession: String? = null
 
     /**
+     * 这块框**最后跟哪一场对话打过交道** (2026-10-11)
+     *
+     * 与 [inputSession] / [replySession] 是**两笔账, 不是一笔**: 那两个答的是"框此刻在屏上时, 这一句
+     * 该投给谁 / 上面写的是谁的话", 所以框一收就跟着清 ([OverlayService.closeChannel]) —— 而
+     * 「返回应用」在"没有轮在跑"那一档要的恰恰是**上一刻**那一场: 框把话发出去就自己收掉了 (主人
+     * 2026-10-06 的口径), 于是人按「返回应用」的时候它本来就关着, 那两笔账早已是空的
+     *
+     * 空着会出什么事主人 2026-10-11 报了出来: 那一刻跳的其实是"新会话界面" (删掉
+     * `dsh.sessions.current` 再重载), 而 dsh 那一侧的新会话落在**最近动过的那一场的工作区**上 ——
+     * 于是界面动不动就跑到那一场正在跑的对话那边去, 回的**不是**这块框打交道的那一场
+     *
+     * 所以这一笔**只在框真的跟某一场打过交道时才写**: 从框里投出去的那一句 ([OverlayService.ask]
+     * 记下实际用的 `to`), 或者落进框里的那一条回答 ([OverlayService.appendReply] 记下它的来源)。
+     * **一次都没跟任何一场打过交道的设备上它是 null** —— 那一档「返回应用」照旧去新会话界面
+     * (主人 2026-10-09 定的那一条), 一个字节都没改
+     */
+    @Volatile
+    var boxSession: String? = null
+
+    /**
      * 框现在该把话投给谁: **只有框在屏上、而且里面真有回复时**才点名
      *
      * 两个条件缺一不可: 框收掉之后那条例外就不成立了 (回老规矩按时间那一笔账), 而框由球上**三击**
@@ -117,13 +138,45 @@ internal object OverlayState {
     }
 
     /**
-     * 「回应用」该落到哪一场: **框记着的那一场优先, 没有就退回最新回复那一场**
+     * **双击回复框**该落到哪一场: 这块框跟哪一场打过交道 ([ReturnTarget.replyBox])
+     *
+     * 三条, 顺序就是优先级:
+     *
+     * 1. **投出去的那一场** ([inputSession]) —— 2026-10-09 主人: "谁发送了输入框, 就回到那一场"
+     * 2. **最新那条回复是谁推来的** ([replySession]) —— 一次都还没从框里发过话时退它
+     * 3. **[boxSession]: 框上一次跟哪一场打过交道** (2026-10-11) —— 框收掉之后前两笔账是空的, 而按
+     *    的时候它本来就关着, 所以这是常态那一档 (没了它落到的是 dsh 那一侧的"新会话", 而那个会挑
+     *    最近动过的那一场的工作区, 见 [boxSession])
+     *
+     * 都没有 (这台设备上这块框还没跟任何一场说过话) → null, 由调用方给"新会话界面"那个记号。
+     *
+     * **2026-10-11 主人把两扇门分开了**: 这一条只管**双击回复框** (球菜单那行「返回应用」与常驻通知
+     * 走的是 [runningSession], 见 [ReturnTarget.menu]) —— 主人原话: "ball菜单栏里『回到应用』要改成走
+     * 的是正在想的对话，没有则返回新对话。而双击回复框现在不变，仍返回现在的发送回复的对应对话"
      *
      * 与 [replyTarget] 分开是故意的: 那个还带"盒子在屏上而且有回复"这两道闸 (它管的是一条投递
-     * 目标), 而回应用的入口 (双击回复框 / 菜单「返回应用」/ 点通知) 只想问"这一场是谁" —— 各处的
-     * 兜底 (读 `voice/session.json` 那本账) 由调用方接在它后面
+     * 目标), 而双击回复框只想问"这一场是谁"
      */
-    fun viewSession(): String? = BoxTarget.choose(inputSession, replySession)
+    fun viewSession(): String? =
+        ReturnTarget.replyBox(inputSession, replySession, boxSession)
+
+    /**
+     * 此刻**正在跑**的那一场 —— 就是球上写着「正在想」的那一场
+     *
+     * 判据与球上那三个字**同一份、连那道闸都同一个**: 那一轮在跑 ([phase] 来自 `lw/ball-phase.json`)
+     * **且宿主真的在跑** (`DshHost.status`, 球上那三个字也是这么判的) —— 宿主崩了之后那份文件会停在
+     * 最后一次的样子, 少了这道闸, 球上不写「正在想」而「返回应用」仍往一场已经不在的会话上跳
+     *
+     * 那一场是 `ball-phase.json` 里 `startedAt` 最大的那一条 (见 [BallPhaseFile]), 而它也是双击打断
+     * 会打的那一场 (`host-plugin` 的 `pickInterruptTarget`) —— 显示什么就回什么、就打什么, 中间没有
+     * 第二套口径
+     */
+    fun runningSession(): String? =
+        if (phase == PHASE_THINKING && DshHost.status is HostStatus.Running) {
+            session.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
 
     /** 框"没人碰"那一笔账的起点 (epoch ms; 0 = 框不在屏上, 见 [boxIdleMs]) */
     @Volatile
@@ -555,6 +608,14 @@ class OverlayService : Service() {
 
     /** 上一拍画的那个环色: 会话换了而字没换时也得重画一次 (见 [refresh]) */
     private var lastRing: Int? = null
+
+    /**
+     * 上一拍浮标外观挑的是哪一个 (协议 10.1 / 方案 3.2)
+     *
+     * 外观换了要**当场重画** —— 而 [BallView.show] 那条链只在"字换了 / 环色换了 / 外部要求"时才走,
+     * 所以这里把"外观 id"也算成一档变化: 主人在设置页换了外观、这一拍就看得见, 不必等下一次状态变化
+     */
+    private var lastThemeId: String? = null
 
     /** 上一拍宿主在不在跑 */
     private var lastHostUp = false
@@ -1965,14 +2026,23 @@ class OverlayService : Service() {
     /**
      * 菜单里那行「返回应用」: **与双击回复框同一个去向**
      *
-     * 回复框记着那一场时落到"**往这块框输入投给了哪一场**" ([OverlayState.viewSession], 2026-10-09
-     * 起的口径: "谁发送了输入框, 就回到那一场"), 否则落回浮标账本 —— 两件事都在 [openApp] 里;
-     * 这里只多做一件: **把框收起来**。主人 2026-10-07 的口径是
-     * "回应用 = 让出界面看会话", 而这块框正是挡在会话上面的那扇窗
+     * **2026-10-11 起它跟双击回复框不再是同一个去向** (主人: "ball菜单栏里『回到应用』要改成走的是
+     * 正在想的对话，没有则返回新对话。而双击回复框现在不变"): 这一行走 [OverlayState.runningSession]
+     * —— 球上写着「正在想」的那一场, **没有在跑的轮就是一场新对话** (`openApp(null)` 给的是
+     * `BallReturn.NEW_SESSION` 那个记号)。要看"这块框刚才是跟谁说话"就走双击回复框那条
+     * ([OverlayState.viewSession])。
+     *
+     * 这里另外多做一件: **把框收起来**。主人 2026-10-07 的口径是"回应用 = 让出界面看会话", 而这块框
+     * 正是挡在会话上面的那扇窗
      */
     private fun returnToApp() {
-        val from = OverlayState.viewSession()
-        note("back to the app from the menu" + (from?.let { " (the box asked for $it)" } ?: ""))
+        val from = OverlayState.runningSession()
+        note(
+            "back to the app from the menu: " + when {
+                from != null -> "the conversation that is thinking ($from)"
+                else -> "nothing is thinking, so a new conversation"
+            },
+        )
         runCatching { closeChannel() }
         openApp(from)
     }
@@ -2214,10 +2284,11 @@ class OverlayService : Service() {
             OverlayState.noteBoxActivity()
             noteActivity()
             // 先把那一场抄下来: 收框之后 [OverlayState.replyTarget] 就不成立了。
-            // **取的是"往这块框输入投给了哪一场"** ([OverlayState.viewSession], 优先 inputSession),
-            // 不是"最后一条回复是谁推来的" (2026-10-09 主人: "谁发送了输入框, 就回到那一场")
+            // **这一条 2026-10-11 起只管双击**: 取的是"这块框跟哪一场打过交道"
+            // ([OverlayState.viewSession] 那条, 优先 inputSession) —— 球菜单那行「返回应用」与常驻
+            // 通知走的是另一套 (正在想的那一场, 没有就是新对话, 见 [returnToApp] 与 [runningSession])
             val from = OverlayState.viewSession()
-            note("a double tap on the reply: back to ${from ?: "the ball conversation"}, closing the channel")
+            note("a double tap on the reply: back to ${from ?: "a new conversation"}, closing the channel")
             runCatching { closeChannel() }
             openApp(from)
         }
@@ -2266,10 +2337,12 @@ class OverlayService : Service() {
         }
         // **这一句话投给了谁, 这块框就记下谁** (2026-10-09 主人: "谁发送了输入框, 就回到那一场"):
         // 「回应用」那一跳按这一条走 (见 [OverlayState.viewSession]), 所以"我发给了哪一场"与
-        // "框把我带回哪一场"是同一件事。`to` 为 null 时不写 —— 那是"按浮标那本 20 分钟的账投的",
+        // "框把我带回哪一场"是同一件事。`to` 为 null 时不写 —— 那是"按浮标那本 10 分钟的账投的",
         // 目标由宿主那侧定, 我们这里不知道, 留着上一次记的反而更准
         to?.trim()?.takeIf { it.isNotEmpty() }?.let {
             OverlayState.inputSession = it
+            // **框收掉之后这一笔要留下** (见 [OverlayState.boxSession]): 「返回应用」按的时候框已经关了
+            OverlayState.boxSession = it
             note("the box will return to $it, the conversation this line went to")
         }
         note("channel line queued as #$seq: $text")
@@ -2319,7 +2392,11 @@ class OverlayService : Service() {
         // 它只管"框里显示的是谁的话"与"下一刻该把话投给谁"那条兜底, **不动开框目标**
         // ([OverlayState.inputSession], 那是"我发给了谁"那笔账, 见 [ask])。没带 `session` 的推送
         // (老宿主、别的来源) 不动它 —— 抹掉一个已经点好的名比留着更糟
-        session?.trim()?.takeIf { it.isNotEmpty() }?.let { OverlayState.replySession = it }
+        session?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            OverlayState.replySession = it
+            // 同一件事的另一半: 这一条回答是哪一场推来的, 框关掉之后仍然算数 (见 [OverlayState.boxSession])
+            OverlayState.boxSession = it
+        }
         OverlayState.replies = view.replyCount()
         // 新的一句回答落进框里 = 有人该看它一眼, 那一笔"没人碰"的账从这里重新起算
         OverlayState.noteBoxActivity()
@@ -2422,7 +2499,11 @@ class OverlayService : Service() {
         val changed = word != lastWord
         // **环色也得算进"变了没有"**: 两个会话轮流在想时那个字一直是「正在想」, 而颜色要跟着换
         val ring = ringOf(word)
-        if (force || changed || ring != lastRing) {
+        // **外观也算** (协议 10.1): 设置页里换了一套外观, 这一拍就该重画, 不必等状态变化
+        val themeNow = runCatching { BallTheme.currentId(this) }.getOrDefault("")
+        val rethemed = themeNow != lastThemeId
+        lastThemeId = themeNow
+        if (force || changed || ring != lastRing || rethemed) {
             ballView?.show(word, ring = ring)
             OverlayState.word = word?.label(this)
             stripTitle?.text = title(word)
@@ -2809,7 +2890,7 @@ class OverlayService : Service() {
      *
      * 那一场对话的 id 由调用方给 (回复框记着的那一场, 见 [OverlayState.viewSession] 与它的两个入口
      * [BoxView.Listener.onReplyDoubleTap] / [returnToApp])。**没有就是"进新会话界面"** (2026-10-09
-     * 主人: "没有 (还没发过话) 就进入新会话界面"): 那一档不再落回浮标那本 20 分钟的账
+     * 主人: "没有 (还没发过话) 就进入新会话界面"): 那一档不再落回浮标那本 10 分钟的账
      * (`voice/session.json`) —— 那是"浮标上一轮说话的地方", 与"这块框该带到哪儿"是两件事, 主人要的
      * 是新的会话界面。记号是 [BallReturn.NEW_SESSION], 由会话界面清掉当前会话再重载
      */
@@ -2975,10 +3056,13 @@ class OverlayService : Service() {
      *
      * 会话 id 取这块框记着的那一场 ([OverlayState.viewSession]: 优先"输入投给了谁", 没有就退回"最新
      * 那条回复是谁推来的")。**两笔账都空着就是"进新会话界面"** (2026-10-09 主人) —— 与双击回复框、
-     * 菜单那行「返回应用」同一个取法, 不再去读浮标那本 20 分钟的账 ([VoiceInbox.currentSession])
+     * 菜单那行「返回应用」同一个取法, 不再去读浮标那本 10 分钟的账 ([VoiceInbox.currentSession])
      */
     private fun notification(text: String): Notification {
-        val requested = OverlayState.viewSession()
+        // **与球菜单那行「返回应用」同一套口径** (2026-10-11 主人把两扇门分开之后): 正在想的那一场,
+        // 没有在跑的轮就是一场新对话 —— 这里抄下来的这一份只是**冷启动那条路的兜底** (进程是新起的
+        // 时候球那份状态还没读进来), 点下去那一刻以 [MainActivity.requestedSession] 现问的为准
+        val requested = OverlayState.runningSession()
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -2990,6 +3074,13 @@ class OverlayService : Service() {
                 )
                 // **空串也要带上**: 它说的是"去新会话界面", 而不是"这个 intent 没带会话"
                 putExtra(EXTRA_OPEN_SESSION, requested ?: BallReturn.NEW_SESSION)
+                // **这一条是"以点下去那一刻那条账为准"的记号** (2026-10-11): 上面那个 id 是**建这条
+                // 通知那一刻**抄下来的, 而 PendingIntent 的附加数据从此就定死了 —— 通知只在球上那三个
+                // 字变化时重建, 而"框里落进一条回复 / 输入投给了另一场"并不改那三个字, 于是点通知很
+                // 容易落到一个**过时**的会话上 —— 与菜单那行「返回应用」各答各的 (主人 2026-10-11 报
+                // 的"回到应用"这条路上的不一致正是它)。[MainActivity] 见到这个记号就以**收到 intent
+                // 那一刻**的 [OverlayState.viewSession] 为准, 读不到才退回上面这个 id (冷启动那一档)
+                putExtra(EXTRA_OPEN_LIVE, true)
             },
             // UPDATE_CURRENT: 会话变了之后那一次重建要真的换掉旧的附加数据
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -3069,6 +3160,14 @@ class OverlayService : Service() {
          * 的参数不是一类 —— 它由 [MainActivity] 收下之后交给 [BallReturn]
          */
         const val EXTRA_OPEN_SESSION = "open-session"
+
+        /**
+         * "通知那一条的会话以点下去那一刻为准" (2026-10-11)
+         *
+         * 与 [EXTRA_OPEN_SESSION] 一起带上: 那个 id 是建通知那一刻抄的, 而这条账之后还会变 (见
+         * [notification])。带这个记号时 [MainActivity] 先问当下的 [OverlayState.viewSession]
+         */
+        const val EXTRA_OPEN_LIVE = "open-session-live"
 
         /** 推给通道的那一句正文 (回答) */
         const val EXTRA_TEXT = "text"

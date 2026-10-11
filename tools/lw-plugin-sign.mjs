@@ -77,6 +77,27 @@ function payloadOf(manifest, files) {
   return Buffer.from(text, 'utf8')
 }
 
+/**
+ * 规范化的公钥身份 (方案 3.3): 曲线 OID + 未压缩点 (`0x04 ‖ X ‖ Y`, 各定长 32 字节) 的 sha256
+ *
+ * **不是 SPKI 原字节的 sha256** —— 同一把 P-256 公钥, 各家编出来的 SPKI 可能不是逐字节一样的东西,
+ * 拿原字节去比会造成"明明签对了却被拒"的假阴性。白名单 / `.publishers` / 插件页 / 这个工具四处
+ * 认的都是这一串 (Kotlin 那份在 `plugin/PluginTrust.kt`)
+ */
+function identityOf(spki) {
+  const key = createPublicKey({ key: spki, format: 'der', type: 'spki' })
+  const jwk = key.export({ format: 'jwk' })
+  if (jwk.kty !== 'EC' || jwk.crv !== 'P-256') {
+    throw new Error(`协议只收 P-256, 这一把是 ${jwk.kty}/${jwk.crv}`)
+  }
+  const oid = Buffer.from([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07])
+  const x = Buffer.from(jwk.x, 'base64url')
+  const y = Buffer.from(jwk.y, 'base64url')
+  if (x.length !== 32 || y.length !== 32) throw new Error('这把 P-256 公钥的点不是定长 32 字节')
+  const canonical = Buffer.concat([oid, Buffer.from([0x04]), x, y])
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`
+}
+
 /** 包里除 plugin.json 之外的每一个文件 (相对路径 + sha256 十六进制) */
 async function filesOf(directory) {
   const found = {}
@@ -103,7 +124,7 @@ if (command === 'keygen') {
   const pem = privateKey.export({ type: 'pkcs8', format: 'pem' })
   await writeFile(out, pem, { mode: 0o600 })
   const spki = publicKey.export({ type: 'spki', format: 'der' })
-  const fingerprint = createHash('sha256').update(spki).digest('hex')
+  const fingerprint = identityOf(spki)
   console.log(`私钥写在 ${resolve(out)} (别把它提交上去)`)
   console.log(`发布者公钥: ecdsa-p256:${spki.toString('base64')}`)
   console.log(`公钥指纹: ${fingerprint}`)
@@ -116,7 +137,7 @@ if (command === 'keygen') {
   const files = await filesOf(directory)
   const privateKey = createPrivateKey(await readFile(keyFile))
   const spki = createPublicKey(privateKey).export({ type: 'spki', format: 'der' })
-  const fingerprint = createHash('sha256').update(spki).digest('hex')
+  const fingerprint = identityOf(spki)
   const publisherName = manifest.publisher?.name ?? option('name', 'unknown') ?? 'unknown'
   const publisherKey = `ecdsa-p256:${spki.toString('base64')}`
 

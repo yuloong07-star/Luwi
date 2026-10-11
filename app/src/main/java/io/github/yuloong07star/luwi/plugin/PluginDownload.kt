@@ -2,10 +2,12 @@ package io.github.yuloong07star.luwi.plugin
 
 import android.content.Context
 import android.util.Log
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.concurrent.TimeUnit
 
 /**
  * 从链接把一份插件包取下来 (协议第 13 节那条"从 URL 安装")
@@ -23,6 +25,9 @@ import java.net.URL
  *   里删, 桥那条路也一样)
  * - **下完先看它像不像一份包**: 前两个字节不是 `PK` 就当场说"这不是一份 .lwp", 而不是让安装器去报一句
  *   看不懂的错 (GitHub 那种 API 链接回的是 JSON, 这是最容易撞上的一种)
+ * - **走 OkHttp, 不走 `HttpURLConnection`** (2026-10-11 换的): 那一套**不做 Happy Eyeballs** ——
+ *   双栈设备上这台 CDN 解析出 IPv6 时会直接去连 IPv6, 而移动网络里那条路常常是黑洞, 于是浏览器
+ *   下得动、应用只拿到 "Connection reset"。OkHttp 既做 IPv4/IPv6 竞速, 连不上还会换下一个地址
  */
 internal object PluginDownload {
 
@@ -34,8 +39,28 @@ internal object PluginDownload {
     /** 跳几次就够: 一个短链加一次 302 到头了, 再多是环 */
     private const val MAX_HOPS = 5
 
+    /** 一条地址最多试几次: 移动网络上一个地址连不上很常见, 换一个就成了 */
+    private const val ATTEMPTS = 3
+
     private const val CONNECT_MS = 15_000
     private const val READ_MS = 30_000
+
+    private const val USER_AGENT = "Luwi-plugin-install"
+
+    /**
+     * 自己看 302 (跟着走就没机会查"下一跳是不是还是 https"), 所以两个 follow 都关掉
+     *
+     * `retryOnConnectionFailure` 保持默认那个 true: 换地址这件事它自己还会再帮一次忙
+     */
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .connectTimeout(CONNECT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(READ_MS.toLong(), TimeUnit.MILLISECONDS)
+            .callTimeout(0L, TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     /**
      * zip 的头两个字节, 也就是 `P` 与 `K` (**两个都要写对**: 第一版这里只写了 0x50 当"魔数",
@@ -56,64 +81,64 @@ internal object PluginDownload {
         val directory = File(context.cacheDir, "plugin-download").apply { mkdirs() }
         val target = File(directory, "package-${System.currentTimeMillis()}.lwp")
         try {
-            var current = trimmed
-            var hops = 0
-            while (true) {
-                requireHttps(current)
-                val connection = open(current)
-                val code = try {
-                    connection.responseCode
-                } catch (problem: IOException) {
-                    connection.disconnect()
-                    throw IllegalArgumentException("连不上这个链接: ${problem.message ?: problem.javaClass.simpleName}")
-                }
-                if (code in 300..399) {
-                    val where = connection.getHeaderField("Location")
-                    connection.disconnect()
-                    if (where.isNullOrBlank()) throw IllegalArgumentException("这个链接回了 $code, 却没说要跳到哪")
-                    hops += 1
-                    if (hops > MAX_HOPS) throw IllegalArgumentException("这个链接跳了 $MAX_HOPS 次还没到头, 不跟了")
-                    // 相对地址要按当前这一跳解出来, 下一轮开头那句 requireHttps 会把 http 拦下
-                    current = URL(URL(current), where).toString()
-                    continue
-                }
-                if (code != HttpURLConnection.HTTP_OK) {
-                    connection.disconnect()
-                    throw IllegalArgumentException("这个链接回了 $code (要 200 才能拿到字节)")
-                }
-                val declared = connection.contentLengthLong
-                if (declared > MAX_BYTES) {
-                    connection.disconnect()
-                    throw IllegalArgumentException("这一份 ${declared / 1024 / 1024} MB, 超过 ${MAX_BYTES / 1024 / 1024} MB 的上限")
-                }
-                try {
-                    connection.inputStream.use { input ->
-                        target.outputStream().use { output ->
-                            val buffer = ByteArray(64 * 1024)
-                            var total = 0L
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read <= 0) break
-                                total += read
-                                if (total > MAX_BYTES) {
-                                    throw IllegalArgumentException("这一份超过 ${MAX_BYTES / 1024 / 1024} MB 的上限")
-                                }
-                                output.write(buffer, 0, read)
-                            }
-                        }
-                    }
-                } finally {
-                    connection.disconnect()
-                }
-                break
-            }
+            val landed = downloadTo(trimmed, target)
             if (target.length() == 0L) throw IllegalArgumentException("这个链接下下来是空的")
-            checkLooksLikePackage(target, current)
+            checkLooksLikePackage(target, landed)
             Log.i(TAG, "fetched ${target.length()} bytes from $trimmed")
             return target
         } catch (problem: Throwable) {
             target.delete()
             throw problem
+        }
+    }
+
+    /** 落到哪一条地址上 (跳完最后那一条), 只给"不是一份 .lwp"那句错话用 */
+    private fun downloadTo(url: String, target: File): String {
+        var current = url
+        var hops = 0
+        while (true) {
+            requireHttps(current)
+            val response = connect(current)
+            val code = response.code
+            if (code in 300..399) {
+                val where = response.header("Location")
+                // 相对地址要按当前这一跳解出来, 下一轮开头那句 requireHttps 会把 http 拦下
+                val next = response.request.url.resolve(where.orEmpty())?.toString()
+                response.close()
+                if (where.isNullOrBlank()) throw IllegalArgumentException("这个链接回了 $code, 却没说要跳到哪")
+                hops += 1
+                if (hops > MAX_HOPS) throw IllegalArgumentException("这个链接跳了 $MAX_HOPS 次还没到头, 不跟了")
+                current = next ?: throw IllegalArgumentException("这个链接回了 $code, 跳的目标读不出来: $where")
+                continue
+            }
+            if (code != 200) {
+                response.close()
+                throw IllegalArgumentException("这个链接回了 $code (要 200 才能拿到字节)")
+            }
+            try {
+                val declared = response.body.contentLength()
+                if (declared > MAX_BYTES) {
+                    throw IllegalArgumentException("这一份 ${declared / 1024 / 1024} MB, 超过 ${MAX_BYTES / 1024 / 1024} MB 的上限")
+                }
+                response.body.byteStream().use { input ->
+                    target.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            total += read
+                            if (total > MAX_BYTES) {
+                                throw IllegalArgumentException("这一份超过 ${MAX_BYTES / 1024 / 1024} MB 的上限")
+                            }
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                }
+            } finally {
+                response.close()
+            }
+            return current
         }
     }
 
@@ -124,16 +149,24 @@ internal object PluginDownload {
         }
     }
 
-    private fun open(url: String): HttpURLConnection {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        // 自己看 302: 跟着走就没机会查"下一跳是不是还是 https"
-        connection.instanceFollowRedirects = false
-        connection.connectTimeout = CONNECT_MS
-        connection.readTimeout = READ_MS
-        connection.requestMethod = "GET"
-        connection.setRequestProperty("Accept", "*/*")
-        connection.setRequestProperty("User-Agent", "Luwi-plugin-install")
-        return connection
+    /** 试几次再放弃: 连不上多半是"这一个地址不通", 换一个就成了 */
+    private fun connect(url: String): Response {
+        var last: IOException? = null
+        repeat(ATTEMPTS) {
+            try {
+                return client.newCall(
+                    Request.Builder()
+                        .url(url)
+                        .header("Accept", "*/*")
+                        .header("User-Agent", USER_AGENT)
+                        .build(),
+                ).execute()
+            } catch (problem: IOException) {
+                last = problem
+            }
+        }
+        val why = last
+        throw IllegalArgumentException("连不上这个链接: ${why?.message ?: why?.javaClass?.simpleName}")
     }
 
     /**

@@ -20,10 +20,19 @@ internal object PluginInstaller {
         val id: String,
         val name: String,
         val version: String,
+        val kind: String,
         val signed: Boolean,
         val fingerprint: String,
         /** 第一次见到这把公钥时为 true, 界面要单独提示一句"这是一个新发布者" */
         val newPublisher: Boolean,
+        /** 这个插件要绑的那个包 (companion 的另一半); 界面拿它去问"装没装" */
+        val entryPackage: String,
+        /** 那个包的下载地址; 空 = 这份包没带 (老包), 只能走手动那条路 */
+        val entryApk: String,
+        /** 它声明了哪几条能力 (装完"要不要自动启用"按这一份算) */
+        val declared: List<String>,
+        /** 它要上桌面的哪个槽; null = 它没有 widget 那一段 */
+        val widgetSlot: String?,
         val directory: File,
     )
 
@@ -44,13 +53,21 @@ internal object PluginInstaller {
             }
             val manifest = read(context, prepared)
             checkSignature(context, prepared, manifest, developerMode)
+            checkInlineTrust(context, manifest)
+            PluginPaths.checkPackage(manifest, prepared)?.let { problem -> throw IllegalArgumentException(problem) }
             checkUpgrade(context, manifest)
+            // 升级之前的那个版本: 它要是绑着伴侣 APK 而新这份不绑了, 记一笔 (界面上说"可以卸掉它了")
+            val previous = PluginStore.manifest(context, manifest.id)
 
             val target = PluginStore.versionDir(context, manifest.id, manifest.version)
             target.parentFile?.mkdirs()
             if (target.exists()) target.deleteRecursively()
             if (prepared == source) copyInto(source, target) else moveInto(prepared, target)
             PluginStore.setCurrent(context, manifest.id, manifest.version)
+            val oldCompanion = previous?.entryPackage?.takeIf { it.isNotBlank() }
+            if (oldCompanion != null && manifest.entryPackage.isBlank()) {
+                PluginStore.rememberLeftover(context, manifest.id, oldCompanion)
+            }
 
             val firstTime = if (manifest.signed) {
                 PluginStore.rememberPublisher(
@@ -71,11 +88,37 @@ internal object PluginInstaller {
                 id = manifest.id,
                 name = manifest.name,
                 version = manifest.version,
+                kind = manifest.kind,
                 signed = manifest.signed,
                 fingerprint = if (manifest.signed) PluginSignature.fingerprint(manifest.publisherKey) else "",
                 newPublisher = firstTime,
+                entryPackage = manifest.entryPackage,
+                entryApk = manifest.entryApk,
+                declared = manifest.declared,
+                widgetSlot = manifest.widget?.slot,
                 directory = target,
             )
+        } finally {
+            if (staging.exists()) staging.deleteRecursively()
+        }
+    }
+
+    /**
+     * 装之前先看一眼这份包声明了什么 (只解清单, **不验签也不落地**)
+     *
+     * 用它只是为了在装之前把"它要哪几条能力"摆给用户看 —— 真正的门仍然在 [install] 那一整条链上:
+     * 这里读得出来不代表那份包装得上 (签名、逐文件哈希、版本、前缀、未知能力一条都不省)
+     */
+    fun preview(context: Context, source: File): PluginManifest {
+        if (!source.exists()) throw IllegalArgumentException("没有这个东西: ${source.absolutePath}")
+        val staging = PluginStore.staging(context, "preview-${System.nanoTime()}")
+        try {
+            val prepared = when {
+                source.isDirectory -> source
+                source.isFile -> unzip(source, staging)
+                else -> throw IllegalArgumentException("${source.absolutePath} 既不是目录也不是文件")
+            }
+            return read(context, prepared)
         } finally {
             if (staging.exists()) staging.deleteRecursively()
         }
@@ -118,7 +161,7 @@ internal object PluginInstaller {
     private fun read(context: Context, directory: File): PluginManifest {
         val file = File(directory, "plugin.json")
         if (!file.isFile) throw IllegalArgumentException("包里没有 plugin.json")
-        return PluginManifest.parse(file.readText(), PluginStore.lwVersion(context))
+        return PluginManifest.parse(file.readText(), PluginStore.lwVersion(context), directory)
     }
 
     /** 签名、哈希覆盖、开发者模式这三条 */
@@ -149,6 +192,30 @@ internal object PluginInstaller {
         }
         val ok = PluginSignature.verify(manifest.raw, manifest.files, manifest.publisherKey, manifest.publisherSignature)
         if (!ok) throw IllegalArgumentException("发布者签名验不过 —— 这一份要么被改过, 要么不是这把私钥签的")
+    }
+
+    /**
+     * `inline` 域那座白名单 (方案 3.3): 它跑在 Luwi 自己的进程空间里, 同 uid —— 能力检查对它而言是
+     * 体验不是墙, 所以这一档只收白名单作者的包
+     *
+     * **开发者模式也不开这个口子**: 它只放未签名的本地包, 白名单照样要过。想在本地试自己那份 dex,
+     * 就把自己的公钥指纹往名单里加一次 (先把它签上)
+     */
+    private fun checkInlineTrust(context: Context, manifest: PluginManifest) {
+        if (manifest.kind != "inline") return
+        if (!manifest.signed) {
+            throw IllegalArgumentException(
+                "inline 域的包必须是签名包, 而且要先把它加进白名单 —— 它跑在 Luwi 自己的进程空间里" +
+                    " (同 uid), 未签名的本地包不放行",
+            )
+        }
+        val identity = PluginTrust.identity(manifest.publisherKey)
+        if (!PluginTrust.allowed(context, identity)) {
+            throw IllegalArgumentException(
+                "这个作者不在白名单里 (指纹 $identity) —— inline 域只对白名单作者开放," +
+                    " 主人手工把它写进 \$DSH_HOME/plugins/${PluginTrust.FILE} 才放行",
+            )
+        }
     }
 
     /** 版本与前缀这两条 (同前缀的第二个插件直接拒, 见协议第 6 节) */

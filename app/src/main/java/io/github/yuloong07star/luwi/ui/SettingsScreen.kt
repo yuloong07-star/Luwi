@@ -30,6 +30,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -80,6 +81,7 @@ import io.github.yuloong07star.luwi.constants.UiSpacing
 import io.github.yuloong07star.luwi.host.AppSkills
 import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
+import io.github.yuloong07star.luwi.plugin.CompanionApk
 import io.github.yuloong07star.luwi.plugin.PluginDownload
 import io.github.yuloong07star.luwi.overlay.BallGeometry
 import io.github.yuloong07star.luwi.overlay.BallFeel
@@ -88,8 +90,18 @@ import io.github.yuloong07star.luwi.overlay.BallSwitch
 import io.github.yuloong07star.luwi.overlay.OverlayState
 import io.github.yuloong07star.luwi.plugin.PluginAudit
 import io.github.yuloong07star.luwi.plugin.PluginCapabilities
+import io.github.yuloong07star.luwi.plugin.PluginCompanion
+import io.github.yuloong07star.luwi.plugin.PluginInstaller
 import io.github.yuloong07star.luwi.plugin.PluginManager
+import io.github.yuloong07star.luwi.plugin.PluginManifest
 import io.github.yuloong07star.luwi.plugin.PluginStore
+import io.github.yuloong07star.luwi.plugin.PluginSignature
+import io.github.yuloong07star.luwi.plugin.PluginTrust
+import io.github.yuloong07star.luwi.plugin.widget.WidgetHost
+import io.github.yuloong07star.luwi.plugin.widget.WidgetPin
+import io.github.yuloong07star.luwi.plugin.widget.WidgetSlot
+import io.github.yuloong07star.luwi.plugin.widget.WidgetSlots
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import io.github.yuloong07star.luwi.scaffolds.ArrowSlider
 import io.github.yuloong07star.luwi.scaffolds.GroupTitle
 import io.github.yuloong07star.luwi.scaffolds.LazyColumn
@@ -1289,7 +1301,7 @@ private fun PlaceholderItems(text: String) {
  * 分裂不会发生
  *
  * **点一下做的事不是在这里执行那条工作流**, 而是把它投进会话: 投递走语音那条老路 ([VoiceInbox] 的
- * `quick` 来源), 于是"当前会话没有就新建 / 20 分钟内接同一场 / 正在跑就插进当前轮"三条语义自动成立,
+ * `quick` 来源), 于是"当前会话没有就新建 / 10 分钟内接同一场 / 正在跑就插进当前轮"三条语义自动成立,
  * 而"主人说的是什么"这句话也原封不动地出现在会话里
  *
  * **新建不弹表单**: 只要一行"这条快捷指令要做什么", 正文交给模型写 (工作流这件事它写得比界面里拼
@@ -1389,12 +1401,26 @@ private fun PluginItems() {
     // 从链接装那一档: 粘贴框开着没有 / 正在下
     var linking by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf(false) }
+    // 一次确认那一档 (2026-10-11): 包声明了能力就先摆出来问一次, 答完才装 —— 这是"输入地址,
+    // 装完即可用"里唯一的一次问答 (零能力插件连这一次都没有)
+    var confirming by remember { mutableStateOf<PendingInstall?>(null) }
+    var confirmingBusy by remember { mutableStateOf(false) }
+    // 桌面组件那两个槽 (方案 3.1): 点一行打开"挂哪一只 / 空着 / 放到桌面"
+    var slotDialog by remember { mutableStateOf<String?>(null) }
+    // 浮标外观 (协议 10.1): 挑一个主题插件, 或者换回内置画法
+    var themeDialog by remember { mutableStateOf(false) }
     val entries = remember(revision) { PluginManager.entries(context) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            message = installPickedPackage(context, uri)
-            revision += 1
+            scope.launch {
+                val started = withContext(Dispatchers.IO) { startPickedInstall(context, uri) }
+                when (started) {
+                    is StartedInstall.Done -> message = started.text
+                    is StartedInstall.Ask -> confirming = started.pending
+                }
+                revision += 1
+            }
         }
     }
 
@@ -1412,6 +1438,40 @@ private fun PluginItems() {
             )
         }
     }
+
+    // 桌面那两个槽 (方案 3.1): 一个槽一行 —— 它现在挂着谁, 点开可以换 / 清空 / 直接放到桌面。
+    // 同槽互斥那一件事在这里看得见: 换一只只重画, 另一只仍然留在上面那份列表里
+    PlaceholderItems(
+        stringResource(R.string.settings_widget_section) + " · " + stringResource(R.string.settings_widget_section_summary),
+    )
+    WidgetSlot.ALL.forEach { slot ->
+        val holder = remember(revision) { WidgetSlots.holder(context, slot) }
+        val holderName = holder?.let { id ->
+            entries.firstOrNull { it.id == id }?.name ?: id
+        }
+        ArrowPreference(
+            title = WidgetPin.slotLabel(context, slot),
+            summary = holderName ?: stringResource(R.string.settings_widget_vacant_choice),
+            onClick = {
+                haptic.contextClick()
+                slotDialog = slot
+            },
+        )
+    }
+
+    // 浮标外观那一条 (协议 10.1 / 方案 3.2): 多个主题插件可以同时装着, 同一时刻只生效一个
+    val themeId = remember(revision) { BallTheme.currentId(context) }
+    val themeName = themeId.takeIf { it.isNotBlank() }?.let { id ->
+        entries.firstOrNull { it.id == id }?.name ?: id
+    } ?: stringResource(R.string.settings_theme_builtin)
+    ArrowPreference(
+        title = stringResource(R.string.settings_theme_row),
+        summary = themeName,
+        onClick = {
+            haptic.contextClick()
+            themeDialog = true
+        },
+    )
 
     ArrowPreference(
         title = stringResource(R.string.settings_plugin_install),
@@ -1446,15 +1506,49 @@ private fun PluginItems() {
     if (linking) {
         PluginLinkDialog(
             busy = downloading,
+            title = stringResource(R.string.settings_plugin_link_title),
+            summary = stringResource(R.string.settings_plugin_link_dialog_summary),
+            hint = stringResource(R.string.settings_plugin_link_hint),
+            action = stringResource(R.string.settings_plugin_link_install),
+            busyText = stringResource(R.string.settings_plugin_link_busy),
             onDismiss = { if (!downloading) linking = false },
             onInstall = { url ->
                 downloading = true
                 scope.launch {
                     // 下与验都在 IO 上做: 一份几十 KB 的包也要过一次网, 而这一句可能等好几秒
-                    val said = withContext(Dispatchers.IO) { installLinkedPackage(context, url) }
-                    message = said
+                    val started = withContext(Dispatchers.IO) { startLinkedInstall(context, url) }
                     downloading = false
                     linking = false
+                    when (started) {
+                        is StartedInstall.Done -> message = started.text
+                        is StartedInstall.Ask -> confirming = started.pending
+                    }
+                    revision += 1
+                }
+            },
+        )
+    }
+
+    // 装之前那一问 (2026-10-11): 只有这个包声明了能力才走到这里, 零能力插件一路直通
+    confirming?.let { asking ->
+        PluginCapabilityDialog(
+            manifest = asking.manifest,
+            busy = confirmingBusy,
+            onDismiss = {
+                if (!confirmingBusy) {
+                    asking.file.delete()
+                    confirming = null
+                }
+            },
+            onConfirm = { chosen ->
+                confirmingBusy = true
+                scope.launch {
+                    val said = withContext(Dispatchers.IO) {
+                        finishInstall(context, asking.file, chosen, allowSystemInstaller = true)
+                    }
+                    confirmingBusy = false
+                    confirming = null
+                    message = said
                     revision += 1
                 }
             },
@@ -1466,6 +1560,29 @@ private fun PluginItems() {
             id = id,
             revision = revision,
             onDismiss = { acting = null },
+            onChanged = { said ->
+                message = said
+                revision += 1
+            },
+        )
+    }
+
+    slotDialog?.let { slot ->
+        WidgetSlotDialog(
+            slot = slot,
+            revision = revision,
+            onDismiss = { slotDialog = null },
+            onChanged = { said ->
+                message = said
+                revision += 1
+            },
+        )
+    }
+
+    if (themeDialog) {
+        BallThemeDialog(
+            revision = revision,
+            onDismiss = { themeDialog = false },
             onChanged = { said ->
                 message = said
                 revision += 1
@@ -1493,37 +1610,187 @@ private fun pluginSummary(context: Context, entry: PluginManager.Entry): String 
     return context.getString(R.string.settings_plugin_summary_line, state, publisher, entry.granted.size, declared)
 }
 
-/** 从系统选择器拿到的那一份: 先拷进 cache (SAF 给的是一个 uri, 而安装器要的是文件), 再走同一条装 */
-private fun installPickedPackage(context: Context, uri: android.net.Uri): String {
+/** 一份正要装的包: 已经下到 (或拷到) 本地, 还没落地 */
+private class PendingInstall(val file: java.io.File, val manifest: PluginManifest)
+
+/** 「开始装」的结果: 要么装完了, 要么得先把该给的能力摆出来问一次 */
+private sealed interface StartedInstall {
+    data class Done(val text: String) : StartedInstall
+    data class Ask(val pending: PendingInstall) : StartedInstall
+}
+
+/**
+ * 装之前那半段: 先看一眼这份包声明了什么
+ *
+ * 声明了能力 → 交给 [StartedInstall.Ask], 由界面摆出来问一次 (协议第 5 节那句"普通档安装时列出,
+ * 一次确认"); 一条都不要 (鲸鱼娘那一档) → 没有要问的, 一口气做完
+ */
+private fun startInstall(context: Context, file: java.io.File): StartedInstall {
+    val manifest = try {
+        PluginInstaller.preview(context, file)
+    } catch (error: Throwable) {
+        file.delete()
+        return StartedInstall.Done("装不上: ${error.message ?: error.javaClass.simpleName}")
+    }
+    if (manifest.declared.isNotEmpty()) return StartedInstall.Ask(PendingInstall(file, manifest))
+    return StartedInstall.Done(finishInstall(context, file, emptySet(), allowSystemInstaller = true))
+}
+
+/** 系统选择器给的是一个 uri, 而这一条链要的是文件: 先拷进 cache 再走同一条 */
+private fun startPickedInstall(context: Context, uri: Uri): StartedInstall {
     val picked = java.io.File(context.cacheDir, "picked-plugin-${System.currentTimeMillis()}")
     return try {
         context.contentResolver.openInputStream(uri)?.use { input ->
             picked.outputStream().use { output -> input.copyTo(output) }
-        } ?: return "读不到你选的那一份"
-        LwPlugin.install(context, picked)
+        } ?: return StartedInstall.Done("读不到你选的那一份")
+        startInstall(context, picked)
     } catch (error: Throwable) {
-        "装不上: ${error.message ?: error.javaClass.simpleName}"
-    } finally {
         picked.delete()
+        StartedInstall.Done("装不上: ${error.message ?: error.javaClass.simpleName}")
     }
 }
 
 /**
- * 从链接装一份 (协议第 13 节): 下到 cache → 交给 [LwPlugin.install] 那条同一条链 → 不管成不成,
- * 那份临时文件当场删
+ * 从链接装一份 (协议第 13 节): 下到 cache → 走同一条链
  *
  * "只许 https / 不许跳到 http / 大小上限 / 是不是一份 zip" 这几条都是 [PluginDownload] 那一侧说的,
  * 这里只把它的那句错话原样交出去
  */
-private fun installLinkedPackage(context: Context, url: String): String = try {
-    val fetched = PluginDownload.fetch(context, url)
-    try {
-        LwPlugin.install(context, fetched)
-    } finally {
-        fetched.delete()
-    }
+private fun startLinkedInstall(context: Context, url: String): StartedInstall = try {
+    startInstall(context, PluginDownload.fetch(context, url))
 } catch (error: Throwable) {
-    "装不上: ${error.message ?: error.javaClass.simpleName}"
+    StartedInstall.Done("装不上: ${error.message ?: error.javaClass.simpleName}")
+}
+
+/**
+ * 装的后半段: 落地 → 按勾选授权 → 把伴侣那一半也装上 → 启用
+ *
+ * "输入地址, 装完即可用"就是这一串。唯一一处不自动启用的是**伴侣交到了系统安装器手里**那一支 ——
+ * 人还在安装器那一页, 什么时候回来不由我们定, 启了也白启
+ */
+private fun finishInstall(
+    context: Context,
+    file: java.io.File,
+    chosen: Set<String>,
+    allowSystemInstaller: Boolean,
+): String {
+    val outcome = try {
+        LwPlugin.installPackage(context, file)
+    } catch (error: Throwable) {
+        return "装不上: ${error.message ?: error.javaClass.simpleName}"
+    } finally {
+        file.delete()
+    }
+    chosen.forEach { capability -> runCatching { PluginManager.grant(context, outcome.id, capability, true) } }
+    val granted = PluginManager.granted(context, outcome.id)
+    // 自动启用那一条 (方案第 4 节): 能力为空, 或者声明的每一条都已经勾上了 —— 才自动启用;
+    // 敏感档留着没勾的那一种不自动启用, 让主人自己勾完再点
+    val ready = outcome.declared.all { it in granted }
+    return buildString {
+        append(LwPlugin.describe(outcome))
+        val companion = PluginCompanion.ensure(
+            context,
+            outcome.entryPackage,
+            outcome.entryApk,
+            allowSystemInstaller = allowSystemInstaller,
+        )
+        if (companion.text.isNotBlank()) append("。").append(companion.text)
+        // 桌面那一格 (方案 3.1): 它声明了 widget、而那个槽正好空着, 就顺手挂上, 再问一句"要放到桌面吗"
+        outcome.widgetSlot?.let { slot ->
+            when (WidgetSlots.holder(context, slot)) {
+                null -> {
+                    WidgetSlots.assign(context, slot, outcome.id)
+                    WidgetHost.refresh(context, slot)
+                    append("。它已经挂到「").append(WidgetPin.slotLabel(context, slot)).append("」—— ")
+                    append(WidgetPin.request(context, slot))
+                }
+                outcome.id -> Unit
+                else -> {
+                    append("。它声明的是「").append(WidgetPin.slotLabel(context, slot))
+                    append("」, 而那个槽现在挂着别的插件 —— 要换成它就去插件列表里点那两行「桌面组件」")
+                }
+            }
+        }
+        when {
+            companion.waitingForUser -> append("。装完回到这一页点一下这个插件的「启用」")
+            !ready -> append("。它还有能力没勾上, 所以先不自动启用 —— 进它的详情勾上再点「启用」")
+            else -> append("。").append(PluginManager.enable(context, outcome.id))
+        }
+    }
+}
+
+/**
+ * 装之前那一问 (2026-10-11): 这个包要哪几条能力
+ *
+ * 普通档默认勾上、敏感档默认不勾 (协议第 5 节)。**只有声明了能力才走到这里** —— 零能力插件装完
+ * 即可用, 连这一次问答都没有
+ *
+ * 正文与插件详情那一个同一条规矩: 自己封一个屏高六成的上限并挂 `verticalScroll`。Miuix 的
+ * `OverlayDialog` 自己不滚也没有 `maxHeight`, 22 条能力全列出来会顶穿一屏, 底下那颗按钮就点不到
+ */
+@Composable
+private fun PluginCapabilityDialog(
+    manifest: PluginManifest,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    val chosen = remember(manifest.id) {
+        mutableStateMapOf<String, Boolean>().apply {
+            manifest.declared.forEach { capability -> put(capability, !PluginCapabilities.isDangerous(capability)) }
+        }
+    }
+    OverlayDialog(
+        show = true,
+        title = manifest.name,
+        summary = stringResource(R.string.settings_plugin_capabilities_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = { if (!busy) onDismiss() },
+    ) {
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.6f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            manifest.declared.forEach { capability ->
+                SwitchPreference(
+                    title = (if (PluginCapabilities.isDangerous(capability)) "★ " else "") + capability,
+                    summary = PluginCapabilities.summaryOf(capability) +
+                        if (PluginCapabilities.isWired(capability)) {
+                            ""
+                        } else {
+                            " · " + stringResource(R.string.settings_plugin_not_wired)
+                        },
+                    checked = chosen[capability] == true,
+                    onCheckedChange = { on -> chosen[capability] = on },
+                )
+            }
+        }
+        TextButton(
+            text = stringResource(
+                if (busy) R.string.settings_plugin_capabilities_busy else R.string.settings_plugin_capabilities_action,
+            ),
+            onClick = {
+                if (busy) return@TextButton
+                haptic.confirm()
+                onConfirm(manifest.declared.filter { chosen[it] == true }.toSet())
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.textButtonColorsPrimary(),
+        )
+        TextButton(
+            text = stringResource(R.string.button_cancel),
+            onClick = {
+                if (busy) return@TextButton
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 /**
@@ -1535,14 +1802,19 @@ private fun installLinkedPackage(context: Context, url: String): String = try {
 @Composable
 private fun PluginLinkDialog(
     busy: Boolean,
+    title: String,
+    summary: String,
+    hint: String,
+    action: String,
+    busyText: String,
     onDismiss: () -> Unit,
     onInstall: (String) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     OverlayDialog(
         show = true,
-        title = stringResource(R.string.settings_plugin_link_title),
-        summary = stringResource(R.string.settings_plugin_link_dialog_summary),
+        title = title,
+        summary = summary,
         defaultWindowInsetsPadding = false,
         onDismissRequest = onDismiss,
     ) {
@@ -1551,7 +1823,7 @@ private fun PluginLinkDialog(
             modifier = Modifier.padding(bottom = 16.dp),
             value = text,
             onValueChange = { text = it },
-            label = stringResource(R.string.settings_plugin_link_hint),
+            label = hint,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Uri),
         )
         Row(horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1565,9 +1837,7 @@ private fun PluginLinkDialog(
             )
             Spacer(Modifier.width(20.dp))
             TextButton(
-                text = stringResource(
-                    if (busy) R.string.settings_plugin_link_busy else R.string.settings_plugin_link_install,
-                ),
+                text = if (busy) busyText else action,
                 onClick = {
                     if (!busy && text.isNotBlank()) {
                         haptic.confirm()
@@ -1596,6 +1866,10 @@ private fun PluginDialog(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    // 伴侣那一半 (协议第 8.1 节): 清单里带了地址就能在这一页直接补上, 不用再去找那条链接
+    var companionSaid by remember { mutableStateOf<String?>(null) }
+    var companionBusy by remember { mutableStateOf(false) }
     val entry = remember(revision) { PluginManager.entries(context).firstOrNull { it.id == id } }
     val audit = remember(revision) { PluginAudit.tail(context, id, 5) }
 
@@ -1627,6 +1901,57 @@ private fun PluginDialog(
             if (entry.problem != null) {
                 PlaceholderItems("${entry.problem}")
             }
+            // 伴侣 APK 那一半 (协议第 8.1 节): 工具 / 桌面组件 / 它自己的界面都在那个包里, 而插件包
+            // 只说"绑谁" —— 于是"启用着却接不上宿主"最常见的原因就是这一行说的那件事。
+            // **清单里带了地址时这一页能直接把它补上** (协议第 4 节的 `entry.apk`): 老包没带地址,
+            // 这一行还是只报状态, 去插件那一段粘一个链接
+            val manifestHere = entry.manifest
+            manifestHere?.entryPackage?.takeIf { it.isNotBlank() }?.let { companion ->
+                val version = CompanionApk.installed(context, companion)
+                PlaceholderItems(
+                    companionSaid ?: if (version == null) {
+                        context.getString(R.string.settings_plugin_companion_missing, companion)
+                    } else {
+                        context.getString(R.string.settings_plugin_companion_installed, companion, version)
+                    },
+                )
+                val apkUrl = manifestHere.entryApk
+                if (version == null && apkUrl.isNotBlank()) {
+                    TextButton(
+                        text = stringResource(
+                            if (companionBusy) R.string.settings_plugin_companion_busy
+                            else R.string.settings_plugin_companion_install,
+                        ),
+                        onClick = {
+                            if (companionBusy) return@TextButton
+                            haptic.confirm()
+                            companionBusy = true
+                            scope.launch {
+                                val said = withContext(Dispatchers.IO) {
+                                    val done = PluginCompanion.ensure(
+                                        context,
+                                        companion,
+                                        apkUrl,
+                                        allowSystemInstaller = true,
+                                    )
+                                    done.text.ifBlank {
+                                        context.getString(
+                                            R.string.settings_plugin_companion_installed,
+                                            companion,
+                                            CompanionApk.installed(context, companion).orEmpty(),
+                                        )
+                                    }
+                                }
+                                companionBusy = false
+                                companionSaid = said
+                                onChanged(said)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
+                }
+            }
             entry.manifest?.let { manifest ->
                 manifest.declared.forEach { declared ->
                     val wired = PluginCapabilities.isWired(declared)
@@ -1645,40 +1970,83 @@ private fun PluginDialog(
                 }
             }
 
+            // `inline` 域那两行 (方案 3.3): "它与 Luwi 同权限"与"它的作者在白名单里"**分两行写**,
+            // 不合成一句 —— 第一行是告知, 第二行才是那条真正的闸
+            manifestHere?.takeIf { it.kind == "inline" }?.let { manifest ->
+                PlaceholderItems(context.getString(R.string.settings_plugin_inline_same_uid))
+                val identity = if (manifest.signed) PluginSignature.fingerprint(manifest.publisherKey) else ""
+                PlaceholderItems(
+                    if (identity.isNotBlank() && PluginTrust.allowed(context, identity)) {
+                        context.getString(R.string.settings_plugin_inline_whitelisted, identity)
+                    } else {
+                        "它的作者不在白名单里 —— 这一份是开发者模式下装进来的本地包"
+                    },
+                )
+            }
+
+            // 迁移那一条 (方案第 6 节): 它以前那个伴侣 APK 现在用不上了 —— 只说不做, 卸不卸由主人定
+            PluginStore.leftover(context, id)?.let { old ->
+                PlaceholderItems("它以前那个伴侣应用 $old 已经用不上了, 可以卸掉 (这一页不会自动动它)")
+            }
+
             TextButton(
                 text = stringResource(
                     if (entry.enabled) R.string.settings_plugin_disable else R.string.settings_plugin_enable,
                 ),
                 onClick = {
                     haptic.confirm()
-                    onChanged(
-                        if (entry.enabled) {
-                            PluginManager.disable(context, id)
-                        } else {
-                            PluginManager.enable(context, id)
-                        },
-                    )
+                    // 绑宿主那一步是阻塞的 (绑 Service / 等 :plugin 进程回话), 而这里是主线程 ——
+                    // 放 IO 上做, 不然 onServiceConnected 那个回调排不进来, 每一次都白等五秒
+                    scope.launch {
+                        val said = withContext(Dispatchers.IO) {
+                            if (entry.enabled) {
+                                PluginManager.disable(context, id)
+                            } else {
+                                PluginManager.enable(context, id)
+                            }
+                        }
+                        onChanged(said)
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.textButtonColorsPrimary(),
             )
-            TextButton(
-                text = stringResource(R.string.settings_plugin_open),
-                onClick = { haptic.confirm(); onChanged(PluginManager.open(context, id)) },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // 「打开它自带的界面」只对 companion 画 (方案 3.4: 只有伴侣是"另一个应用") ——
+            // 以前它对每一档都画, art / inline 点下去只回一句"这一档没有自带的界面", 那是个空按钮
+            if (manifestHere?.kind == "companion") {
+                TextButton(
+                    text = stringResource(R.string.settings_plugin_open),
+                    onClick = {
+                        haptic.confirm()
+                        scope.launch {
+                            onChanged(withContext(Dispatchers.IO) { PluginManager.open(context, id) })
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             PlaceholderItems(
                 stringResource(R.string.settings_plugin_audit) + "\n" +
                     audit.joinToString("\n").ifBlank { stringResource(R.string.settings_plugin_audit_empty) },
             )
             TextButton(
                 text = stringResource(R.string.settings_plugin_uninstall),
-                onClick = { haptic.confirm(); onChanged(PluginManager.uninstall(context, id, keepData = false)) },
+                onClick = {
+                    haptic.confirm()
+                    scope.launch {
+                        onChanged(withContext(Dispatchers.IO) { PluginManager.uninstall(context, id, keepData = false) })
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
             TextButton(
                 text = stringResource(R.string.settings_plugin_uninstall_keep),
-                onClick = { haptic.confirm(); onChanged(PluginManager.uninstall(context, id, keepData = true)) },
+                onClick = {
+                    haptic.confirm()
+                    scope.launch {
+                        onChanged(withContext(Dispatchers.IO) { PluginManager.uninstall(context, id, keepData = true) })
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
             TextButton(
@@ -1690,6 +2058,166 @@ private fun PluginDialog(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+/**
+ * 一个宿主槽的对话框 (方案 3.1): 挂哪一只插件 / 清空 / 直接把它放到桌面
+ *
+ * **同槽互斥**在这里看得见: 候选是"声明了这个槽的每一只插件", 而同一时刻只有一只在槽上 ——
+ * 换一只只重画, 另一只仍然留在插件列表里, 这是设计不是缺陷
+ */
+@Composable
+private fun WidgetSlotDialog(
+    slot: String,
+    revision: Int,
+    onDismiss: () -> Unit,
+    onChanged: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val entries = remember(revision) { PluginManager.entries(context) }
+    val holder = remember(revision) { WidgetSlots.holder(context, slot) }
+    // 候选 = 声明了这个槽的插件; 现在挂着的那一份无论如何都留着, 免得"挂着谁"与列表对不上
+    val candidates = entries.filter { it.manifest?.widget?.slot == slot || it.id == holder }
+    OverlayDialog(
+        show = true,
+        title = WidgetPin.slotLabel(context, slot),
+        summary = stringResource(R.string.settings_widget_section_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.5f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            ArrowPreference(
+                title = stringResource(R.string.settings_widget_vacant_choice),
+                summary = if (holder == null) "现在就是空着" else "把这一格清空",
+                onClick = {
+                    haptic.contextClick()
+                    val said = WidgetSlots.assign(context, slot, null)
+                    WidgetHost.refresh(context, slot)
+                    onChanged(said)
+                },
+            )
+            if (candidates.isEmpty()) {
+                PlaceholderItems("还没有插件声明这个槽 —— 装一只带 widget 的插件 (art 域最省事), 它就会出现在这一行")
+            }
+            candidates.forEach { entry ->
+                val assigned = entry.id == holder
+                ArrowPreference(
+                    title = entry.name,
+                    summary = buildList {
+                        add(if (assigned) "现在挂着它" else "挂到这一格")
+                        add(if (entry.enabled) "在岗" else "停着")
+                    }.joinToString(" · "),
+                    onClick = {
+                        haptic.confirm()
+                        val said = WidgetSlots.assign(context, slot, entry.id)
+                        WidgetHost.refresh(context, slot)
+                        onChanged(said)
+                    },
+                )
+            }
+        }
+        TextButton(
+            text = stringResource(R.string.settings_widget_pin),
+            onClick = {
+                haptic.confirm()
+                onChanged(WidgetPin.request(context, slot))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.textButtonColorsPrimary(),
+        )
+        TextButton(
+            text = stringResource(R.string.button_cancel),
+            onClick = {
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * 浮标外观那个对话框 (协议 10.1 / 方案 3.2)
+ *
+ * 候选 = 装着 `theme/ball.json` 的那几份插件。**多个可以同时装着, 同一时刻只生效一个**;
+ * 读不到就回内置画法 —— 那一句写在摘要里, 因为它是这一档最容易让人误以为坏了的地方
+ */
+@Composable
+private fun BallThemeDialog(
+    revision: Int,
+    onDismiss: () -> Unit,
+    onChanged: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val entries = remember(revision) { PluginManager.entries(context) }
+    val current = remember(revision) { BallTheme.currentId(context) }
+    val candidates = entries.filter { entry ->
+        val directory = entry.directory ?: return@filter false
+        java.io.File(directory, "theme/ball.json").isFile
+    }
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_theme_row),
+        summary = stringResource(R.string.settings_theme_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.5f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            ArrowPreference(
+                title = stringResource(R.string.settings_theme_builtin),
+                summary = if (current.isBlank()) {
+                    stringResource(R.string.settings_theme_now)
+                } else {
+                    stringResource(R.string.settings_theme_use)
+                },
+                onClick = {
+                    haptic.contextClick()
+                    BallTheme.choose(context, null)
+                    onChanged("已经换回内置画法")
+                },
+            )
+            if (candidates.isEmpty()) {
+                PlaceholderItems(stringResource(R.string.settings_theme_empty))
+            }
+            candidates.forEach { entry ->
+                ArrowPreference(
+                    title = entry.name,
+                    summary = if (entry.id == current) {
+                        stringResource(R.string.settings_theme_now)
+                    } else {
+                        stringResource(R.string.settings_theme_use)
+                    },
+                    onClick = {
+                        haptic.confirm()
+                        BallTheme.choose(context, entry.id)
+                        onChanged("已经把浮标外观换成「${entry.name}」")
+                    },
+                )
+            }
+        }
+        TextButton(
+            text = stringResource(R.string.button_cancel),
+            onClick = {
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

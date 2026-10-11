@@ -1,0 +1,13 @@
+{
+  "slot": "image",
+  "name": "番茄钟",
+  "title": "番茄钟",
+  "text": "还没开始",
+  "buttons": [
+    {
+      "label": "开一轮",
+      "action": "tool",
+      "tool": "timer_start"
+    }
+  ]
+}

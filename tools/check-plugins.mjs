@@ -95,7 +95,7 @@ const byName = Object.fromEntries(table.map((one) => [decorated(one.name), one])
 
 /* ── 一、能力表 ─────────────────────────────────────────────────────────── */
 
-check('能力表 22 条 (11 普通 + 11 敏感)', [table.length, table.filter((one) => one.level === 'NORMAL').length], [22, 11])
+check('能力表 23 条 (12 普通 + 11 敏感)', [table.length, table.filter((one) => one.level === 'NORMAL').length], [23, 12])
 check(
   '带参数的那两条在源里以冒号结尾',
   table.filter((one) => one.name.endsWith(':')).map((one) => one.name).sort(),
@@ -124,9 +124,9 @@ if (protocol === null) {
     table.filter((one) => one.wired).map((one) => decorated(one.name)).sort(),
   )
   check(
-    '文档里的接通数是 7 条',
+    '文档里的接通数是 9 条 (7 + ui.widget + ui.theme)',
     rows.filter((one) => one.wired).length,
-    7,
+    9,
   )
 }
 
@@ -197,9 +197,113 @@ check(
   [true, true],
 )
 
+/* ── 三之二、伴侣 APK 那一档 (2026-10-11) ───────────────────────────────── */
+
+// companion 插件的那另一半: 工具 / 它自己的界面都在那个 APK 里, 而插件包只说"绑谁" ——
+// 少了这一档, 从链接装完 `.lwp` 的人只会看到"启用着但宿主没接上", 不知道该去装什么。几处**漂开了
+// 也不会当场报错**: 装之前不再对包名、落地那条链断了
+//
+// **2026-10-11 主人把"插件段里粘链接装伴侣 APK"那一行删掉了**: 新包把地址写在 `entry.apk` 里、
+// 装完顺手就装上了, 那一行只剩"给包里没地址的老包兜底"这一种用途, 却把每一台机器都顶着一行;
+// 现在只留插件详情里那颗「把伴侣 APK 装上」(包里有地址而那个包没装着时才出现)
+const companionApk = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/CompanionApk.kt')
+check(
+  '插件段里那一行「安装伴侣 APK」已经删掉 (字与代码都不留)',
+  [
+    settings.includes('R.string.settings_plugin_apk'),
+    stringsZh.includes('settings_plugin_apk'),
+    stringsEn.includes('settings_plugin_apk'),
+  ],
+  [false, false, false],
+)
+check(
+  '「打开它自带的界面」只对 companion 画 (art / inline 没有另一个应用可开)',
+  settings.includes('if (manifestHere?.kind == "companion")'),
+  true,
+)
+check(
+  '伴侣 APK 只收 https, 而且每一跳都重查',
+  [companionApk.includes('startsWith("https://"'), companionApk.includes('requireHttps(current)')],
+  [true, true],
+)
+check(
+  '装之前对过包名 (对不上就拒)',
+  [companionApk.includes('getPackageArchiveInfo'), companionApk.includes('found != expected')],
+  [true, true],
+)
+check(
+  '落地交给系统安装器 (content:// 出自我们那个 provider)',
+  [
+    companionApk.includes('FileProvider.getUriForFile'),
+    companionApk.includes('application/vnd.android.package-archive'),
+  ],
+  [true, true],
+)
+check(
+  '详情里报了伴侣应用装没装',
+  [
+    settings.includes('settings_plugin_companion_missing'),
+    settings.includes('settings_plugin_companion_installed'),
+  ],
+  [true, true],
+)
+
 const keysOf = (xml) => [...xml.matchAll(/<string name="(settings_plugin_[a-z_]+)"/g)].map((one) => one[1]).sort()
 check('两份 strings 的 settings_plugin_* 键一致', keysOf(stringsZh), keysOf(stringsEn))
 check('插件那一段的字符串有 20 条以上', keysOf(stringsZh).length >= 20, true)
+
+/* ── 三之三、一个地址装完即用 (2026-10-11) ──────────────────────────────── */
+
+// 清单里 `entry.apk` 那一条: 装完 `.lwp` 顺手把伴侣 APK 也装上, 于是"输入地址"与"能用"之间不再
+// 夹着第二件事。五处漂开都不会当场报错 —— 清单不再只收 https、静默那条不走特权白名单、落点挪回
+// 应用私有目录 (shell 读不到, Shizuku 那份就装不动)、装机时那次确认没了、装完不启用
+const companionStep = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginCompanion.kt')
+const commandTable = await read('app/src/main/java/io/github/yuloong07star/luwi/channel/LwSystemCommandTable.kt')
+check(
+  '清单里那个地址只收 https (与从链接装同一条口径)',
+  [manifestRules.includes('entryApk'), manifestRules.includes('startsWith("https://"')],
+  [true, true],
+)
+check(
+  '静默安装走特权那一侧, 而且先抄进 system_server 读得到的 /data/local/tmp',
+  [
+    companionStep.includes('LwSystemCommand'),
+    companionStep.includes('installStaged'),
+    commandTable.includes('installStaged'),
+    commandTable.includes('/data/local/tmp'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '伴侣 APK 落在特权壳读得到的地方',
+  [companionApk.includes('getExternalMediaDirs'), companionApk.includes('stagingDirectory')],
+  [true, true],
+)
+check('静默装之前也先对一次包名', companionStep.includes('CompanionApk.mismatch'), true)
+// 2026-10-11 在真机上踩的: HttpURLConnection 不做 Happy Eyeballs, 双栈设备上 CDN 解析出 IPv6 时
+// 它会直接去连 IPv6, 而那一条在移动网络里常常是黑洞 —— 浏览器下得动, 应用只拿到 "Connection reset"。
+// 两条下载链都必须走 OkHttp, 而且都自己看 302 (每一跳都要重查 https)
+const pluginDownload = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginDownload.kt')
+check(
+  '两条下载链都走 OkHttp, 而且都自己看 302',
+  [
+    pluginDownload.includes('OkHttpClient'),
+    pluginDownload.includes('followRedirects(false)'),
+    companionApk.includes('OkHttpClient'),
+    companionApk.includes('followRedirects(false)'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '一次确认在界面里: 普通档默认勾, 敏感档默认不勾',
+  [settings.includes('PluginCapabilityDialog'), settings.includes('!PluginCapabilities.isDangerous(capability)')],
+  [true, true],
+)
+check(
+  '装完把伴侣补上再启用',
+  [settings.includes('PluginCompanion.ensure'), settings.includes('PluginManager.enable(context, outcome.id)')],
+  [true, true],
+)
 
 /* ── 四、样例包 ─────────────────────────────────────────────────────────── */
 
@@ -252,16 +356,18 @@ check(`样例的 minLw (${samplePlugin.minLw}) 不比这一版 (${appVersion}) �
 
 /* ── 五、模块与那条"不许有 AIDL" ────────────────────────────────────────── */
 
-/* ── 四之二、鲸鱼娘桌面小组件那一份包 (2.7.0) ───────────────────────────── */
+/* ── 四之二、鲸鱼娘那一份 (2.7.0 的旧路, 已收进 archive) ────────────────── */
 
-// 第二条伴侣: 协议 10.4 说"桌面组件只能由伴侣 APK 声明", 这一份就是那条路的实物。上面那批判据
-// 它一条都不能少, 另加两条它自己特有的 (组件登记在清单里 + 它一条能力都不要)
-const whaleGradle = await read('samples/whale-widget/build.gradle.kts')
-const whaleManifest = await read('samples/whale-widget/src/main/AndroidManifest.xml')
+// 第二条伴侣: 当时协议 10.4 说"桌面组件只能由伴侣 APK 声明", 这一份就是那条路的实物。方案 v2 起
+// 桌面组件默认走主 APK 的宿主槽, 所以它**整个目录收进了 `archive/samples/whale-widget/`** (不再是
+// 一个 Gradle 模块), 而这里那批判据照旧守着它 —— 归档不等于没人管: 它那份 `plugin.json` 与
+// `describe()` 仍要一一对上, 否则谁哪天想照着它做会照着错的做
+const whaleGradle = await read('archive/samples/whale-widget/build.gradle.kts')
+const whaleManifest = await read('archive/samples/whale-widget/src/main/AndroidManifest.xml')
 const whaleService = await read(
-  'samples/whale-widget/src/main/java/io/github/yuloong07star/luwi/sample/whalewidget/WhalePluginService.kt',
+  'archive/samples/whale-widget/src/main/java/io/github/yuloong07star/luwi/sample/whalewidget/WhalePluginService.kt',
 )
-const whalePlugin = JSON.parse(await read('samples/whale-widget/plugin/plugin.json'))
+const whalePlugin = JSON.parse(await read('archive/samples/whale-widget/plugin/plugin.json'))
 
 check('鲸鱼娘的 protocol', whalePlugin.protocol, 'lw-plugin/1')
 check('鲸鱼娘的 kind 是这一版收的那一个', whalePlugin.kind, 'companion')
@@ -286,6 +392,11 @@ check(
   true,
 )
 check('鲸鱼娘一条能力都不要 (零能力伴侣那一档)', [whalePlugin.capabilities.requested, whalePlugin.capabilities.dangerous], [[], []])
+check(
+  '鲸鱼娘那份包带了伴侣 APK 的地址 (老包没有这一项也不影响)',
+  typeof whalePlugin.entry.apk === 'string' && whalePlugin.entry.apk.startsWith('https://'),
+  true,
+)
 check('鲸鱼娘的 api 与这一版一致', whalePlugin.api, String(kotlinNumber(api, 'API_VERSION')))
 check('鲸鱼娘的 plugin.json 里一个浮点都没有', floatsIn(whalePlugin), [])
 const whaleTools = [...whaleService.matchAll(/const val TOOL_[A-Z]+ = "([^"]+)"/g)].map((one) => one[1]).sort()
@@ -314,13 +425,13 @@ check(
 /* ── 五、模块与那条"不许有 AIDL" ────────────────────────────────────────── */
 
 check(
-  '三个新模块都在 settings.gradle.kts 里',
+  '两个在用的模块都在 settings.gradle.kts 里, 归档那一份已经不在',
   [
     rootGradle.includes('include(":lwplugin-api")'),
     rootGradle.includes('include(":sample-companion")'),
-    rootGradle.includes('include(":sample-whale-widget")'),
+    rootGradle.includes(':sample-whale-widget'),
   ],
-  [true, true, true],
+  [true, true, false],
 )
 check('app 引了接口那一份', appGradle.includes('implementation(project(":lwplugin-api"))'), true)
 check('样例也引了同一份', sampleGradle.includes('implementation(project(":lwplugin-api"))'), true)
@@ -343,6 +454,200 @@ async function aidlFiles(directory) {
   return found
 }
 check('仓库里没有 .aidl (冻结时那条决定)', await aidlFiles(new URL('.', root)), [])
+
+/* ── 六、方案 v2: 安装即用 (2026-10-11) ─────────────────────────────────── */
+
+// 宿主槽 + art 域 + inline 白名单那一批。这一批里有几处**漂开了也不会当场报错**: 槽的
+// authorities 两处写的不一样 (provider 永远 404)、授权忘了重放 (桌面那一格时好时坏)、
+// 白名单算法与签名工具不是同一串 (假阴性)、art 的 frames 张数与包里的文件对不上 (桌面少几帧)
+const widgetHost = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetHost.kt')
+const widgetSlots = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSlots.kt')
+const widgetProvider = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetFramesProvider.kt')
+const widgetRegrant = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetRegrant.kt')
+const widgetPin = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetPin.kt')
+const pluginPaths = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginPaths.kt')
+const pluginTrust = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginTrust.kt')
+const pluginInstaller = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginInstaller.kt')
+const pluginManager = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginManager.kt')
+const inlineService = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/inline/InlineHostService.kt')
+const inlineHost = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/inline/InlineHost.kt')
+const signTool = await read('tools/lw-plugin-sign.mjs')
+const artPlugin = JSON.parse(await read('samples/art-whale-widget/plugin/plugin.json'))
+const artWidget = JSON.parse(await read('samples/art-whale-widget/plugin/widget/widget.json'))
+const inlinePlugin = JSON.parse(await read('samples/inline-timer/plugin/plugin.json'))
+
+check(
+  '清单里声明了两个宿主槽 / 帧图 provider / 开机补授权 (都不许少)',
+  [
+    manifest.includes('.plugin.widget.WidgetSlotAnim'),
+    manifest.includes('.plugin.widget.WidgetSlotImage'),
+    manifest.includes('.plugin.widget.WidgetFramesProvider'),
+    manifest.includes('android.permission.RECEIVE_BOOT_COMPLETED'),
+    manifest.includes('android.intent.action.BOOT_COMPLETED'),
+    manifest.includes('android.intent.action.USER_UNLOCKED'),
+    manifest.includes('android.intent.action.MY_PACKAGE_REPLACED'),
+    manifest.includes('android.intent.category.HOME'),
+  ],
+  [true, true, true, true, true, true, true, true],
+)
+check(
+  'provider 的 authorities 两处是同一个字',
+  [
+    widgetProvider.includes('io.github.yuloong07star.luwi.lw.widget'),
+    manifest.includes('android:authorities="io.github.yuloong07star.luwi.lw.widget"'),
+  ],
+  [true, true],
+)
+check('每一趟组装前重放一次帧图授权', widgetHost.includes('grantUriPermission'), true)
+check(
+  '"插件没了"与"帧图读不到"两种空态分开写',
+  [widgetHost.includes('settings_widget_slot_gone'), widgetHost.includes('settings_widget_slot_frames')],
+  [true, true],
+)
+check(
+  '同槽互斥: 一个槽一份映射, 卸载时先清槽再重画',
+  [
+    widgetSlots.includes('data class Assignments'),
+    widgetSlots.includes('fun clear('),
+    pluginManager.includes('WidgetSlots.clear'),
+  ],
+  [true, true, true],
+)
+check(
+  '开机那一条只补授权与重画 (不起 host)',
+  [widgetRegrant.includes('WidgetHost.refreshAll'), widgetRegrant.includes('startService')],
+  [true, false],
+)
+check(
+  'requestPinAppWidget 那一颗按钮接上了',
+  [widgetPin.includes('requestPinAppWidget'), settings.includes('WidgetPin.request')],
+  [true, true],
+)
+check(
+  'art / inline 两域在 Kotlin 那一份清单里 (dex 当 inline 的别名收)',
+  [
+    manifestRules.includes('setOf("companion", "art", "inline")'),
+    manifestRules.includes('if (rawKind == "dex") "inline" else rawKind'),
+  ],
+  [true, true],
+)
+check(
+  'art 域不许声明能力 / 工具',
+  [manifestRules.includes('art 域不许声明任何能力'), manifestRules.includes('art 域不许带工具')],
+  [true, true],
+)
+check(
+  '路径纪律查两遍: 装的时候一次, 运行时再兜一次',
+  [pluginPaths.includes('canonicalPath'), widgetProvider.includes('PluginPaths.resolve')],
+  [true, true],
+)
+check(
+  'inline 那座白名单: 规范化的公钥身份 + 装机那道闸',
+  [
+    pluginTrust.includes('val P256_OID'),
+    pluginTrust.includes('fun identityOfSpki'),
+    pluginTrust.includes('.inline-allow.json'),
+    pluginInstaller.includes('checkInlineTrust'),
+    pluginInstaller.includes('这个作者不在白名单里'),
+  ],
+  [true, true, true, true, true],
+)
+check(
+  'sign 工具印的是同一串规范化身份 (不是 SPKI 原字节)',
+  [signTool.includes('function identityOf'), signTool.includes('P-256')],
+  [true, true],
+)
+check(
+  'inline 有 :plugin 进程与超时兜底',
+  [
+    manifest.includes('android:process=":plugin"'),
+    inlineService.includes('InMemoryDexClassLoader'),
+    inlineHost.includes('CALL_TIMEOUT_SECONDS'),
+    inlineHost.includes('没在预期时间内回答'),
+  ],
+  [true, true, true, true],
+)
+
+check(
+  'art 样例: kind / 零能力 / 零工具',
+  [artPlugin.kind, artPlugin.capabilities.requested, artPlugin.capabilities.dangerous, artPlugin.tools],
+  ['art', [], [], []],
+)
+check('art 样例: 声明的是 anim 槽, 点一下换下一套', [artWidget.slot, artWidget.tap], ['anim', 'next'])
+const artSets = [artWidget.frames, ...(artWidget.sets ?? [])]
+const artFramesOk = []
+for (const one of artSets) {
+  const names = await readdir(new URL(`samples/art-whale-widget/plugin/${one.dir}/`, root)).catch(() => [])
+  artFramesOk.push(names.filter((name) => /^frame-\d{2}\.png$/.test(name)).length === one.count)
+}
+check('art 样例: 每一套的帧数与包里的文件一一对上', artFramesOk, artSets.map(() => true))
+
+check(
+  'inline 样例: kind / entry / 那条能力',
+  [inlinePlugin.kind, inlinePlugin.entry.dex, inlinePlugin.entry.class, inlinePlugin.capabilities.requested],
+  ['inline', 'main.dex', 'io.example.timer.TimerPlugin', ['ui.widget']],
+)
+check(
+  'inline 样例的 main.dex 真的在包里',
+  (await readdir(new URL('samples/inline-timer/plugin/', root)).catch(() => [])).includes('main.dex'),
+  true,
+)
+check(
+  'inline 那两行在界面上分开写',
+  [
+    settings.includes('settings_plugin_inline_same_uid'),
+    settings.includes('settings_plugin_inline_whitelisted'),
+    settings.includes('WidgetPin.slotLabel'),
+  ],
+  [true, true, true],
+)
+
+// 浮标外观那一档 (协议 10.1): 外观是设置页里挑的, 读不到一律回内置画法 —— 两处漂开都不会当场
+// 报错, 只会让人觉得"换了没反应"或者"插件删了球就空了"
+const ballView = await read('app/src/main/java/io/github/yuloong07star/luwi/overlay/Ball.kt')
+const ballTheme = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/theme/BallTheme.kt')
+const themePlugin = JSON.parse(await read('samples/art-ball-theme/plugin/plugin.json'))
+const themeSpec = JSON.parse(await read('samples/art-ball-theme/plugin/theme/ball.json'))
+check(
+  '外观那一条接上了: 挑一份 / 回内置两条路都在',
+  [
+    ballView.includes('BallTheme.face'),
+    ballView.includes('core.background = circle'),
+    settings.includes('BallThemeDialog'),
+    ballTheme.includes('fun currentId'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '外观样例: kind art / 零能力 / 每个状态都有图, 而且图真的在包里',
+  [
+    themePlugin.kind,
+    themePlugin.capabilities.requested,
+    Object.keys(themeSpec.states).sort().join(','),
+  ],
+  ['art', [], ['failed', 'idle', 'listening', 'speaking', 'thinking'].sort().join(',')],
+)
+const themeArtNames = await readdir(new URL('samples/art-ball-theme/plugin/art/', root)).catch(() => [])
+check(
+  '外观样例那五张图一张不少',
+  Object.values(themeSpec.states).every((path) => themeArtNames.includes(path.replace('art/', ''))),
+  true,
+)
+
+// 伴侣那三条硬约束 (方案 3.4): 不许带 MAIN + LAUNCHER —— 出现就判这份包不过。
+// 老那一片鲸鱼娘 (1.1.x, 已经发出去过) 按"只对新装的包生效"那一条不在此列, 而它整个目录已经收进
+// `archive/samples/whale-widget/` (见方案第 6 节), 所以下面这一条扫的就是在用的那份样例伴侣
+const companionManifest = await read('samples/companion/src/main/AndroidManifest.xml')
+check('伴侣样例清单里不许出现 MAIN + LAUNCHER', companionManifest.includes('android.intent.category.LAUNCHER'), false)
+
+// 归档那一份: 目录要在 archive 里, 而 samples/ 下不该再留着它 (两处同时存在就是没搬干净)
+const archivedWhale = await readdir(new URL('archive/samples/', root)).catch(() => [])
+const samplesNow = await readdir(new URL('samples/', root)).catch(() => [])
+check(
+  '鲸鱼娘那一份已经收进 archive/samples/, samples/ 下不再有它',
+  [archivedWhale.includes('whale-widget'), samplesNow.includes('whale-widget')],
+  [true, false],
+)
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
 if (failures > 0) process.exit(1)

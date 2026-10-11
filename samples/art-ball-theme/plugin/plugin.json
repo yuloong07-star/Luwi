@@ -1,0 +1,15 @@
+{
+  "protocol": "lw-plugin/1",
+  "id": "io.github.yuloong07star.luwi.sample.balltheme",
+  "name": "示例外观 · 青瓷",
+  "version": "1.0.0",
+  "minLw": "2.7.6",
+  "api": "1",
+  "kind": "art",
+  "toolPrefix": "look",
+  "capabilities": {
+    "requested": [],
+    "dangerous": []
+  },
+  "tools": []
+}

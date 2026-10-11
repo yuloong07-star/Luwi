@@ -72,9 +72,12 @@ internal object PluginStore {
 
     /** 读一份装好的清单; 读不出来 (文件没了 / JSON 坏了) 就是 null, 调用方要如实说 */
     fun manifest(context: Context, id: String): PluginManifest? {
-        val file = packageDir(context, id)?.let { File(it, "plugin.json") } ?: return null
+        val directory = packageDir(context, id) ?: return null
+        val file = File(directory, "plugin.json")
         if (!file.isFile) return null
-        return runCatching { PluginManifest.parse(file.readText(), PluginStore.lwVersion(context)) }.getOrNull()
+        return runCatching {
+            PluginManifest.parse(file.readText(), PluginStore.lwVersion(context), directory)
+        }.getOrNull()
     }
 
     /**
@@ -187,4 +190,27 @@ internal object PluginStore {
     /** 插件自己那一块可写的地方: `$DSH_HOME/plugins/<id>/.data/` */
     fun dataDir(context: Context, id: String): File =
         File(File(root(context), id), ".data").apply { mkdirs() }
+
+    /**
+     * 升级之后"用不上的那一半": `id → 伴侣包名` (方案第 6 节那条迁移)
+     *
+     * 一个 companion 插件升级成 `art` / `inline` 之后, 机器上那个伴侣 APK 就没用了 —— 但**不自动卸**:
+     * 卸载应用是主人的事, 而且那个包里可能有主人自己导进去的东西 (鲸鱼娘那份就有)。这里只记一笔,
+     * 界面拿它说一句"可以卸掉了"
+     */
+    private const val LEFTOVERS = ".leftovers.json"
+
+    fun leftovers(context: Context): Map<String, String> {
+        val file = File(root(context), LEFTOVERS)
+        if (!file.isFile) return emptyMap()
+        return runCatching { json.decodeFromString<Map<String, String>>(file.readText()) }.getOrDefault(emptyMap())
+    }
+
+    fun leftover(context: Context, id: String): String? = leftovers(context)[id]
+
+    fun rememberLeftover(context: Context, id: String, packageName: String) {
+        val known = leftovers(context).toMutableMap()
+        known[id] = packageName
+        File(root(context), LEFTOVERS).writeText(json.encodeToString(known.toMap()) + "\n")
+    }
 }

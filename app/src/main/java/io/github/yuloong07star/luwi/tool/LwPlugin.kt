@@ -5,6 +5,7 @@ import android.os.Bundle
 import io.github.yuloong07star.luwi.host.HostSettings
 import io.github.yuloong07star.luwi.plugin.PluginAudit
 import io.github.yuloong07star.luwi.plugin.PluginCapabilities
+import io.github.yuloong07star.luwi.plugin.PluginCompanion
 import io.github.yuloong07star.luwi.plugin.PluginDownload
 import io.github.yuloong07star.luwi.plugin.PluginInstaller
 import io.github.yuloong07star.luwi.plugin.PluginManager
@@ -110,17 +111,49 @@ internal object LwPlugin {
         }
     }
 
-    /** 装一份包 (设置页与桥走的是同一条), 回一句给人看的话 */
+    /**
+     * 装一份包 (设置页与桥走的是**同一条链**): 不经手那边, 失败就抛
+     *
+     * 与 [install] 分开是因为设置页要在"装"与"启用"之间插两件事 (按勾选授权、把伴侣 APK 也装上),
+     * 而桥那条路没有界面, 只能一口做完
+     */
+    fun installPackage(context: Context, source: File): PluginInstaller.Outcome =
+        PluginInstaller.install(context, source, developerMode(context))
+
+    /** 把一次装入的结果念成一句给人看的话 (**不含**"伴侣那一半"那一段) */
+    fun describe(outcome: PluginInstaller.Outcome): String = buildString {
+        append("装上了 ${outcome.name} ${outcome.version} (${outcome.id})")
+        append(
+            if (outcome.signed) {
+                ", 发布者指纹 ${outcome.fingerprint.removePrefix("sha256:").take(16)}"
+            } else {
+                ", **没有签名**"
+            },
+        )
+        if (outcome.newPublisher) append("。这是一个新发布者, 第一次见这把公钥")
+    }
+
+    /**
+     * 装一份包 (桥那条路), 回一句给人看的话
+     *
+     * 伴侣那一半在这里只允许**静默装** (`allowSystemInstaller = false`): 这条路跑在后台, 没有人会
+     * 去安装器那一页点那一下。静默装成不成都如实写进这句话里
+     */
     fun install(context: Context, source: File): String {
         val outcome = try {
-            PluginInstaller.install(context, source, developerMode(context))
+            installPackage(context, source)
         } catch (error: Throwable) {
             return "装不上: ${error.message ?: error.javaClass.simpleName}"
         }
         return buildString {
-            append("装上了 ${outcome.name} ${outcome.version} (${outcome.id})")
-            append(if (outcome.signed) ", 发布者指纹 ${outcome.fingerprint.take(16)}" else ", **没有签名**")
-            if (outcome.newPublisher) append("。这是一个新发布者, 第一次见这把公钥")
+            append(describe(outcome))
+            val companion = PluginCompanion.ensure(
+                context,
+                outcome.entryPackage,
+                outcome.entryApk,
+                allowSystemInstaller = false,
+            )
+            if (companion.text.isNotBlank()) append("。").append(companion.text)
             append("。它还没有启用: 要哪几条能力就在设置页的插件那一段里勾, 然后点启用")
         }
     }
@@ -183,7 +216,14 @@ internal object LwPlugin {
             put("problem", entry.problem ?: entry.hostProblem.orEmpty())
             if (manifest != null) {
                 put("kind", manifest.kind)
-                put("entry", "${manifest.entryPackage}/${manifest.entryService}")
+                put(
+                    "entry",
+                    when (manifest.kind) {
+                        "companion" -> "${manifest.entryPackage}/${manifest.entryService}"
+                        "inline" -> "${manifest.entryDex} (${manifest.entryClass})"
+                        else -> "(没有宿主)"
+                    },
+                )
                 put("publisher", manifest.publisherName.ifBlank { "(未签名)" })
                 put(
                     "fingerprint",

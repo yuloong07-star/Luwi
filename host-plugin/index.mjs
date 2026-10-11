@@ -215,24 +215,29 @@ const NOTE = {
 let hostCtx = null
 
 /**
- * 把几张帧变成工具结果里的图: 少了这一步, 模型要自己一张张 read_image (每张一次往返)
+ * 把几张图变成工具结果里的图: 少了这一步, 模型要自己一张张 read_image (每张一次往返)
+ *
+ * **每一项有两种形状**: 盘上那条**路径** (相机与截屏交出来的都是这个), 或者**已经在手里的字节**
+ * (`{ data, name }` —— `lw_look` 那张网格就是后一种: 它由 sharp 当场拼出来, 从来没有落过盘)。
+ * 少了后一种, 那一份字节会被拿去当**路径** `readFile` (Node 认 Buffer 当路径, 报的是
+ * `path must be a string ... without null bytes` 或者 ENOENT, 都不是一句类型错), 于是整批图一张都
+ * 交不出去 —— 2026-10-11 那条"开着『一次取景也拼成一张网格』时视频模式识别不了"就是这一条
  *
  * **声明的类型要与字节一致**: 附件库拿声明的类型与字节比对, 对不上直接拒 (`IMAGE_TYPE_MISMATCH`),
  * 那时工具只会退成"给你路径, 自己 read_image" —— 而相机交出来的是 JPEG, 截屏那条路交出来的是 PNG,
  * 所以类型按字节认, 不写死
+ *
+ * @param items 每一盘是"路径字符串"或者 `{ data, name }` (name 只为了在界面上看得出是哪一张)
  */
-async function attachPictures(paths) {
+async function attachPictures(items) {
   const attachments = hostCtx?.get?.('attachments')
   if (!attachments?.saveImage) return { images: [], note: 'no attachment store on this host' }
   const images = []
-  for (const path of paths) {
-    const data = await readFile(path)
-    images.push(await attachments.saveImage({
-      data,
-      mediaType: pictureType(data, path),
-      // 名字只为了在界面上看得出是哪一帧, 取路径最后一段就够
-      name: String(path).split('/').pop(),
-    }))
+  for (const item of items) {
+    const inline = item !== null && typeof item === 'object' && !Array.isArray(item)
+    const data = inline ? item.data : await readFile(item)
+    const name = inline ? String(item.name ?? 'image') : String(item).split('/').pop()
+    images.push(await attachments.saveImage({ data, mediaType: pictureType(data, name), name }))
   }
   return { images, note: null }
 }
@@ -1244,9 +1249,13 @@ const TOOLS = [
         // 都是缩略图 —— 所以那几张原图照旧跟在后面, 格子看不清时还能看原图
         const grid = wantGrid && paths.length > 1 ? await gridOf(paths) : null
         const wide = grid?.buffer ?? null
-        const { images, note } = await attachPictures(wide ? [wide, ...paths] : paths)
+        // 网格那一张是**手里的字节** (它没落过盘), 后面几张原图是盘上的路径 —— 两种形状一起交出去
+        const { images, note } = await attachPictures(
+          wide ? [{ data: wide, name: 'look-grid.jpg' }, ...paths] : paths,
+        )
+        // 这一句**不带 `${text}`**: 下面那行回执已经把它写在最前面了, 带上就是同一句念两遍
         const lead = wide
-          ? `${text}\nFirst picture: all ${paths.length} frames as one ${grid.columns}x${grid.rows} grid`
+          ? `\nFirst picture: all ${paths.length} frames as one ${grid.columns}x${grid.rows} grid`
             + ` (${(grid.bytes / 1024).toFixed(1)} KB, in the order they were taken); the ${paths.length}`
             + ' full frames follow it.'
           : ''
@@ -3455,7 +3464,8 @@ const TOOLS = [
     + ' capabilities -, so a link is never a shortcut past anything),'
     + ' and a package whose capabilities the user has not allowed yet can do nothing; op=enable /'
     + ' op=disable turn one on or off (a companion plugin is an installed APK that Luwi'
-    + ' binds); op=uninstall asks before it deletes anything (keepData keeps the plugin\'s own'
+    + ' binds, and a package that says where its APK lives brings it along as it installs);'
+    + ' op=uninstall asks before it deletes anything (keepData keeps the plugin\'s own'
     + ' settings directory); op=audit prints the recent capability calls, refused ones included.'
     + ' **A plugin is somebody else\'s code**: tell the user what it wants before enabling it, and'
     + ' never turn on a capability they did not ask for. Capability names look like device.read,'
@@ -5066,7 +5076,7 @@ async function voiceReadNew(inbox) {
     if (!Number.isFinite(seq) || seq <= since || !said) continue
     // `wake` 是"这一句是唤醒之后的头一句"那个记号 (应用那侧只有头一句带它, 见 VoiceInbox.append) ——
     // **2026-10-06 起它只是记号, 不再是"另开一场"的判据**: 选哪一场由 [voiceCurrentSession] 那一笔
-    // 账 (2026-10-07 起是 20 分钟) 定, 见 [voiceTargetSession]。老版本写的行没有这个键, 读起来与
+    // 账 (2026-10-07 起 20 分钟, 2026-10-11 起 10 分钟) 定, 见 [voiceTargetSession]。老版本写的行没有这个键, 读起来与
     // false 是一回事
     //
     // `to` 是**回复框点名的那一场** (2026-10-06 加): 框在屏上时, 框里发出去的那句话投给"发出那条
@@ -5194,7 +5204,7 @@ async function voiceInboxState() {
 /**
  * "当前对话"那一笔账: 一个会话 id 加它是什么时候拿到的
  *
- * **为什么落盘**: 宿主重启之后"20 分钟内那一场对话"还该是同一场 —— 记在内存里的话, 重启一次主人
+ * **为什么落盘**: 宿主重启之后"10 分钟内那一场对话"还该是同一场 —— 记在内存里的话, 重启一次主人
  * 刚才说的话就接不上了 (而重启在这台设备上是常事: 装一次包、改一次设置都要重来)
  *
  * 可变部分全在 [voiceSession.state] 这一个对象上: 换掉它就等于"什么都没记住", 而那正是
@@ -5211,9 +5221,12 @@ function voiceSessionReset() {
  * 多久之内那一场算"当前对话", 过了就当没有 —— 这是需求点名的那个数
  *
  * **2026-10-07 主人把 1 小时改成 20 分钟** ("ball 开新对话间隔 1h 改为 20min"): 从最后一句
- * 成功投递起算, 20 分钟之内点球 / 喊唤醒词 / 打字都接在同一场, 过了才新开一场
+ * 成功投递起算, 那个窗口之内点球 / 喊唤醒词 / 打字都接在同一场, 过了才新开一场
+ *
+ * **2026-10-11 又缩到 10 分钟** (主人: "连续ball的对话从20min缩短到10min") —— 20 分钟那一档
+ * 主人用下来觉得"隔了十几分钟还接着上一场"太粘, 所以缩到 10 分钟
  */
-const VOICE_SESSION_MS = 20 * 60 * 1000
+const VOICE_SESSION_MS = 10 * 60 * 1000
 
 /** 会话 id 是无符号 64 位, **别进整数**: 与虚拟屏那块屏的 id 同一个坑 */
 function voiceSessionPath() {
@@ -5248,7 +5261,7 @@ async function voiceCurrentSession() {
   return current.id
 }
 
-/** 一句话投出去之后的记账: **每次发送都重算这一笔账**, 所以"20 分钟内可复用"是从最后一句起算 */
+/** 一句话投出去之后的记账: **每次发送都重算这一笔账**, 所以"10 分钟内可复用"是从最后一句起算 */
 async function voiceSessionBump(sessionId) {
   const path = voiceSessionPath()
   voiceSession.state.file = path === null ? { path: null, read: true } : { path, read: true }
@@ -5263,11 +5276,11 @@ async function voiceSessionBump(sessionId) {
  *
  * 三条判据 (前两条是主人 2026-10-06 的口径: "只要是 1 小时内, 无论点球/喊唤醒词 都只在同一场
  * 对话" + 当天那条例外 "有回复框时, 框里进的输入走发出回复那个窗口"; **2026-10-07 那个"1 小时"
- * 改成 20 分钟**):
+ * 改成 20 分钟, 2026-10-11 又缩到 10 分钟**):
  *
  * - **回复框点名的 `to`** ([voiceReadNew] 那一行读出来的): 它还在、还是根会话就投它 —— 框里
  *   发出的键盘与语音都从这条路进来, 于是"接着回答那个窗口"不会因为那笔账过了就换场
- * - 20 分钟内那一场 ([voiceCurrentSession], 需求点名的那个数): 复用它 —— 它本来就是浮标开出来的,
+ * - 10 分钟内那一场 ([voiceCurrentSession], 需求点名的那个数): 复用它 —— 它本来就是浮标开出来的,
  *   唤醒词命中之后的头一句也一样接上去 (**`fresh` 不再另开一场**, 2026-10-05 那版"喊一声就是换
  *   一件事说"作废)
  * - 那笔账过了 / 那一场不在了 / 从来没有过: 开一场新的 —— 而新对话落在浮标那个工作区里 (见
@@ -5287,9 +5300,9 @@ async function voiceTargetSession(controller, signal, fresh, to) {
   // 1. **回复框点名的会话** (`to`, 2026-10-06 加): 框里发出去的那句话投给"发出那条回复的会话"。
   //    它必须还活着、而且是个根会话 (子代理那一场不是"能对话的窗"); 不成立时**不当它是错**,
   //    直接落回下面那条小时账 —— 框里的字照旧发得出去, 只是回到老规矩
-  // 2. **时间那一笔** ([voiceCurrentSession]): 20 分钟内那一场复用, 唤醒头句 / 点球头句也一样
+  // 2. **时间那一笔** ([voiceCurrentSession]): 10 分钟内那一场复用, 唤醒头句 / 点球头句也一样
   //    (主人 2026-10-06 改的口径: "只要是 1 小时内, 无论点球/喊唤醒词 都只在同一场对话",
-  //    2026-10-07 那个数由主人改成 20 分钟);
+  //    2026-10-07 那个数由主人改成 20 分钟, 2026-10-11 又缩到 10 分钟);
   //    `fresh` 只是记号, 不决定开不开新场
   // 3. 都没有 (或那场不在了) 才开一场新的
   const listed = await controller.list({}, signal)
@@ -5646,7 +5659,7 @@ async function runVoiceCommand(command, line) {
 const voiceDelivery = {
   lines: 0,
   sessionId: null,
-  /** 现在那一场"当前对话" (20 分钟内可复用的那个) */
+  /** 现在那一场"当前对话" (10 分钟内可复用的那个) */
   current: null,
   /** 这里面有几条是**复用**了当前对话 (而不是新开一场 / 投给最近动过的) */
   reused: 0,
@@ -5717,7 +5730,7 @@ async function createVoiceMessage(text, images = []) {
  *
  * **`line.wake` 不再改写目标** (主人 2026-10-06 改口径: "只要是 1 小时内, 无论点球/喊唤醒词 都只在
  * 同一场对话"): 它只是"这一句是唤醒之后的头一句"那个记号, 选哪一场由 [voiceTargetSession] 按那一
- * 时间定 —— 20 分钟内一律复用浮标那一场 (正在跑就 steer), 那笔账过了才新开一场。界面**不会跟着切过去**:
+ * 时间定 —— 10 分钟内一律复用浮标那一场 (正在跑就 steer), 那笔账过了才新开一场。界面**不会跟着切过去**:
  * 会话是这里建的, 而"在看哪一个"是浏览器自己的路由状态, 应用那侧没有一条让页面切会话的路 —— 所以
  * 新对话真的在跑、回答也会念出来, 但人可能正看着另一个会话。这是主人选的"改动最小"那一档
  *
@@ -5774,7 +5787,7 @@ async function voiceDeliver(ctx, line) {
   }
   const signal = new AbortController().signal
   const fresh = line.wake === true
-  // **自动指令每次新开一场** (主人 2026-10-08 定): 不接回复框点名, 也不复用浮标那 20 分钟的一场 ——
+  // **自动指令每次新开一场** (主人 2026-10-08 定): 不接回复框点名, 也不复用浮标那 10 分钟的一场 ——
   // "到点了提醒我"不是接着刚才那件事说, 而一次性提醒也不该把上下文带进主人的聊天里
   const target = automated
     ? { sessionId: null, running: false, why: 'an automatic command opened its own conversation' }
@@ -5840,7 +5853,7 @@ async function voiceDeliver(ctx, line) {
     const flushed = await ctx.sessions.flush(agent.session)
     return { running, flushed, screenshot: auto.images.length > 0 }
   })
-  // 投出去了才记"当前对话": 这一笔是从**这一句**起算的 20 分钟 (需求: 每次发送完成后 20 分钟内)
+  // 投出去了才记"当前对话": 这一笔是从**这一句**起算的 10 分钟 (需求: 每次发送完成后 10 分钟内)
   await voiceSessionBump(sessionId)
   voiceDelivery.lines += 1
   voiceDelivery.sessionId = String(sessionId)

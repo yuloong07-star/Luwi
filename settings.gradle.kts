@@ -32,6 +32,6 @@ include(":lwplugin-api")
 // 伴侣插件那一份样例 (批次 9 的 P1): 它不在 app 的打包路径上, 出包时单独 build
 include(":sample-companion")
 project(":sample-companion").projectDir = file("samples/companion")
-// 鲸鱼娘桌面小组件那一份伴侣: 协议 10.4 说"桌面组件只能由伴侣 APK 声明", 这就是走那条路
-include(":sample-whale-widget")
-project(":sample-whale-widget").projectDir = file("samples/whale-widget")
+// 鲸鱼娘桌面小组件那一份伴侣**已经收进 `archive/samples/whale-widget/`** (方案 v2 起桌面组件默认
+// 走主 APK 的宿主槽, 那一份是旧路的实物), 因此这里不再是一个 Gradle 模块 —— 想重新出那个 APK
+// 用 luwi-plugins 仓库里那份能构建的拷贝

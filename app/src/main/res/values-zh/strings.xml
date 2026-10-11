@@ -436,7 +436,7 @@
     <string name="settings_quick_send_failed">没能投出去 (队列文件写不进去), 这一条没有送进会话</string>
     <string name="settings_quick_deleted">已经删掉「%1$s」</string>
     <string name="settings_quick_delete_failed">「%1$s」没删掉: 文件不在或者删不动</string>
-    <string name="settings_quick_note">点一条 = 投进会话; 队列文件与语音那条链是同一个, 所以"没有会话就新建、20 分钟内接同一场"照旧</string>
+    <string name="settings_quick_note">点一条 = 投进会话; 队列文件与语音那条链是同一个, 所以"没有会话就新建、10 分钟内接同一场"照旧</string>
 
     <string name="settings_section_skills">技能</string>
     <string name="settings_section_skills_summary">把这台手机上的应用对应的技能交给 dsh</string>
@@ -467,6 +467,13 @@
     <string name="settings_plugin_link_hint">https://…/something.lwp</string>
     <string name="settings_plugin_link_install">下载并装入</string>
     <string name="settings_plugin_link_busy">正在下…</string>
+    <string name="settings_plugin_capabilities_summary">它声明的能力就摆在这儿, 勾了才给。带 ★ 的那几条是敏感档, 默认不勾, 要自己点。答应之后一路做完: 装包 → 把伴侣 APK 也装上 → 启用</string>
+    <string name="settings_plugin_capabilities_action">装它</string>
+    <string name="settings_plugin_capabilities_busy">正在装…</string>
+    <string name="settings_plugin_companion_missing">伴侣应用 %1$s 没装 —— 它的工具在装上之前都动不了</string>
+    <string name="settings_plugin_companion_installed">伴侣应用 %1$s %2$s 已安装</string>
+    <string name="settings_plugin_companion_install">把伴侣 APK 装上</string>
+    <string name="settings_plugin_companion_busy">正在装…</string>
     <string name="settings_plugin_developer">开发者模式</string>
     <string name="settings_plugin_developer_summary">允许装入没有发布者签名的本地包。装一个插件就是信任它, 平时不要开</string>
     <string name="settings_plugin_note">装一个插件就是信任它: 它拿到的能力就是你在这一页勾给它的那些; 启用那一步会去绑伴侣应用的服务</string>
@@ -487,6 +494,26 @@
     <string name="settings_plugin_audit_empty">它还没有调用过任何能力</string>
     <string name="settings_plugin_uninstall">卸载并删掉它的数据</string>
     <string name="settings_plugin_uninstall_keep">卸载但留着它的数据</string>
+    <string name="settings_widget_section">桌面组件</string>
+    <string name="settings_widget_section_summary">桌面上那两格现在挂谁。一个槽同一时刻只挂一只插件 (同槽互斥), 换一只只重画, 不用重装任何东西</string>
+    <string name="settings_widget_slot_anim_name">Luwi 动画组件</string>
+    <string name="settings_widget_slot_image_name">Luwi 图文组件</string>
+    <string name="settings_widget_slot_anim_desc">会动的那一格: 里面装的是你在插件页里挑好的帧序列</string>
+    <string name="settings_widget_slot_image_desc">图文卡片那一格: 一张图, 一行标题, 一段正文, 最多两颗按钮</string>
+    <string name="settings_widget_slot_vacant">这个组件还空着 · 在 Luwi 的插件页里挑一只插件</string>
+    <string name="settings_widget_slot_gone">这个组件挂的插件已经不在了 · 点一下打开 Luwi</string>
+    <string name="settings_widget_slot_frames">插件在, 但它那套帧图读不到 · 点一下打开 Luwi</string>
+    <string name="settings_widget_vacant_choice">空着</string>
+    <string name="settings_widget_pin">放到桌面</string>
+    <string name="settings_widget_pick">挂哪一只插件</string>
+    <string name="settings_plugin_inline_same_uid">它与 Luwi 同权限 (同一个 uid): 运行时那几道能力检查对它是体验, 不是墙</string>
+    <string name="settings_plugin_inline_whitelisted">它的作者在白名单里 (指纹 %1$s)</string>
+    <string name="settings_theme_row">浮标外观</string>
+    <string name="settings_theme_summary">多个主题插件可以同时装着, 同一时刻只生效一个; 读不到就回内置画法</string>
+    <string name="settings_theme_builtin">内置画法</string>
+    <string name="settings_theme_now">现在用的是它</string>
+    <string name="settings_theme_use">换成这一套</string>
+    <string name="settings_theme_empty">还没有插件声明浮标外观 —— 装一份带 theme/ball.json 的 art 插件, 它就会出现在这一行</string>
 
     <string name="screen_window_hide">隐藏虚拟屏小窗</string>
     <string name="screen_window_show">显示虚拟屏小窗</string>

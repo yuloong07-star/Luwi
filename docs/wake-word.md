@@ -132,7 +132,7 @@ lw_wakeword op=keywords words=["肥鱼肥鱼=fei2 yu2 fei2 yu2","小爱同学=xi
   `WakeBridge.session` → `VoiceState.uiSession`), 而 `LwWakeWord.resident(on)` (切模式三条路 +
   `wakeword op=voice` 的唯一入口) 把它**定格**写进 `modes/video-voice.session`; 出视频模式时删掉。
   服务那一侧由 `VoiceRoute.target` 挑: **定格优先** (视频模式里每一句都算), 其次才是回复框点名那一场,
-  都没有就按 20 分钟账本走。`lw_wakeword op=status` 的 `videoTarget` / `uiSession` 两个数就是它的判据
+  都没有就按 10 分钟账本走。`lw_wakeword op=status` 的 `videoTarget` / `uiSession` 两个数就是它的判据
 - 通知栏留一条常驻, 文字随状态走, 而且**按两条链分别说**: 只有唤醒词在守时就是"正在听「…」"
   (2026-10-06 主人定的文案; 词表里几条容错读音同名, 显示名去重之后只念一个), 识别那一路在跑时说
   "正在听「…」· 听着你说这一句"(视频模式常驻那一档说"常驻语音在跑"), 正在念回答那一小段说
@@ -142,7 +142,7 @@ lw_wakeword op=keywords words=["肥鱼肥鱼=fei2 yu2 fei2 yu2","小爱同学=xi
   一小段所以不会被录进去)、更新通知、**为这一句话开门** ([openForOneSentence] → [openVoice], 视频
   模式那一次会留着)、预热识别器、把"唤醒窗口"打开
   (随后头一句带上"这是唤醒头句"的记号 —— 投给哪一场由宿主那侧按时间那一笔账定 (2026-10-07 起
-  是 20 分钟), 见
+  20 分钟, 2026-10-11 起 10 分钟), 见
   `docs/floating-input.md`; **回复框在屏上时例外**: 那一句随框投给"发出那条回复的会话", 取的是
   `OverlayState.replyTarget()`; **视频模式里另有它自己那一条**: 进场时定格的那一场压过上面两条,
   见本节上面那条), 以及唤起 —— `onWake=overlay` (**2026-10-05 起的缺省**) **只唤醒浮标
@@ -294,7 +294,7 @@ node tools/check-wake-words.mjs
 - **词表写入也过了符号表那一关**: `大肥鱼大肥鱼=da4 fei2 yu2 da4 fei2 yu2` 写成了 `d à f éi y ú d à
   f éi y ú @大肥鱼大肥鱼`。
 - 剩下要人自己试的: 喊一句触发一次 (命中会震一下、响一声、通知栏改字, 随后那句话落在浮标那一场
-  对话里 —— 20 分钟内复用, 过了才新开一场 —— 并被念出来), 以及设置页那五行的手感。
+  对话里 —— 10 分钟内复用, 过了才新开一场 —— 并被念出来), 以及设置页那五行的手感。
 
 ## 九、已知边界与风险
 
@@ -386,7 +386,7 @@ node tools/check-wake-words.mjs
 ## 十一、这一块改了什么
 
 ```
-host-plugin/index.mjs                             lw_wakeword 工具、模型清单 (重钉到自建 Release)、镜像优先、装完清另一套; voiceDeliver 按 voice/session.json 那笔账挑对话 (2026-10-06 起 wake 只是头句记号, 不再另开一场; 2026-10-07 起那笔账是 20 分钟); VOICE_COMMANDS 那张命令表 + applyMode (与 lw_mode 共用, 切模式时相机与常驻语音两件一起做); startBallPhase 推"正在想"; chooseVoicePreset 开新会话前把预设解析出来并逐级回退 (2026-10-09)
+host-plugin/index.mjs                             lw_wakeword 工具、模型清单 (重钉到自建 Release)、镜像优先、装完清另一套; voiceDeliver 按 voice/session.json 那笔账挑对话 (2026-10-06 起 wake 只是头句记号, 不再另开一场; 2026-10-07 起那笔账是 20 分钟, 2026-10-11 起是 10 分钟); VOICE_COMMANDS 那张命令表 + applyMode (与 lw_mode 共用, 切模式时相机与常驻语音两件一起做); startBallPhase 推"正在想"; chooseVoicePreset 开新会话前把预设解析出来并逐级回退 (2026-10-09)
 app/src/main/java/.../wake/WakeWordService.kt     前台服务、两层 (唤醒词一直守 / 识别链按命中·点球·视频模式开)、命中之后那几件事、闲置超时、半双工闸、ACTION_LISTEN_NOW (浮标点一下)、ACTION_HUSH (收回这一句) 与 afterHit (叫醒之后那两句命令)
 app/src/main/java/.../wake/WakeTuning.kt          四个 KWS 参数与两个窗的**唯一一份表** (2026-10-09: 0.01 / 2.0 / 3 / 8 + 冷却 1.5 s + 命令尾上限 5 s), 替掉两处重复的 DEFAULT_THRESHOLD / DEFAULT_SCORE
 app/src/main/java/.../wake/WakeDecision.kt        命中之后的去抖纯函数 (冷却判定 / 命中立窗 / 第一段出字收窗), 判据在 WakeDecisionTest

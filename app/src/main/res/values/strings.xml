@@ -436,7 +436,7 @@
     <string name="settings_quick_send_failed">It could not be handed over (the queue file is not writable), so nothing reached the conversation</string>
     <string name="settings_quick_deleted">Deleted "%1$s"</string>
     <string name="settings_quick_delete_failed">"%1$s" was not deleted: the file is gone or could not be removed</string>
-    <string name="settings_quick_note">A tap hands the command to the conversation; the queue is the voice one, so "no conversation means a new one, and twenty minutes stays in the same one" still holds</string>
+    <string name="settings_quick_note">A tap hands the command to the conversation; the queue is the voice one, so "no conversation means a new one, and ten minutes stays in the same one" still holds</string>
 
     <string name="settings_section_skills">Skills</string>
     <string name="settings_section_skills_summary">Hand the skills for the apps on this phone to dsh</string>
@@ -467,6 +467,13 @@
     <string name="settings_plugin_link_hint">https://…/something.lwp</string>
     <string name="settings_plugin_link_install">Download and install</string>
     <string name="settings_plugin_link_busy">Downloading…</string>
+    <string name="settings_plugin_capabilities_summary">These are the capabilities it declares, and it gets only the ones you tick. The ★ lines are sensitive and start off. Once you agree it does the lot in one go: install the package, install its companion APK, enable it</string>
+    <string name="settings_plugin_capabilities_action">Install it</string>
+    <string name="settings_plugin_capabilities_busy">Installing…</string>
+    <string name="settings_plugin_companion_missing">Companion app %1$s is not installed - its tools cannot work until it is</string>
+    <string name="settings_plugin_companion_installed">Companion app %1$s %2$s is installed</string>
+    <string name="settings_plugin_companion_install">Install the companion APK</string>
+    <string name="settings_plugin_companion_busy">Installing…</string>
     <string name="settings_plugin_developer">Developer mode</string>
     <string name="settings_plugin_developer_summary">Accept local packages with no publisher signature. Installing a plugin is trusting it - leave this off</string>
     <string name="settings_plugin_note">Installing a plugin is trusting it: it gets exactly the capabilities you switch on here, and enabling one binds that companion app\'s service</string>
@@ -487,6 +494,26 @@
     <string name="settings_plugin_audit_empty">It has not called a capability yet</string>
     <string name="settings_plugin_uninstall">Uninstall and delete its data</string>
     <string name="settings_plugin_uninstall_keep">Uninstall but keep its data</string>
+    <string name="settings_widget_section">Home screen widgets</string>
+    <string name="settings_widget_section_summary">What the two host slots show. One slot holds one plugin at a time; switching redraws, nothing gets reinstalled</string>
+    <string name="settings_widget_slot_anim_name">Luwi animation widget</string>
+    <string name="settings_widget_slot_image_name">Luwi card widget</string>
+    <string name="settings_widget_slot_anim_desc">The one that moves: it shows the frame sequence you picked in the plugin page</string>
+    <string name="settings_widget_slot_image_desc">The card one: an image, a title, a line of body text and up to two buttons</string>
+    <string name="settings_widget_slot_vacant">This widget is empty · pick a plugin in Luwi</string>
+    <string name="settings_widget_slot_gone">The plugin this widget used is gone · tap to open Luwi</string>
+    <string name="settings_widget_slot_frames">The plugin is there, but its frames cannot be read · tap to open Luwi</string>
+    <string name="settings_widget_vacant_choice">Empty</string>
+    <string name="settings_widget_pin">Put it on the home screen</string>
+    <string name="settings_widget_pick">Which plugin goes here</string>
+    <string name="settings_plugin_inline_same_uid">It runs with Luwi\'s own privileges (same uid): the capability checks are a courtesy there, not a wall</string>
+    <string name="settings_plugin_inline_whitelisted">Its author is on the allow list (fingerprint %1$s)</string>
+    <string name="settings_theme_row">Ball look</string>
+    <string name="settings_theme_summary">Several theme plugins can be installed at once; one is in use. If it cannot be read, the built-in look comes back</string>
+    <string name="settings_theme_builtin">Built-in look</string>
+    <string name="settings_theme_now">In use right now</string>
+    <string name="settings_theme_use">Switch to this one</string>
+    <string name="settings_theme_empty">No plugin offers a ball look yet — install an art plugin with theme/ball.json and it shows up here</string>
 
     <string name="screen_window_hide">Hide the screen window</string>
     <string name="screen_window_show">Show the screen window</string>

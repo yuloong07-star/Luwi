@@ -1071,6 +1071,30 @@ class BallTest {
     }
 
     /**
+     * 两扇门各自的落点 (2026-10-11 主人: "ball菜单栏里『回到应用』要改成走的是正在想的对话，没有则返
+     * 回新对话。而双击回复框现在不变，仍返回现在的发送回复的对应对话")
+     *
+     * - [ReturnTarget.menu] (球菜单那行 + 常驻通知): **只看有没有轮在跑** —— 有就是那一场, 没有就 null
+     *   (调用方给 `BallReturn.NEW_SESSION`, 也就是去开一场新的)。框里记着哪一场**与它无关**
+     * - [ReturnTarget.replyBox] (双击回复框): 框那三笔 (投出去的那一场 → 最新回复的来源 → 框上次跟谁
+     *   打过交道), 一个都没有才 null。抽成纯函数正因为"谁压过谁、哪一档不给"最容易在改动里漂开
+     */
+    @Test
+    fun `菜单那行走正在想的那一场, 双击回复框走框那一场`() {
+        // 菜单那行 / 通知: 有轮在跑就是那一场, 没有 (null 与空白一个意思) 就是"新对话"
+        assertEquals("session-running", ReturnTarget.menu("session-running"))
+        assertNull(ReturnTarget.menu(null))
+        assertNull(ReturnTarget.menu(""))
+        assertNull(ReturnTarget.menu("   "))
+        // 双击回复框: 投出去的那一场 → 最新回复的来源 → 框上次跟谁打过交道
+        assertEquals("session-a", ReturnTarget.replyBox("session-a", "session-b", "session-c"))
+        assertEquals("session-b", ReturnTarget.replyBox(null, "session-b", "session-c"))
+        assertEquals("session-c", ReturnTarget.replyBox(null, null, "session-c"))
+        assertNull(ReturnTarget.replyBox("", "   ", null))
+        assertNull(ReturnTarget.replyBox(null, null, null))
+    }
+
+    /**
      * **这一条就是"半隐藏又失效"的钉子**
      *
      * 报上来的那条病根是"每一拍都把空闲计时推到当下", 于是 `idleDue` 永远为假。判据是这三笔账:

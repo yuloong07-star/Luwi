@@ -68,6 +68,9 @@ internal object LwSystemCommand {
             "clearData" -> "clear all data of $target"
             "forceStop" -> "force stop $target"
             "install" -> "install $target"
+            // 从这一侧读得到的一份文件装 (`pm` 给的是路径, system_server 读不了 FUSE 上的东西,
+            // 所以那一侧先抄进 /data/local/tmp —— 见 LwSystemCommandTable 的 installStaged)
+            "installStaged" -> "install $target (staged through /data/local/tmp first)"
             "disable" -> "disable $target, which takes it off the launcher until it is enabled again"
             else -> "$operation $target"
         }
@@ -85,12 +88,15 @@ internal object LwSystemCommand {
      * 桌面上消失, 要有人记得回设置里打开。它在提示词那一层与另外四条一个待遇 (先问用户)
      */
     suspend fun dispatch(request: JsonObject): JsonObject = when (val op = request.string("op")) {
-        "forceStop", "clearData", "uninstall", "install", "disable" -> destructive(op, request)
+        // `installStaged` 与 `install` 的差别只有一个: 前者把路径当"这一侧自己读得到的一份文件",
+        // 先抄进 /data/local/tmp 再交出去。它**不在** `lw_app_control` 那个 op 名单里 —— 那是插件
+        // 装机链自己走的 (PluginCompanion), 不给模型多开一个口子, 与 `plugin op=grant` 同一个道理
+        "forceStop", "clearData", "uninstall", "install", "installStaged", "disable" -> destructive(op, request)
         "airplane", "data", "wifi", "bluetooth" -> text(toggle(request, op))
         "enable", "setHome", "openUrl", "intent" -> appControl(op, request)
         "keyCombo" -> keyCombo(request)
         else -> throw IllegalArgumentException(
-            "op has to be one of forceStop, clearData, uninstall, install, disable, enable," +
+            "op has to be one of forceStop, clearData, uninstall, install, installStaged, disable, enable," +
                 " setHome, openUrl, intent, keyCombo, airplane, data, wifi, bluetooth," +
                 " not \"$op\"",
         )

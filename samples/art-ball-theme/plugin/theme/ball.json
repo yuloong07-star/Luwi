@@ -1,0 +1,11 @@
+{
+  "name": "青瓷",
+  "hideBuiltinText": false,
+  "states": {
+    "idle": "art/idle.png",
+    "listening": "art/listening.png",
+    "thinking": "art/thinking.png",
+    "speaking": "art/speaking.png",
+    "failed": "art/failed.png"
+  }
+}

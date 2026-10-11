@@ -34,6 +34,15 @@ pwsh -File D:\apk\dev.ps1 bridge -Method plugin -Params '{"op":"enable","id":"io
 ```
 
 `minLw` 写的是 `2.5.0`: 这一批开发期的 `versionName` 还是 2.5.0, 正式发版那一步会把它抬到 2.5.1 ——
+
+## 伴侣 APK 的地址 (可选, 2026-10-11 加)
+
+`plugin.json` 的 `entry` 里可以再多一个 `apk`: 那个伴侣 APK 自己的 **https 地址**。写上它, 装完这份
+`.lwp` 就会顺手把那个包也装上 (协议第 8.1 节), 装插件的人不用再自己去找那一条链接; 不写它就回到原来
+那条手动路 (设置页「插件」段的「安装伴侣 APK」)。**这一份样例没写** —— `:sample-companion` 只在本机
+构建, 没有一条对外可用的 https 地址。真在用的写法看 `archive/samples/whale-widget/plugin/plugin.json`
+那一份 (鲸鱼娘把它自己的 APK 挂在 Release 上, 地址就写在那里)。
+
 **抬的时候这份包也要跟着改**, 否则一台 2.5.1 的手机装上它会被"这一份要 2.5.0 及以上"拦下来 (那是它该拦,
 但方向反了: 报的是"太低", 而实际是"这份包写老了")
 

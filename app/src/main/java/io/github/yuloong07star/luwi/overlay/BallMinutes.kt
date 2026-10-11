@@ -502,6 +502,29 @@ internal object BoxTarget {
 }
 
 /**
+ * 「回去看会话」那两跳各自的落点 —— **一份判据, 两扇门各问一句**
+ *
+ * 主人 2026-10-11 把两扇门分开定了 ("ball菜单栏里『回到应用』要改成走的是正在想的对话，没有则返回新
+ * 对话。而双击回复框现在不变，仍返回现在的发送回复的对应对话"):
+ *
+ * - [menu] (球菜单那行「返回应用」, 与常驻通知那条路): **正在想的那一场**, 没有就 null —— 调用方给的
+ *   是 `BallReturn.NEW_SESSION` 那个记号, 也就是"回去开一场新的"。按「返回应用」要看的是"它现在在
+ *   给谁干活", 所以**不看这块框记着哪一场** (那个是"谁说的"的账, 不是"它在忙什么"的账)
+ * - [replyBox] (双击回复框): **这块框跟哪一场打过交道** (投出去的那一句优先, 见 [BoxTarget]),
+ *   没有才是"框上次跟谁打过交道" —— 这一档**一个字没改** (2026-10-09 的口径)
+ *
+ * 判据抽成纯函数是为了没有设备也能量 (见 BallTest): "谁压过谁、哪一档不给"正是最容易在改动里悄悄
+ * 漂开的地方
+ */
+internal object ReturnTarget {
+
+    fun menu(running: String?): String? = running?.takeIf { it.isNotBlank() }
+
+    fun replyBox(input: String?, reply: String?, last: String?): String? =
+        BoxTarget.choose(input, reply) ?: last?.takeIf { it.isNotBlank() }
+}
+
+/**
  * 这一下点击算哪一种
  *
  * 三个词就是全部答案, 而它比 [BallTouch.act] 先跑一步: "双击"与"单点"是**两个不同的手势**, 得先

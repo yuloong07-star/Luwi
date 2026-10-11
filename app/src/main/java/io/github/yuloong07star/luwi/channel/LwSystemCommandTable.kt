@@ -1,6 +1,7 @@
 package io.github.yuloong07star.luwi.channel
 
 import android.util.Log
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -30,12 +31,15 @@ internal object LwSystemCommandTable {
      * @property maxArguments 这条吃几个参数。默认就是全局上限, **只有通用 intent 一条放得更宽** ——
      *   `am start` 的动作 / 数据 / 组件 / 目标屏四样都要占位置, 放不进 4 个参数。宽的那一条仍然落在
      *   同一套边界里: 同一个二进制、同一个动词、每个参数一样长, 拼不出第二个动词
+     * @property staged 参数不是给 `pm` 的那个路径, 而是**这一侧自己读得到**的一份文件: 先抄进
+     *   [STAGING_DIRECTORY] 再把抄出来的那一份交给 `pm`。见 `installStaged` 那一条
      */
     private class Entry(
         val binary: String,
         val prefix: List<String>,
         val userId: Boolean = false,
         val maxArguments: Int = MAX_ARGUMENTS,
+        val staged: Boolean = false,
     )
 
     private val entries = mapOf(
@@ -43,6 +47,12 @@ internal object LwSystemCommandTable {
         "clearData" to Entry("pm", listOf("clear")),
         "uninstall" to Entry("pm", listOf("uninstall")),
         "install" to Entry("pm", listOf("install", "-r", "-t")),
+        // 从应用那一侧拿来的一份: 参数是**这一侧自己读得到**的那个路径 (应用的外部媒体目录), 而
+        // `pm install <路径>` 对这形式不成立 —— `pm` 不是自己读, 它把路径交给 **system_server**,
+        // 而 SELinux 不许 system_server 读 FUSE 上的东西 (2026-10-11 在模拟器上实测: 连 root 也一样,
+        // 那一行 avc 点的是 scontext=u:r:system_server:s0 tcontext=u:object_r:fuse:s0)。所以先由
+        // 这一侧抄进 [STAGING_DIRECTORY] (system_server 读得到的地方) 再交出去, 抄的那一份装完就删
+        "installStaged" to Entry("pm", listOf("install", "-r", "-t"), staged = true),
         "airplane" to Entry("settings", listOf("put", "global", "airplane_mode_on")),
         "data" to Entry("svc", listOf("data")),
         "wifi" to Entry("svc", listOf("wifi")),
@@ -91,9 +101,34 @@ internal object LwSystemCommandTable {
         if (entry.userId) {
             command += listOf("--user", userId.toString())
         }
-        command += bounded
-        Log.i(TAG, "running $operation as ${command.joinToString(" ")}")
-        return execute(command, timeoutMs)
+        if (!entry.staged) {
+            command += bounded
+            Log.i(TAG, "running $operation as ${command.joinToString(" ")}")
+            return execute(command, timeoutMs)
+        }
+        val source = File(bounded.firstOrNull() ?: return SystemOutput(2, "the $operation operation needs a file to stage"))
+        if (!source.isFile) {
+            return SystemOutput(2, "the $operation operation needs a file to stage, and ${source.absolutePath} is not one")
+        }
+        sweepStaged()
+        val staged = File(STAGING_DIRECTORY, "lw-install-${System.nanoTime()}.apk")
+        return try {
+            source.inputStream().use { input -> staged.outputStream().use { output -> input.copyTo(output) } }
+            command += staged.absolutePath
+            Log.i(TAG, "running $operation as ${command.joinToString(" ")} (staged from ${source.absolutePath})")
+            execute(command, timeoutMs)
+        } catch (error: Throwable) {
+            SystemOutput(2, "could not stage ${source.absolutePath}: ${error.message}")
+        } finally {
+            staged.delete()
+        }
+    }
+
+    /** 上一趟留下的那几份 (装到一半被打断的) —— 装一份之前顺手扫掉, 别让它们积在 `/data/local/tmp` */
+    private fun sweepStaged() {
+        File(STAGING_DIRECTORY).listFiles()?.forEach { old ->
+            if (old.isFile && old.name.startsWith("lw-install-") && old.name.endsWith(".apk")) old.delete()
+        }
     }
 
     /** 一条命令跑完为止, 超时就杀掉 */
@@ -121,4 +156,14 @@ internal object LwSystemCommandTable {
 
     /** 本应用自己的包名: 上面那条自毁保护按它判 */
     const val SELF = "io.github.yuloong07star.luwi"
+
+    /**
+     * `installStaged` 那一份先落这儿
+     *
+     * 挑 `/data/local/tmp` 只有一个理由: **system_server 读得到它** —— `pm install <路径>` 是把
+     * 路径交给 system_server 去读的, 而 SELinux 不许 system_server 读共享存储 (FUSE) 上的文件。
+     * 这一条是 2026-10-11 在模拟器上实测出来的, 不是猜的: 同一个文件在 `/sdcard/Android/media/...`
+     * 下 `pm install` 回 `avc: denied ... tcontext=u:object_r:fuse:s0`, 抄进这里就 `Success`
+     */
+    private const val STAGING_DIRECTORY = "/data/local/tmp"
 }

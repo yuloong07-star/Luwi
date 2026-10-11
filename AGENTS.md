@@ -117,6 +117,7 @@ dsh 这个 fork 的定位也是**部署在远程服务器上, 从任意浏览器
 - **"说完切模式 → 听不了话"那条修掉了** (2026-10-10 主人: "我唤醒让她打开视频模式, 她打开后听不了话了…当前语音是开的但输入不了话"): 病根不是 TTS, 而是**切模式那一下正好落在"一句话的窗口"里** —— 唤醒 → 说"打开视频模式" → 宿主切模式, 那条链**已经开着** (`voiceActive = true`) 但它是"只说一句"的档 (`voiceSticky = false`), 而 `ACTION_REFRESH` 那一支原来只写记号、不动这条已经开着的链, 于是 `SENT_TAIL_MS` (0.3 s) 那句尾巴一到就自己收了 —— 之后再没有人拉回来, 球上还按记号写着「正在听」。两处一起修: **① 切模式那一刻链子已经开着就当场转常驻** (`voiceSticky = true`); **② 看门狗加一条电平兜底** —— `voiceResidency && listening && !powerSave && !voiceActive && !ttsPlaying()` 就 `openVoice()`, 于是**任何**一次意外收麦都会在 500 ms 内自己拉回来 (不靠边沿: 收了之后没人举手正是这条 bug 的形态)。实测 (vivo V2417A): 复现原时序 (一句话窗口开着时切进视频模式) 之后 `capturing` / `voiceActive` 一路是 true, 球上「正在听」; 日志里只有 `voice-mode residency is now true` 与 `sticky: false` 那次开门, 再也没有 `the voice chain is down`
 - **"她自己的回答还是会被录回去"那条: 判据要连"喇叭还在响"一起算** (2026-10-10 主人: "视频模式下正在听时还是有可以录入正在说"): 日志是铁证 —— `21:32:17.761 the voice chain is down again` (说时关麦生效) → `21:32:20.402 the voice chain is up, sticky: true` (只隔 2.6 s 就按"引擎说完了"把麦拉起来) → `21:32:30.338 segment 3 queued as #187: 权限却是允许的…请主人` —— **那整句是她自己的回答**。原因是这台机器的**系统 TTS 引擎 `onDone` 常常在"合成完了"就报**, 而喇叭里还在放 (合成比实时快)。所以"在说"这一条判据挪进 `LwSpeak.talking(context)`: 引擎自己的标记之外再加两样 —— **按字数估的一份预算** (`VoiceState.spokeUntil` = 350 ms/字 + 4 s, 上限 25 s) 与**媒体流真的还在不在放** (`AudioManager.isMusicActive`), 同时成立才算"还在响"。半双工那道闸、说时关麦/说完拉起、球上「正在说」、通知栏那两句、闲置账挂起判据**五处全部改认这一条**。预算是**上限不是估时**: 别的应用放音乐/视频不会把麦克风一直摁住, 到点就放行
 - **取景"一帧也不给"那条留了现场** (2026-10-10 主人: "刚刚她又说看不见镜头"): 那次会话里 `lw_look` 连取六组、前后摄都是 **0 帧**, 而 `lw_camera op=status` 是 `open=true / session=true / window=true / previewError 空 / lastError 空` (连一次都没失败过的样子); photos 目录里那段时间**一张文件都没落地** (确实一帧没到手), 而退回手机模式再进视频模式之后立刻正常 (21:38 取到 4 帧)。当场**没能复现** (随后在视频模式下连念带取试了四组都是 4 帧), 所以先只加一条现场日志: 取帧超时那一刻打 `session / hasPreview / lens / reader / previewError / lastError` 六项 —— 下次再撞上就能一眼看出是会话、镜头还是预览那一处不一致
+- **「一次取景也拼成一张网格」那个开关: 网格那一张是字节, 不是路径** (2026-10-11 主人: "「一次取景也拼成一张网格」功能坏掉了，导致视频模式下识别不了"): 那一串图里**第一张**由 host 侧的 `sharp` 当场拼出来 (`gridOf`), 它**从来没有落过盘** —— 而附件那一段 (`attachPictures`) 只认"盘上那条路径", 每一项都 `readFile` 一次: Node 把 Buffer 当路径收下了, 于是报的是 `path must be a string ... without null bytes` 而不是一句类型错, 整批图**一张都交不出去**, 结果就是"开着这个开关, 视频模式读不到任何画面"。本地那一趟 (`node .lwtmp/look/run.mjs` 那个桩桥 + 真 sharp) 量得很清楚: 修之前 `images=0`、回执里那句 "the pictures could not be attached to this result", 修之后 `images=4` (网格 + 三张原图)。**`attachPictures` 现在两种形状都收**: 路径字符串, 或者 `{ data, name }` (手里的字节)。同一批里那行回执原来把相机那一段**念了两遍** (`lead` 里带了一次 `${text}`, 外层又带一次), 也一起去掉了
 - **双击打断打的是"正在想"指的那一场** (主人 2026-10-08: "双击暂停不会跟随停止"): `pickInterruptTarget` (纯函数, 在 `tools/check-voice-inbox.mjs` 抽的那一段里) 在"根会话且 `running === true`"里挑 `startedAt` 最大的那场, 没有就什么都不取消; 而**字由文件说了算 —— 应用不再乐观清字** (`interruptBall` 只写队列+记账, `phase` 一个字节都不动), 那一轮真停了之后 `turn/end` 写一次文件, 字才落
 - **设置页没有「工作区」与「网络」两段** (2026-10-06 撤掉, 见 `docs/ui-record.md` 第七轮): 工作区落在哪是 host 启动时按 `Workspace.resolve` 那三档自己挑的, 网络那个开关 (局域网) 改完也要重启 host —— 两者都是"平时不用动"的。**能力一个都没删**: `Workspace` 三档解析 / `Workspace.requestAllFilesAccess` / `HostSettings.lanAccess` 与 ⋮ 里那条重启照旧, 只是不再有这两个设置入口 (要开所有文件访问就 `tools/lw-install.ps1`, 要开局域网就写偏好 + 重启 host)
 - **「截图」那段是两条预算, 都是滑块** (见 `channel/ScreenshotBudget.kt`): **像素**三档 (低 262144 = dsh 的 `imagePixelBudget: low`、默认 640000 = dsh 的缺省、高 1690000 = DeepSeek 那头的处理预算), **字节** 256 KiB~1 MiB 连续可滑 (吸附点 256/512/768/1024, 打字给到 4096)。两条给的都是 **app 这一半** (截图产生时缩到多少), 路由那一半 (`imagePixelBudget` / `imageMaxBytes`) 在 dsh 自己的 `settings.yaml` 里, **app 读不到也写不到** —— app 这一半超过路由那一半没用, 只会把注定要被重编码的图交出去 (超了要在 host 那边重编码, 多一次往返也多一次质量损失), 所以滑块上端就停在路由缺省那个数。滑块是搬来的 SFA `ArrowSlider` (`scaffolds/`, 点标题那一行可打字给精确值)
@@ -124,7 +125,9 @@ dsh 这个 fork 的定位也是**部署在远程服务器上, 从任意浏览器
 - **`strings.xml` 里带参数的字符串不能有裸 `%`** (2026-10-06 崩过一次, 见 `docs/ui-record.md` 第七轮): `Resources.getString` 把整条当 `Formatter` 格式串解析, 而它与 `String.format` 不同 —— **`%%` 才是转义**, 裸 `%` 会连着后面那个字一起去当一个转换符, 抛 `UnknownFormatConversionException: Conversion = '是'` 把主线程打死。**崩的位置还特别会骗人**: LazyColumn 预取会在那一行还没进视野时就组合它, 于是现象是"往下拉设置页就重启"。规矩: 只要是进 `stringResource(...)` 的百分号, 一律写 `%%`; `tools/check-bare-percent.py` 扫一遍 (它认 `%1$d` 这类说明符, 跳过合法的 `%%`)
 - **虚拟屏预览放不进网页端**: 预览是合成器直接写进原生 `SurfaceView` 的, 浏览器拿不到那个 surface; dsh 的插件 (`ctx.slots` / `ctx.sidebarRightTabs`) 跑在浏览器 JS 里, **拿不到 Shizuku / root 通道**
 - **球上那几个字与描边同色** (2026-10-09 主人: "正在想的字体颜色换成对应的颜色"): `BallView.show(next, animate, ring)` 把那一色同时喂给 `circle.setStroke` 与 `label.setTextColor` —— 原来只有描边跟着会话换、字恒白, 两个会话同时在想时要凑近看那一圈才分得出是哪一场。**"字没换、颜色换了"那一下也要真的重画** (`lastColor` 是第二个判据), 否则会话轮换 (字还是「正在想」) 时这次换色会被"字没变"那句早退吃掉
-- **回应用回到"我从框里发出去的那一场"** (2026-10-09 主人: "当前是回到最近在 ball 输入会话的那一场。改为谁发送了输入框, 就回到那一场"): 回复框原来只记一笔 `OverlayState.replySession` = "最新那条回复是哪一场推来的", 而一块框可以先后跟好几场说话 (第一次按浮标那本 20 分钟的账投给 `dsh-ball`, 之后别的会话的一轮结束也会把回复推进这块框), 于是双击回到了后者。现在拆成两笔: `inputSession` 由 `OverlayService.ask` 在写收件箱那一刻记下实际用的 `to` (**双击回复框 / 菜单「返回应用」/ 点通知**都按它走, 见纯函数 `BoxTarget.choose`), `replySession` 只留"框里显示的是谁的话"并当没投过话时的兜底; 投递目标 (`replyTarget()`) 也按 `inputSession` 优先, 于是"点球说的那一句"与"回去看那一场"是同一个场。**两笔账都空着就进新会话界面** (主人那一天追加的: "这里没有 (还没发过话) 就进入新会话界面") —— 不再读浮标那本 20 分钟的账 (`VoiceInbox.currentSession`), 那个记号是 `BallReturn.NEW_SESSION` (空串), 由 `HostScreen` 的 `BALL_NEW_SESSION_JS` 删掉 `dsh.sessions.current` 再重载、让 dsh 自己开一场新的
+- **回应用回到"我从框里发出去的那一场"** (2026-10-09 主人: "当前是回到最近在 ball 输入会话的那一场。改为谁发送了输入框, 就回到那一场"): 回复框原来只记一笔 `OverlayState.replySession` = "最新那条回复是哪一场推来的", 而一块框可以先后跟好几场说话 (第一次按浮标那本 10 分钟的账投给 `dsh-ball`, 之后别的会话的一轮结束也会把回复推进这块框), 于是双击回到了后者。现在拆成两笔: `inputSession` 由 `OverlayService.ask` 在写收件箱那一刻记下实际用的 `to` (**双击回复框**按它走 (菜单那行与常驻通知那条路 2026-10-11 改成走"正在想的那一场", 见下一条), 见纯函数 `BoxTarget.choose`), `replySession` 只留"框里显示的是谁的话"并当没投过话时的兜底; 投递目标 (`replyTarget()`) 也按 `inputSession` 优先, 于是"点球说的那一句"与"回去看那一场"是同一个场。**两笔账都空着就进新会话界面** (主人那一天追加的: "这里没有 (还没发过话) 就进入新会话界面") —— 不再读浮标那本 10 分钟的账 (`VoiceInbox.currentSession`), 那个记号是 `BallReturn.NEW_SESSION` (空串), 由 `HostScreen` 的 `BALL_NEW_SESSION_JS` 删掉 `dsh.sessions.current` 再重载、让 dsh 自己开一场新的
+- **「返回应用」走"正在想的那一场" (没在跑就是新对话), 双击回复框那条不变; 通知那一条改成"点下去那一刻现问"** (2026-10-11 主人: "回到应用走的是正在想的对话，与回复框不一样" → "ball菜单栏里『回到应用』要改成走的是正在想的对话，没有则返回新对话。而双击回复框现在不变，仍返回现在的发送回复的对应对话"): 两扇门由纯函数 `ReturnTarget` 分开 (`BallTest` 钉着) —— **球菜单那行「返回应用」与常驻通知**走 `menu` / `OverlayState.runningSession()`: 只看有没有轮在跑, 有就是球上写着「正在想」的那一场 (`ball-phase.json` 里 `startedAt` 最大的那一条, 连"宿主没在跑就不采纳"那道闸都与球上那三个字同一个, 也是双击打断会打的那一场), **没有就是一场新对话** (`BallReturn.NEW_SESSION`), 与"这块框刚才是跟谁说话"无关; **双击回复框**走 `replyBox` / `OverlayState.viewSession()`: `inputSession` → `replySession` → `boxSession` → 新会话界面 (2026-10-09 那条一个字没改)。`OverlayState.boxSession` 是当天补的第三笔 = "这块框最后跟哪一场打过交道" (**只在框真的跟某一场说过话时才写**: 从框里投出去的那一句记下实际用的 `to`, 落进框的那一条回答记下来源; `closeChannel` **不动它**) —— 框把话发出去就自己收掉, 按双击时它本来就关着, 少了这一笔落到的是 dsh 那一侧的"新会话", 而那个会挑**最近动过的那一场的工作区**。另一处是**常驻通知**: 它把会话 id 写进 `PendingIntent` 的附加数据, 而通知只在球上那三个字变化时才重建, 于是点通知与菜单两条路各答各的; 现在它多带一个 `EXTRA_OPEN_LIVE`, 由 `MainActivity.requestedSession` 在收到 intent 那一刻现问一次 `runningSession()` (读不到 (冷启动) 才退回原来那个 id)。读数: `lw_overlay op=state` 的 `menuTo` / `boxTo` / `boxLast`
+- **球那场对话的连续窗口从 20 分钟缩到 10 分钟** (2026-10-11 主人: "连续ball的对话从20min缩短到10min"): `host-plugin` 的 `VOICE_SESSION_MS` 改成 `10 * 60 * 1000` —— 就是"最后一句成功投递之后多久算同一场对话"那个数 (`voice/session.json` 落盘, 宿主重启还记得): 10 分钟之内点球 / 喊唤醒词 / 打字都接在同一场, 过了才新开一场 (最早是 1 小时, 2026-10-07 改成 20 分钟)。判据在 `tools/check-voice-inbox.mjs` (两侧取 9 / 11 分钟贴着那个窗口)
 - **「正在想」那一下开语音的等待由手势灵敏度档算出来** (2026-10-09): 原来是常量 `BallMinutes.THINKING_TAP_MS` (450 ms), 而两个手势窗口因防误触档收窄/放宽之后那个常量会排到防连击窗口前面, 双击打断就被单点动作吃掉。现在用 `BallFeel.thinkingTapMs()` = 取双击窗口与防连击窗口里更晚的那个再加 80 ms 余量 (标准档 430 ms, 防误触档 530 ms), 判据在 `BallTest`
 - **输入通道那块框是幂等的** (2026-10-09 主人报的"输入框唤出有延迟, 两次三击会出现两个输入框而且会重叠, 发生重叠后第一个窗口无法复原"): 判"框还在不在"从 `boxRoot?.isAttachedToWindow == true` 换成 `boxRoot != null` —— `isAttachedToWindow` 要等下一帧 `performTraversals` 才为真, 两次三击落进那段窗口里就会把第一块摘掉、又建一块新的 (`closeChannel` 原来还拿 `boxRoot ?: return` 早退, 于是旧框的读数停在"开着"上)。现在 `openChannel` 已经开着时只摆位 + 还焦点, `closeChannel` 幂等收尾, 挂窗之后再用 `BoxView.claimInputAfterLayout()` 补要一次焦点与键盘
 - **球上手势的"多严"现在有七个门槛** (2026-10-09 主人: "ball 的键盘输入和语音输入经常会误触" + "只收紧防误触档"): 原来 [BallFeel] 只管长按 / 拖动门槛 / 三击总时长 / 刚拖完那一下四个数, 双击窗口与两档防连击窗口是两档共用的常量。现在后三个也归档: **标准档一个字没改** (双击 300 ms / 防连击 350 ms / 正在听 1 s), **防误触档收紧** (双击 220 ms / 防连击 450 ms / 正在听 1.5 s) —— 双击收窄是让"打断"那种点错就真停一场的动作更难凑出来, 两个防连击放宽是让手抖出来的第二下算同一击。`BallTaps.guard(word, feel)` 与 `BallTaps.kind(..., feel)` 都吃这一档
@@ -473,7 +476,7 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   `host-plugin` 里那条 `enum`, 漂开由 `tools/check-quick-commands.mjs` 拦; **删除只在桥上**
   (`op=delete`), 给模型的只有 list / read / write
 - **点一下 = 投一句话, 不是在这里跑**: 设置页那条路往 `voice/inbox.jsonl` 写一行 (来源 `quick`),
-  正文就是规范句「用快捷指令: <名字>」, 于是"当前会话没有就新建 / 20 分钟内接同一场 / 正在跑就
+  正文就是规范句「用快捷指令: <名字>」, 于是"当前会话没有就新建 / 10 分钟内接同一场 / 正在跑就
   steer"三条语义自动成立。**那条规范句在两种语言里都是中文** (它是要给模型读的, 不是给人读的界面文案)
 - **日程那条工具**: `lw_calendar` 六条 op (`list` / `events` / `read` / `create` / `update` / `free`),
   走 app 进程的 `ContentResolver`; 写入落在第一本可写日历 (可用 `calendarId` 指名), **没有可写的就拒**
@@ -497,7 +500,7 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   (`NETWORK_PROVIDER`，默认 10 分钟 · 500 米)
 - **省电联动**: `LwWakeWord.powerSave` 生效时只停轮询那两条, 事件类照常; 恢复时不补跑错过的轮询
 - **动作层是"投一句话"**: 命中之后写 `voice/inbox.jsonl`, 来源 `automation`。宿主对那一个来源有
-  两处特别处理 —— **不进命令表匹配**, 且**每次触发新开一场会话** (不接浮标那 20 分钟的一场);
+  两处特别处理 —— **不进命令表匹配**, 且**每次触发新开一场会话** (不接浮标那 10 分钟的一场);
   设置页的「新建 / 改一改」走另一个来源 `automation-setup`, 它与快捷指令一样落在主人当前那一场
 - **提醒的措辞不在规则里**: 规则只写"要做什么", 那句给主人看的话由模型在触发时现写 (它开的是一场
   新会话, 回答照旧被朗读念出来); `task` 那一种会真的动手机, 所以它多一道全局总闸
@@ -595,17 +598,18 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 
 要记住的:
 
-- **`kind` 这一版只收 `companion`** (另一个 APK 被我们绑它的 Service)。`dex` / `script` / `theme`
-  三种在装的时候就点名拒绝, 它们分别是 P2 / P3
+- **`kind` 现在收三种: `companion` / `art` / `inline`** (2026-10-11 方案 v2 起; 当时这一版只收
+  `companion`, 那两行是历史)。`script` 还没接通, `theme` 已并入 `art`; **`dex` 是 `inline` 的别名**,
+  两个名字进同一个域
 - **两侧都是手写 Binder, 不是 AIDL** (协议第 0 节第 11 条): app 模块里出现 `.aidl` 就会生成 Java,
   而 Java 编译会把 AGP 那条坏掉的资源管线拉回构建 —— 同一个理由让 `LwPrivilegedService` 也手写。
   接口只有一处定义 (`:lwplugin-api` 的 `ILwPlugin` / `ILwPluginContext`, 描述符与 transaction code
   都写在那里), app 与伴侣引的是**同一个模块**; 对外那个 `lwplugin-api-1.jar` 就是它 AAR 里的
   `classes.jar`
-- **能力表 22 条, 这一版真接通 7 条**: `device.read` / `sensor.read` / `notify.post` /
-  `speech.speak` / `clipboard` / `files.own` / `session.post`。其余可声明可勾, 调用时回一句点名的
-  "这一版还没接通", 不假装成功。**检查只有一处** (`LwPluginContextBinder.call`): 逐次对照声明与授权、
-  核调用方 uid、每一次都进审计 (被拒的也进)
+- **能力表 23 条, 现接通 8 条**: `device.read` / `sensor.read` / `notify.post` / `speech.speak` /
+  `clipboard` / `files.own` / `session.post` + `ui.widget` (2026-10-11 加的, 往宿主槽推桌面内容)。
+  其余可声明可勾, 调用时回一句点名的"这一版还没接通", 不假装成功。**检查只有一处**
+  (`LwPluginContextBinder.call`): 逐次对照声明与授权、核调用方 uid、每一次都进审计 (被拒的也进)
 - **`session.post` 就是投一句话** (走 `voice/inbox.jsonl`, `source` 记 `plugin:<id>`), 它是敏感档,
   默认不勾
 - **工具名 = `<toolPrefix>_<动作>`**, 与 `lw_*` 同形; 前缀全局唯一, `lw` / `dsh` / `agent` 保留。
@@ -617,8 +621,9 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   覆盖不到的文件等于没被签
 - **`describe()` 与包必须是一对**: 启用时拿 id / 版本 / api / 工具名 / 能力五项对照, 不一致就不启用
   (伴侣 APK 与那份包是分开发的两样东西, 只有这一步能把它们绑在一起)
-- **未签名的包只走开发者模式** (设置页那一段里的开关, 默认关), 界面上常驻红字; 发布者指纹是公钥
-  SPKI-DER 的 sha256
+- **未签名的包只走开发者模式** (设置页那一段里的开关, 默认关), 界面上常驻红字; 发布者指纹是
+  **规范化的公钥身份**的 sha256 (2026-10-11 改的口径: 曲线 OID + 定长未压缩点, 不是 SPKI 原字节 ——
+  见 `plugin/PluginTrust.kt` 与协议第 11 节, 白名单 / `.publishers` / 插件页 / 签名工具四处同一串)
 - 样例在 `samples/companion/` (模块 `:sample-companion` 与 `plugin/` 那一份包), 插件的工具数与
   `lw_plugin` 一起把 `check-host-plugin.mjs` 的 `FLOOR` 抬到 61; 这一批的静态校验是
   `tools/check-plugins.mjs` (41 条, 含"仓库里不许有 .aidl"那一条与"详情对话框封了滚动上限"那一条)
@@ -663,7 +668,8 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 
 **插件第二批 (2026-10-10, 未发版)**: 两件事一起落的, 协议一个字没动
 
-- **鲸鱼娘桌面小组件** (`samples/whale-widget/`, 模块 `:sample-whale-widget`): 协议第 10.4 节那条
+- **鲸鱼娘桌面小组件** (当时的 `samples/whale-widget/`, 模块 `:sample-whale-widget` —— 这一份**已经
+  收进 `archive/samples/whale-widget/`**, 见插件第四步那一节): 协议第 10.4 节那条
   "桌面组件只能由伴侣 APK 声明"的实物。**动的是启动器那一侧** —— 交出去的是一台
   `ViewFlipper` (`android:autoStart`), 里面一张一帧, 伴侣不常驻任何进程。三条读数定下了这条路:
   动态 GIF 交给 `setImageResource` **不解** (`AnimatedImageDrawable` 那条链没走通),
@@ -683,6 +689,20 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   二选一)。签好名的 `.lwp` 随仓库发在 `plugins/` 下 (旧版本跟 Release 走), 那是给它一条稳定的
   https 地址 —— 这台机器上 `github.com` 与 `raw.githubusercontent.com` 都不通, 所以文档里写的是
   `cdn.jsdelivr.net/gh/yuloong07-star/Luwi@main/plugins/…` 那一条
+- **插件段多了「安装伴侣 APK」** (2026-10-11 主人: "插件里新增安装伴侣APK功能"; **同一天傍晚又按主人
+  的意思撤掉了** —— 新包把地址写在 `entry.apk` 里、装完顺手就装上, 那一行只剩给没带地址的老包兜底):
+  companion 插件装的
+  是**两样东西** —— 一份 `.lwp` 说"绑哪个包、哪个 Service", 而**那个包本身要另外装**, 工具 / 桌面
+  组件 / 它自己的界面全在里面。少了这一步, 从链接装完 `.lwp` 的人只会看到"启用着但宿主没接上"却
+  不知道该去装什么, 所以设置页那一段多一行 (粘一个 https 链接进来), 插件详情里也如实报一句"伴侣
+  应用 <包名> 装没装、什么版本"。`plugin/CompanionApk.kt` 是那一条链, 三条与 `PluginDownload` 同
+  口径 (**只许 https 且每一跳重查** / 边读边数 256 MB 上限 / 前两个字节得是 `PK`), 另加一条它自己
+  的: 装之前拿 `getPackageArchiveInfo` **对一次包名** (点名时要的那个包对不上就不动), 落地那一步
+  交给**系统安装器** (`FileProvider` 出一个 `content://` + `ACTION_VIEW`, 装不装由人在那一页点) ——
+  那台设备缺「安装未知应用」时先把人送到 `ACTION_MANAGE_UNKNOWN_APP_SOURCES` 那一页再说, 不装作
+  点了就有反应。**下下来的那份不当场删**: 安装器是另一个进程, 它读这个 URI 在我们返回之后, 所以
+  那份留在 cache 里、下一次取新的时扫掉旧的; 装完要回设置页点一下插件的「启用」, 宿主才会重新去绑
+  (与"升级插件要重启 host"同一条规矩)。判据在 `tools/check-plugins.mjs` 第一二处新的那五条
 - **这一批随 2.7.4 一起发了** (2026-10-10): `versionCode 12 / versionName "2.7.4"`, 干净构建
   (`:app:clean` 之后全量 `assembleDebug`, host 树重打) 226,357,300 字节 (215.9 MiB), sha256
   `723b6298000f506945334187f7dd8f90f3441a000f86c47c8f13a65ce46799d8`; `tools/apk-bytes.py` 量出
@@ -690,6 +710,95 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   `yuloong07-star/Luwi` 的 `v2.7.4` (Release 正文在工作区 `docs\DSH-LW-2.7.4-release-notes.md`)。
   同一版里还进了**全仓图标换成 Luwi 自己的标记** (启动器 / 通知栏 / 球上那圈 0.378 → 0.65), 那一批
   自己的记录在 `docs/floating-input.md` 与 `tools/make-icons.py` 的文件头
+
+**插件第三步: 一个地址装完即用 (2026-10-11, 未发版)**: 与上两批不同, 这一批**动了协议一个可选字段**
+
+- **`plugin.json` 的 `entry` 多一个可选的 `apk`** (协议第 4 节与 8.1): 那个伴侣 APK 自己的 https
+  地址, 只收 https (与第 13 节同一条口径), 而且它在签名载荷里。**两个方向都向后兼容** —— `entry`
+  那一段本来就不做未知键检查, 所以不认这一项的旧 LW 只是把它忽略; 没有这一项的老包照旧走手动那条路
+- **装完 `.lwp` 顺手把伴侣补上** (`plugin/PluginCompanion.kt`): 那个包没装着时下下来 → 对一次包名
+  → **静默装** → 启用。静默那条走的是特权白名单里本来就有的一条 (`pm install -r -t`, 见
+  `LwSystemCommandTable`), 2026-10-11 才接上这个调用点 —— **白名单一个字没动**, 也没有给谁多开一个
+  能力面。没有特权 (root 与 Shizuku 都没有) 或 `pm install` 非 0 时退回**系统安装器**, 而那一支
+  **不自动启用** (人还在安装器那一页, 什么时候回来不由我们定)
+- **这一份要过两个地方, 少一个都装不上** (2026-10-11 在模拟器上实测撞出来的两条, 都不是猜的):
+  1. **应用写到哪**: 应用自己的**外部媒体目录** `/sdcard/Android/media/<包名>/lw/companion` —— 不
+     需要任何权限就能写, 而**特权那一侧读得到**。应用私有 `cacheDir` 不行: 真机上实测 shell 读
+     `/data/data/<包名>` 是 Permission denied, 而同一份文件放进媒体目录后 `test -r` 回 READABLE
+  2. **`pm` 从哪读**: **不能把这个路径直接交给 `pm install`** —— `pm` 不是自己读文件, 它把路径交给
+     **system_server**, 而 SELinux 不许 system_server 读 FUSE (共享存储) 上的东西:
+     `avc: denied { read } ... scontext=u:r:system_server:s0 tcontext=u:object_r:fuse:s0`, **root 也
+     一样** (拦的是 system_server 那一侧, 不是调用方)。所以特权那一侧先把它抄进 `/data/local/tmp`
+     (system_server 读得到的地方) 再 `pm install -r -t`, 抄的那一份装完就删 —— 这就是
+     `LwSystemCommandTable` 里新加的 `installStaged`。**`install` 那一条原样留着** (给
+     `lw_app_control` 装 `/data/local/tmp` 或 `/data` 下的包用), `installStaged` **不进模型那张
+     op 名单**, 只有插件装机链自己走
+- **装机时一次确认** (`SettingsScreen.PluginCapabilityDialog`): 包声明了能力就先摆出来问一次, 普通档
+  默认勾、敏感档默认不勾 (协议第 5 节那句"安装时列出, 一次确认")。**一条能力都不声明的包连这一次
+  都没有** —— 粘一个地址就装完即用, 鲸鱼娘是那个实物。详情页里"伴侣应用没装"那一行旁边多一颗
+  「把伴侣 APK 装上」的按钮 (清单里带了地址才有), 老包看不见它
+- **两条路的分工**: 设置页那条有人看着屏幕, 会吊系统安装器、会按勾选授权、会启用; 桥
+  (`lw_plugin op=install`) 那条跑在后台, 只允许**静默装**、不弹确认、不自动启用、能力一条不给
+- **鲸鱼娘那一份抬到 1.1.3 重签** (`plugins/whale-widget-1.1.3.lwp`): 伴侣的 `describe()` 必须与
+  包里的 `version` **逐字对上** (`PluginHost.compare`), 所以插件包抬版本时那个 APK 也得抬
+  (`WhalePluginService.VERSION` 与 `build.gradle.kts` 的 `versionName` 一起), 两份资产发在同一个
+  Release 里, 地址就写在上面那段 `entry.apk` 中
+
+**插件第四步: 方案 v2 "安装即用" (2026-10-11, 随 2.7.6 一起发了)**: 主人的原话是"安装插件还要再安装 apk, 这不符合
+插件理念 …… 应该是安装即用, 不用在桌面多一个应用"。方案全文在工作区
+`docs/LW-软件插件协议-v2-安装即用方案.md`, 协议正文按它增补 (第 0 节三条决定 + 第 2 / 4 / 5 / 8 /
+10 / 11 / 15 节)。这一批**动了协议本身, 但 `protocol` 字符串没动** (还是 `lw-plugin/1`): 新域是加法,
+老包一个字节都不用改
+
+- **宿主槽** (`plugin/widget/`): 桌面上那两格改由**主 APK** 的清单声明 —— `WidgetSlotAnim`
+  (「Luwi 动画组件」, `ViewFlipper` 帧序列) 与 `WidgetSlotImage` (「Luwi 图文组件」: 图 + 标题 +
+  正文 + 最多两颗按钮), 插件只往里填内容, 于是"往桌面放一只鲸鱼娘"不再需要第二个 APK。**同槽互斥**:
+  一个槽同一时刻只挂一只插件, 映射在 `$DSH_HOME/plugins/.widgets.json`, 换一只只重画 (设计不是缺陷)。
+  帧图走 `content://` (位图过 binder 会撞 1 MB 上限), 读权限**每一趟组装前重放一次**, 开机 / 解锁 /
+  覆盖安装再由 `WidgetRegrant` 补一轮 (清单里那条窄的 `BOOT_COMPLETED` **只干这件事, 不起 host**);
+  "插件没了"与"帧图读不到"各有各的空态正文; 卸插件时先清槽再重画
+- **`art` 域**: 一包资源, 零代码, 零第二次安装 —— 能提供浮标外观 (`theme/ball.json`)、桌面组件的内容
+  (`widget/widget.json`)、面板与设置声明; **不许带工具, 不许声明任何能力**。包里所有指向自己的相对
+  路径**查两遍** (装的时候 `PluginPaths.checkPackage`、读图那一刻 `WidgetFramesProvider` 再兜一次),
+  比的是 `canonicalPath` 前缀
+- **`inline` 域** (`plugin/inline/`): 原 `dex` 那一档 (老名字当别名收)。`InlineHostService` 跑在清单里
+  预声明的 `:plugin` 进程里, 优先 `InMemoryDexClassLoader`; 抛异常转成一条工具错误文本, 卡死由主进程
+  15 秒超时如实报。**只对白名单作者开放** (与 Luwi 同签名, 或公钥身份写在
+  `$DSH_HOME/plugins/.inline-allow.json`): 它与 Luwi 同 uid, 能力检查对它是体验不是墙 —— 开发者模式
+  也不开这个口子
+- **`companion` 收窄**: 只有"要主 APK 清单里没有的权限 / 特殊清单组件 / 自己的进程"才准用, 而且
+  **不许带 MAIN + LAUNCHER** (入口 Activity 写在 `entry.activity` 里, 由插件页那颗「打开」用显式组件
+  拉起); `tools/check-plugins.mjs` 静态守住
+- **装完即用那一条链**: 零能力 (或声明的能力全勾上了) 的包装完**自动启用**; 声明了 widget 而槽空着就
+  顺手挂上, 再问一句"要放到桌面吗" (`requestPinAppWidget`, 系统那张"添加到主屏幕"的卡)
+- **插件那一段现在长这样**: 插件列表 → 「桌面组件」两行 (动画 / 图文) → 「浮标外观」一行 → 装入插件包
+  → 从链接装入 → 开发者模式。2026-10-11 按主人口径收掉了两处: **「安装伴侣 APK」那一行删掉**
+  (新包把地址写在 `entry.apk` 里自动装, 那一行只剩给老包兜底却顶着每一台机器), **「打开它自带的界面」
+  只在 `kind == companion` 时才画** (art / inline 点下去只回一句"这一档没有自带的界面", 那是个空按钮)
+- **指纹口径改了**: 发布者指纹从"SPKI 原字节的 sha256"改成**规范化的公钥身份** (曲线 OID + 定长未压
+  缩点) 的 sha256 —— 白名单 / `.publishers` / 插件页 / `tools/lw-plugin-sign.mjs` 四处同一串
+- **样例与包**: `samples/art-whale-widget/` (鲸鱼娘 2.0.0, kind art, 桌面上那一格由宿主槽画; 老那份
+  `samples/whale-widget` **已经收进 `archive/samples/whale-widget/`** —— 2026-10-11 主人点头之后
+  搬的, 它不再是 Gradle 模块, 能构建的拷贝在 luwi-plugins 仓库)、`samples/art-ball-theme/`
+  (浮标外观) 与 `samples/inline-timer/`
+  (番茄钟, Java 源码 + `tools/build-dex.ps1` 出 `main.dex`); 签好的包在 `plugins/` 下; 判据是
+  `tools/check-plugins.mjs` (87 条) 与 `app/src/test/.../plugin/PluginV2Test.kt` (公钥身份那一段读数
+  与签名工具打印的那一串是同一个数)
+- **浮标外观那一档也接上了** (`plugin/theme/BallTheme.kt` + `BallView` 那条外部图 / 帧序列分支):
+  多份主题插件可以同时装着, 设置页「浮标外观」那一行挑一个; 读不到 (插件被删 / 目录被改坏 / 图缺一张)
+  一律回内置画法。样例是 `samples/art-ball-theme/` (五张图 + `tools/build-art.py`), 设备上验过:
+  挑中那一份球当场换画法, 把那插件卸掉当场回内置
+- **还没做的**: `ui.panel` (声明式面板) 仍是"声明可装, 调用即如实拒" (P4); `script` 域未接通 (P3)
+- **这一批随 2.7.6 一起发了** (2026-10-11): `versionCode 14 / versionName "2.7.6"`, 干净构建
+  (`:app:clean` 之后全量 `assembleDebug`, host 树重打) **226,616,833 字节 (216.1 MiB)**, sha256
+  `406c63b3383e0c94e55534141566392a83b82420f58ce832d8dbbce662a594b5`; `tools/apk-bytes.py` 量出最大
+  无归属区间 4,124 字节 (与 2.6.0 / 2.6.5 / 2.7.4 那几份干净包同一个量级); 发在 `yuloong07-star/Luwi`
+  的 `v2.7.6` (Release 正文在工作区 `docs\DSH-LW-2.7.6-release-notes.md`)。同一版里还进了: **"同一场
+  对话"的窗口 20 分钟 → 10 分钟** (`host-plugin` 的 `VOICE_SESSION_MS`, 判据在
+  `tools/check-voice-inbox.mjs`)、**「返回应用」与「双击回复框」两扇门的落点分开**
+  (`overlay/BallMinutes.kt` 的 `ReturnTarget`, 通知那条 intent 里过时的会话 id 不再作数, 见
+  `MainActivity.requestedSession`)、**取景网格那批图交得出去** (`host-plugin` 的 `attachPictures`
+  现在两种形状都认: 盘上的路径 / 手里的字节), 以及包里带地址的伴侣 APK 自动补装 (`entry.apk`)
 
 ## 工作区与存储
 

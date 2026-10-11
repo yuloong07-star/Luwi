@@ -27,3 +27,12 @@
 # 4) 特权通道依赖的两家再保一层名字 (它们自己有 consumer 规则, 这里只是不把话说满)
 -keep class dev.rikka.shizuku.** { *; }
 -keep class com.topjohnwu.superuser.** { *; }
+
+# 5) LW 插件那份对外 API (`lwplugin-api`) 是**给插件调**的, 应用自己不一定调得到 —— R8 会把
+#    没有应用侧引用者的方法与内部类剪掉, 于是插件 (inline 的 dex, 或伴侣 APK) 在设备上撞
+#    NoSuchMethodError。2026-10-11 实测到的就是这一条: `ILwPluginContext.Companion.asInterface`
+#    与 `ILwPluginContext$Proxy` 被剪掉, inline 插件的 attach 直接崩在 `:plugin` 进程里
+#    (日志里那句是 `NoSuchMethodError ... asInterface ... appears in base.apk`), 而 describe 那一
+#    步好好的 —— 那种"一半好一半崩"最费时间。整包保名字: 哪几个方法插件会调是我们说了算,
+#    不是"应用这一侧有没有引用者"说了算
+-keep class io.github.yuloong07star.luwi.plugin.api.** { *; }

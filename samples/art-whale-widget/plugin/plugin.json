@@ -1,0 +1,15 @@
+{
+  "protocol": "lw-plugin/1",
+  "id": "io.github.yuloong07star.luwi.sample.whalewidget",
+  "name": "鲸鱼娘",
+  "version": "2.0.0",
+  "minLw": "2.7.6",
+  "api": "1",
+  "kind": "art",
+  "toolPrefix": "whale",
+  "capabilities": {
+    "requested": [],
+    "dangerous": []
+  },
+  "tools": []
+}

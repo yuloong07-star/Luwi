@@ -9,15 +9,12 @@
         android:label="@string/app_name"
         android:supportsRtl="true">
 
-        <!-- 伴侣自带的界面: LW 只给一个"打开"入口 (见协议 10.3), 这一页怎么画是伴侣自己的事 -->
+        <!-- 伴侣自带的界面: LW 只给一个"打开"入口 (见协议 10.3), 这一页怎么画是伴侣自己的事。
+             **没有 MAIN + LAUNCHER** (方案 3.4 的第一条硬约束): 桌面不许因为装了插件多出一格图标,
+             那个 Activity 的名字写在插件包的 `entry.activity` 里, 由 Luwi 用显式组件拉起 -->
         <activity
             android:name=".HelloScreen"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="true" />
 
         <!-- 被 LW 绑的那一个: 用 LW 声明的那条自定义权限护住, 于是别的应用绑不上。
              描述符与 transaction code 都在 :lwplugin-api 里, 这一份是手写 Binder 而不是 AIDL stub -->

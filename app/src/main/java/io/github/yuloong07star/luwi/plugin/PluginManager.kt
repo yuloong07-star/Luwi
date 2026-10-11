@@ -1,9 +1,14 @@
 package io.github.yuloong07star.luwi.plugin
 
 import android.content.Context
+import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import io.github.yuloong07star.luwi.plugin.api.LwPluginResults
+import io.github.yuloong07star.luwi.plugin.widget.WidgetHost
+import io.github.yuloong07star.luwi.plugin.widget.WidgetSlots
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -115,6 +120,11 @@ internal object PluginManager {
         val entry = entries(context).firstOrNull { it.id == id } ?: return "没装过这个插件: $id"
         val version = entry.version
         PluginHost.disconnect(context, id)
+        // 桌面那一格跟着收口 (方案 3.1): 先把它从槽里摘掉再重画 —— 少了这一步, 那一格会挂着一条
+        // 已经删掉的插件, "插件没了"与"主人故意清空"两种状态就分不清了
+        if (WidgetSlots.clear(context, id).isNotEmpty()) WidgetHost.refreshAll(context)
+        // 浮标外观那一条同理: 挑中的那一份被卸掉就回内置画法 (协议 10.1)
+        if (BallTheme.currentId(context) == id) BallTheme.choose(context, null)
         val home = java.io.File(PluginStore.root(context), id)
         if (keepData) {
             val data = java.io.File(home, ".data")
@@ -205,12 +215,25 @@ internal object PluginManager {
         return PluginHost.invoke(context, id, tool, args)
     }
 
-    /** 起这个插件自带的界面 (协议 10.3); 回一句结果, 起不来就说清为什么 */
+    /**
+     * 起这个插件自带的界面 (协议 10.3); 回一句结果, 起不来就说清为什么
+     *
+     * 方案 3.4 起伴侣**不许带 LAUNCHER**, 于是入口 Activity 的名字写在 `entry.activity` 里; 老包
+     * 没有这一项, 沿用 launcher 那条路 (已经装着的不管)
+     */
     fun open(context: Context, id: String): String {
         val entry = entries(context).firstOrNull { it.id == id } ?: throw IllegalArgumentException("没装过这个插件: $id")
         val manifest = entry.manifest ?: throw IllegalArgumentException("$id 这一份现在读不出来")
-        val launch = context.packageManager.getLaunchIntentForPackage(manifest.entryPackage)
-            ?: return "这个伴侣没有能起来的界面 (它没声明 launcher activity)"
+        if (manifest.kind != "companion") {
+            return "这一档没有自带的界面 (${manifest.kind} 域不是另一个应用)"
+        }
+        val explicit = manifest.entryActivity.takeIf { it.isNotBlank() }
+        val launch = if (explicit != null) {
+            Intent().setComponent(ComponentName(manifest.entryPackage, explicit))
+        } else {
+            context.packageManager.getLaunchIntentForPackage(manifest.entryPackage)
+                ?: return "这个伴侣没有能起来的界面 (它没声明 launcher activity, 也没在清单里给 entry.activity)"
+        }
         launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         return try {
             context.startActivity(launch)

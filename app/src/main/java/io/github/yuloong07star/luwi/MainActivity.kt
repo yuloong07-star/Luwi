@@ -14,6 +14,7 @@ import io.github.yuloong07star.luwi.channel.PreviewControl
 import io.github.yuloong07star.luwi.channel.ScreenshotBudget
 import io.github.yuloong07star.luwi.host.BallReturn
 import io.github.yuloong07star.luwi.host.DshHostService
+import io.github.yuloong07star.luwi.overlay.OverlayState
 import io.github.yuloong07star.luwi.overlay.OverlayService
 import io.github.yuloong07star.luwi.theme.ThemeStore
 import io.github.yuloong07star.luwi.tool.LwOverlay
@@ -82,7 +83,7 @@ class MainActivity : ComponentActivity() {
         // 冷启动那一档: 「回应用」把界面拉起来时带的就是"要落到哪一场对话"那个 id (见 onNewIntent)
         // **带了空串就是"去新会话界面"** ([BallReturn.NEW_SESSION], 2026-10-09): 与"这个 intent 没带
         // 那个键"分得开 —— 没带 (`null`) 时 [BallReturn.ask] 什么都不做, 界面照旧只是被提到前面
-        val ball = intent?.getStringExtra(OverlayService.EXTRA_OPEN_SESSION)
+        val ball = requestedSession(intent)
         Log.i(TAG, "created with open-session=$ball")
         BallReturn.ask(ball)
         // 唤醒词那个许可是存盘的, 所以应用一起来就照着它把监听恢复起来 —— 不然"允许唤醒"只是个记号,
@@ -111,11 +112,31 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val ball = intent.getStringExtra(OverlayService.EXTRA_OPEN_SESSION)
+        val ball = requestedSession(intent)
         // 这一行是「回应用」那一跳的证据: 它出现说明 intent 送到了界面, 不出现就是没送到
         // (而"没送到"那一条已经由 `OverlayService.openApp` 直接写 [BallReturn] 兜住了)
         Log.i(TAG, "onNewIntent open-session=$ball")
         BallReturn.ask(ball)
+    }
+
+    /**
+     * 这一次 intent 要把会话界面带到哪一场
+     *
+     * **通知那一条是唯一带 `EXTRA_OPEN_LIVE` 的入口**, 而它那个 id 是在"通知重建那一刻"抄下来的
+     * (PendingIntent 的附加数据在创建时就定死了) —— 之后回复一条条落进框、输入投给另一场, 那条账
+     * **变了而通知不会跟着重建** (它只在球上那三个字变化时才重建, 而"框里进了一条回复"不改那三个
+     * 字)。于是点通知会落到一个**过时**的会话上 —— 与菜单那行「返回应用」各答各的, 而两者本该是同
+     * 一个去向 (主人 2026-10-11 报的就是"回到应用"这条路上的这处不一致)。
+     *
+     * 所以带这个记号时**以此刻那条账为准**: 与菜单那行「返回应用」同一套 (正在想的那一场, 没有就是
+     * 一场新对话, 见 [OverlayState.runningSession]) —— 读不到 (冷启动, 进程新起一份, 那份球的账还没
+     * 读进来) 才退回 intent 里那个 id。不带记号时就是别处点名的 id (球菜单那行给的), 原样用
+     */
+    private fun requestedSession(intent: Intent?): String? {
+        if (intent == null) return null
+        val baked = intent.getStringExtra(OverlayService.EXTRA_OPEN_SESSION)
+        if (!intent.getBooleanExtra(OverlayService.EXTRA_OPEN_LIVE, false)) return baked
+        return OverlayState.runningSession() ?: baked
     }
 
     private companion object {

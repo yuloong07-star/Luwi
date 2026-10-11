@@ -1,0 +1,37 @@
+{
+  "protocol": "lw-plugin/1",
+  "id": "io.example.timer",
+  "name": "番茄钟",
+  "version": "1.0.0",
+  "minLw": "2.7.6",
+  "api": "1",
+  "kind": "inline",
+  "toolPrefix": "timer",
+  "entry": {
+    "dex": "main.dex",
+    "class": "io.example.timer.TimerPlugin"
+  },
+  "capabilities": {
+    "requested": [
+      "ui.widget"
+    ],
+    "dangerous": []
+  },
+  "tools": [
+    {
+      "name": "timer_start",
+      "summary": "开一轮番茄钟, 并把状态推到桌面那一格上",
+      "params": {}
+    },
+    {
+      "name": "timer_state",
+      "summary": "看这一轮现在跑到哪了",
+      "params": {}
+    },
+    {
+      "name": "timer_boom",
+      "summary": "故意抛一个异常: 用它量『插件炸了 Luwi 不受影响』那一条",
+      "params": {}
+    }
+  ]
+}
