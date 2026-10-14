@@ -1,0 +1,10 @@
+# 换行钉死在 LF: 这个仓的代码要在 Linux (手机沙盒) 与 Windows 上跑同一份
+* text=auto eol=lf
+
+# 二进制不碰
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.tgz binary
+*.zip binary

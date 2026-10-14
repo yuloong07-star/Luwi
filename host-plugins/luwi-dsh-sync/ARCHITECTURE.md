@@ -1,0 +1,103 @@
+# Architecture
+
+## Overview
+
+`dsh-session-sync` mirrors the DSH session store into a dedicated git worktree and syncs it to a user-provided remote, giving cross-device session continuity with no cloud service. Session files are treated as **opaque bytes**: the plugin never parses JSONL/zstd — the physical encoding belongs to the harness, and the plugin's only job is to move those bytes, merge append-only histories, and report state.
+
+## Roles
+
+- **Consumes public services only**: `sessions`, `commands`, `storageDomain`, `subprocess` (hard `inject`); `tools` (registered via `ctx.inject(['tools'], …)` when present); `userQuestions` / `approval` (optional `ctx.get`, fail closed when absent).
+- **`lib/` is zero-DSH-dependency**: services are wired only at the boundary in `index.mjs`; `lib/` depends only on `node:` built-ins (the single sanctioned exception is `lib/domain.mjs`, which imports `zod` and `@deepseek-ai/dsh-storage-domain` because the domain record schema is a persistence-boundary validator).
+
+## Module map
+
+| Module | Responsibility |
+|---|---|
+| `index.mjs` | The single host face: `Config` schema + `resolveConfig`, `makeRunGit`, tool factories, the `/sync` command handler, auto modes, `apply()` |
+| `lib/constants.mjs` | Vocabulary + protocol constants (backends, confirm channels, merge kinds, error codes, defaults, bounds) — zero dependency |
+| `lib/errors.mjs` | Structured domain errors (`SyncError` with stable `code` + `details`) |
+| `lib/paths.mjs` | Path resolution, nesting checks, and fork-file naming — pure |
+| `lib/sanitize.mjs` | Pure display/log redaction (remote-URL credentials, tokens, `key=value` secrets, path-containment display) |
+| `lib/merge.mjs` | Append-only three-way merge classification — pure |
+| `lib/mirror.mjs` | Byte mirror from the session store into the worktree (`node:fs`) |
+| `lib/git.mjs` | Git command layer: verb whitelist + argument assertions, never force-push/reset/rebase/branch-switch |
+| `lib/backend.mjs` | Transport backend seam contract + pure `selectEncryptionMode` (backend/mode/warnings selection) |
+| `lib/age.mjs` | age binary probe (`detectAge`) + file-based `ageEncrypt`/`ageDecrypt` (optional external binary, graceful degrade) |
+| `lib/encrypted.mjs` | `EncryptedBackend`: age-encrypted git transport (encrypt-then-push, decrypt-then-merge on plaintext, plaintext fallback) |
+| `lib/engine.mjs` | Sync orchestration: `push` (mirror → commit → push, reconcile-and-retry once on rejection), `pull` (commit → fetch → three-way merge), `status` |
+| `lib/status.mjs` | Read-only status collection (no fetch, no writes) |
+| `lib/render.mjs` | Result text rendering (pure, JSON-safe inputs) |
+| `lib/gate.mjs` | Confirmation gate + session-event adaptive gate |
+| `lib/domain.mjs` | The `session-sync` storage-domain spec (state table, singleton key) |
+
+### Luwi additions (G1-2, 2026-10-15)
+
+| Module | Responsibility |
+|---|---|
+| `lib/luwi-peer.mjs` | `peer` / `live` config sections: parsing, bounds, token masking (`maskSecret` / `sameSecret`), `annotateWorkspaceNames()` (the single implementation of "a shared workspace name gets `名字（设备名）`"), `shadowDirName()`, `textOfContent()` (text blocks only) |
+| `lib/luwi-live.mjs` | `condense()`: fold one session's events into a projection of user + assistant text only (drafts stay out of the entries; entry- and character-bounded), plus the snapshot reader that validates what the peer wrote |
+| `lib/luwi-inbox.mjs` | Queue and receipt files (`inbox/<toDeviceId>/<msgId>.json`, `inbox-ack/…`): append-only, traversal-proof segments, idempotence by message id |
+| `lib/luwi-proxy.mjs` | `proxyEventsFrom()`: fold peer entries into local session events (a user entry opens a turn, an answer closes it; `openTurn` and the turn counter survive between polls), the local outgoing line, the local failure notice, and the append helper |
+| `lib/luwi-peer-runtime.mjs` | The channel runtime: the peer routes, delivery into an agent (`resolveAgent` + `followup`/`steer` + `flush`), queue consumption and receipts, projection read/write/sweep, and the readings the panel uses |
+
+## Data flow
+
+```text
+$DSH_HOME/sessions ──byte mirror──▶ <repoDir>/sessions ──git──▶ custom remote
+```
+
+1. **Mirror** copies each session file as opaque bytes into the worktree (symlinks refused, deletions only for files that vanished at the source and are neither fork files nor host-private artifacts). Host-private artifacts (`session.lock`, the harness session lease, and `session.migration.*.tmp` staging files) are runtime state, not syncable content: the mirror neither copies them in nor deletes them from the worktree.
+2. **Commit** records the mirror as a git commit (plugin identity, never the user's git identity).
+3. **Push/pull** move commits to/from the configured remote over `ctx.subprocess`-driven git.
+
+## Conflict resolution — never silently overwrite
+
+The three-way merge compares `base` (merge base), `ours` (local), and `theirs` (remote) per file:
+
+| Verdict | Condition | Outcome |
+|---|---|---|
+| `identical` | `ours == theirs` | keep ours |
+| `ours-only` | `theirs == base` | keep ours |
+| `theirs-only` | `ours == base` | adopt theirs (remote-only append) |
+| `append-both` | both appended past base | keep ours + fork file for theirs |
+| `diverged` | neither is a superset | keep ours + fork file for theirs |
+
+Fork files are named `<basename>.remote-fork-<UTC 14-digit yyyyMMddHHmmss>-<device8>` (`forkFileName` rejects any non-14-digit stamp, so both backends must strip the ISO separators `-`, `:`, and `T`); mirror and cleanup **never delete or overwrite** files matching that pattern, so both lineages always survive. When a conflicting session is live and has no open turn, the plugin also forks the session at the harness level and injects a persistent `user/message` notice into the child. The session-level mapping follows the host's real session-store layout `$DSH_HOME/sessions/<projectKey>/<sessionId>/<file>` — `projectKey` is derived from the session `cwd` (`_no-cwd` when absent) and `sessionId` is the host's `encodeSegment` form, which `lib/paths.mjs` decodes back (`~XXXX` escapes). Fork paths that do not fit that shape (or the legacy flat `<mirrorDir>/<sessionId>/<file>` form) are reported with a warning and never silently dropped; the fork files themselves are always preserved.
+
+## Confirmation gate
+
+`pull`/`push` (command and tools) cross `confirmSync`. `confirmVia: auto` prefers `userQuestions` then `approval`; an explicit `userQuestions` or `approval` forces one channel. With no answerer the operation **fails closed**. Read-only surfaces (`status`/`diff`/`log`) never ask. The `approval` channel requires an open turn (tools run inside a turn; `/sync` runs between turns and is directed to mount `userQuestions`).
+
+## Session events (adaptive gate)
+
+`sync/push`, `sync/pull`, and `sync/conflict` are declared through `SessionEventMap` declaration merging in `types.d.ts`. At runtime the plugin appends one only when either (a) the host's `KNOWN_SESSION_EVENT_TYPES` already includes the type, or (b) the host `Session.append` exposes the `ignorable` envelope (`probeIgnorableAppend`). On `0.1.0-rc.6`, `0.1.0-rc.8`, and `0.1.1-rc.2` neither is true (rc.2's `append` takes no envelope for non-surface types; `ignorable` is a read-path marker only), so the gate stays closed and appends are skipped — sessions keep loading. Once a host records the types, appends turn on automatically; the gate is never removed by hand.
+
+## Storage domain
+
+Sync metadata (`deviceId`, `lastPullAt`, `lastPushAt`, `lastPushHead`, `lastError`) lives in the `session-sync` storage domain (`state` table, singleton key). The device id is a random UUID also written to `device.txt` in the sync repository for cross-device fork attribution.
+
+## Auto modes — all reversible
+
+Every automatic behavior is a Cordis effect, so stop/hot-reload removes it:
+
+- `autoPullOnStart` — `ctx.effect` pulls once on mount.
+- `autoPushOnTurnEnd` — `ctx.on('session/event')` pushes after `turn/end`.
+- `pullIntervalMinutes` — `ctx.effect` wraps a `setInterval` periodic pull (the disposer clears the timer).
+
+Auto runs are covered by the config grant and never re-confirm.
+
+## Safety boundaries
+
+- **Verb whitelist** in `lib/git.mjs`; `-f`/`--force`/`--force-with-lease`/`+refspec`, `reset`, `clean`, `rebase`, and branch-switch `checkout` are refused.
+- **Path containment** before any join (`PATH_UNSAFE` fails loud).
+- **Symlinks never followed** on either side of the mirror.
+- **Sanitize before display/log** — remote-URL credentials, tokens, and `key=value` secrets are redacted before reaching the model or the log.
+- **Bounded subprocesses** — git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_OPTIONAL_LOCKS=0`, deadline- and signal-bounded, with a per-stream output cap.
+
+## Upstream asks (recorded, not implemented)
+
+- **Session-directory layout version marker.** The mirror maps fork files back to sessions by path shape (`<projectKey>/<sessionId>/<file>` plus the legacy flat form). A version marker in the session-directory layout would let a future plugin declare which layout it understands instead of sniffing segment shapes; recorded here per the 0.1.6 adaptation review (P2, no code change requested).
+
+## Backend vocabulary
+
+`backend: git` is the plaintext mirror transport. `backend: encrypted` wraps the same git transport with an **age** layer above the mirror: the plaintext mirror (`sessions/`) stays local-only (`.gitignore`), each session file is age-encrypted into `encrypted/**/*.age`, and only ciphertext is committed/pushed. Pulls decrypt the remote/base trees back to plaintext and run the same append-only three-way merge locally, then re-encrypt. When `age` is absent or `ageRecipient`/`ageIdentity` is empty, the encrypted backend **degrades to plaintext git** and warns explicitly (status/log) — it never silently claims encryption. `object-storage` is an interface placeholder and fails loud at load.

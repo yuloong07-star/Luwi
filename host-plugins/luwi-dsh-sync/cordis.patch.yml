@@ -1,0 +1,37 @@
+# luwi-dsh-sync bundle patch: mount the plugin.
+#
+# 与上游 dsh-session-sync 的差别 (Luwi 二开, 见 UPSTREAM.md):
+# - 行 id 与包名都是 luwi-dsh-sync
+# - config 只写"与部署无关"的那几项。**路径与远端一律不在这里写**: 手机上这一份走
+#   PluginOverlay 按路径挂载 (不带 config), 电脑上走 profile 自己的覆盖行
+#   (`- id: luwi-dsh-sync` + config), 两边各自给值; 实在要给就写
+#   `$DSH_HOME/lw/session-sync.json`
+# - 这里写的键是**显式**的: 插件自己的合并规则是「显式 cordis 键 > JSON 文件 > 缺省」
+#   (schema 不再带 .default, 所以"写了 false"与"没写"分得开), 于是这里写了什么,
+#   就会盖掉 JSON 里同名那一项。只写真正与部署无关的开关是故意的
+#
+# 缺服务只会让这一行停在 pending (等 service: storageDomain / subprocess), 不是启动失败;
+# 插件本身的 apply() 绝不向外抛 —— 配置非法时打一行 error 并把插件停用 (见 index.mjs 的文件头)
+- insert:
+    - id: luwi-dsh-sync
+      name: luwi-dsh-sync
+      config:
+        enabled: true
+        # backend: git = plaintext mirror transport; encrypted = age-encrypted
+        # mirror content (encrypt-then-push). 'object-storage' is reserved and
+        # is refused at load.
+        backend: git
+        branch: main
+        # Auto modes: pull once when the plugin mounts; push after every
+        # closed turn; periodic pull every N minutes (0 = off). Auto runs are
+        # covered by the config grant and never re-confirm.
+        autoPullOnStart: false
+        autoPushOnTurnEnd: false
+        pullIntervalMinutes: 0
+        # Confirmation channel for /sync pull|push and the sync_* tools:
+        # auto (userQuestions first, then approval) · userQuestions · approval.
+        # Read-only surfaces (status/diff/log/peers/doctor) never ask.
+        confirmVia: auto
+        # Surface switches: register the /sync command and the sync_* tools.
+        registerCommand: true
+        registerTools: true

@@ -1,0 +1,13 @@
+# 本地同步镜像的残留 (插件自己跑起来时落下的, 不是源码)
+.lw-sync/
+
+# 依赖与构建产物 (包本身由 npm/pnpm 装, tarball 也不进仓库)
+node_modules/
+*.tgz
+
+# 编辑器与系统杂物
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
