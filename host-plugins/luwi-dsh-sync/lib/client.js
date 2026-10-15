@@ -60,6 +60,16 @@ window.__ModuleLoader__.load({
 			'开': 'on',
 			'关': 'off',
 			'分支': 'Branch',
+			// Luwi 加 (2026-10-15): 仓库卡片那几句
+			'仓库': 'Repository',
+			'仓库地址': 'Repository address',
+			'两端填同一个地址': 'both machines fill in the same address',
+			'留空 = 保持不动 (已配置的地址不回显)': 'leave blank to keep it (a configured address is never echoed)',
+			'保存': 'Save',
+			'同步: 开': 'sync: on',
+			'同步: 关': 'sync: off',
+			'写下这段配置': 'write this into the sync config',
+			'改了要重启 host 才生效': 'restart the host for this to take effect',
 			'领先': 'ahead',
 			'落后': 'behind',
 			'未提交': 'dirty',
@@ -311,6 +321,11 @@ window.__ModuleLoader__.load({
   color: inherit; font: inherit; }
 .luwi-sync-send .luwi-sync-tab { flex: 0 0 auto; cursor: pointer; }
 .luwi-sync-send .luwi-sync-tab[disabled] { opacity: .5; cursor: default; }
+/* Luwi 加 (2026-10-15): 仓库卡片 —— 在 PC 面板里填一次地址 (两端填同一个), 外加同步总开关 */
+.luwi-sync-field { display: block; margin-top: 6px; }
+.luwi-sync-field .luwi-sync-input { width: 100%; box-sizing: border-box; padding: 5px 8px; border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.2)); background: transparent;
+  color: inherit; font: inherit; }
 /* Luwi 加 (G1-3): 这一句发到对端的**哪一个工作区** —— 与"在对端新开一场"绑在一起 (kind:'new') */
 .luwi-sync-send .luwi-sync-pick { flex: 0 1 auto; min-width: 0; max-width: 42%; padding: 5px 6px;
   border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.2));
@@ -422,6 +437,9 @@ window.__ModuleLoader__.load({
 			const [actionTarget, setActionTarget] = React.useState('sessions');
 			const [loadedAt, setLoadedAt] = React.useState(0);
 			// Luwi 加 (G1-2): 总览里那一个发消息框 (草稿 / 发送中 / 上一次的回话)
+			// Luwi 加 (2026-10-15): 仓库卡片那两个输入框 (空 = 不动; 已配置的地址不回显)
+			const [remoteDraft, setRemoteDraft] = React.useState('');
+			const [branchDraft, setBranchDraft] = React.useState('');
 			const [peerDraft, setPeerDraft] = React.useState('');
 			const [peerSending, setPeerSending] = React.useState(false);
 			const [peerAnswer, setPeerAnswer] = React.useState('');
@@ -466,11 +484,11 @@ window.__ModuleLoader__.load({
 			 * @param {boolean} [confirm] - 写操作必须是 true。
 			 * @returns {Promise<void>} 无。
 			 */
-			const call = async (op, target, confirm) => {
+			const call = async (op, target, confirm, extra) => {
 				setPending(null);
 				setBusy(true);
 				try {
-					const { status, body, error } = await api('/op', { method: 'POST', body: JSON.stringify({ op, target, confirm: confirm === true }) });
+					const { status, body, error } = await api('/op', { method: 'POST', body: JSON.stringify({ op, target, confirm: confirm === true, ...(extra ?? {}) }) });
 					if (body === null) {
 						setAnswer({ ok: false, error: error ?? `HTTP ${status}` });
 						return;
@@ -478,6 +496,8 @@ window.__ModuleLoader__.load({
 					setAnswer(body);
 					if (op === 'doctor' && body.report) setDoctor(body.report);
 					if (op === 'peers' && Array.isArray(body.cards)) setPeers(body);
+					// Luwi 加 (2026-10-15): 写进去了就把草稿清掉 (写的是哪几个值, 回执那一栏里有)
+					if (op === 'configure' && body.ok === true) { setRemoteDraft(''); setBranchDraft(''); }
 					await load();
 				} finally {
 					setBusy(false);
@@ -734,7 +754,58 @@ window.__ModuleLoader__.load({
 				const writesAllowed = config.panelOps === true && channelOpen;
 				const targetOn = Boolean(mirror && mirror.on);
 				const readDisabled = !channelOpen || busy;
+				// Luwi 加 (2026-10-15): 仓库卡片 —— 主人要的"两端各填一个地址就能连"。
+				// 开关的判据与手机设置页同源: 远端配上了就是开 (关 = 地址挪进 lw.savedRemote 那套
+				// 收尾由宿主半的 lib/luwi-configure.mjs 落笔)。写完要重启 host: 插件挂载时读配置
+				const syncOn = config.remoteState === 'set';
+				const canConfigure = writesAllowed && !busy && !running && pending === null;
 				return [
+					h('div', { className: 'luwi-sync-card', key: 'repo' },
+						h('div', { className: 'luwi-sync-card-title' },
+							h('span', { className: 'luwi-sync-strong' }, t('仓库')),
+							h('span', { className: syncOn ? 'luwi-sync-good' : 'luwi-sync-dim' }, syncOn ? t('已配置') : t('未配置'))),
+						h('div', { className: 'luwi-sync-dim' }, t('两端填同一个地址')),
+						h('label', { className: 'luwi-sync-field' },
+							h('input', {
+								type: 'text',
+								className: 'luwi-sync-input',
+								placeholder: t('仓库地址'),
+								value: remoteDraft,
+								disabled: !writesAllowed,
+								onChange: (e) => setRemoteDraft(e.target.value),
+							})),
+						h('div', { className: 'luwi-sync-dim' }, t('留空 = 保持不动 (已配置的地址不回显)')),
+						h('label', { className: 'luwi-sync-field' },
+							h('input', {
+								type: 'text',
+								className: 'luwi-sync-input',
+								placeholder: `${t('分支')} (main)`,
+								value: branchDraft,
+								disabled: !writesAllowed,
+								onChange: (e) => setBranchDraft(e.target.value),
+							})),
+						h('div', { className: 'luwi-sync-actions' },
+							h('button', {
+								type: 'button',
+								className: 'luwi-sync-btn',
+								'data-primary': '1',
+								disabled: !canConfigure || (remoteDraft.trim() === '' && branchDraft.trim() === ''),
+								onClick: () => setPending({
+									op: 'configure',
+									target,
+									extra: {
+										...(remoteDraft.trim() === '' ? {} : { remote: remoteDraft.trim() }),
+										...(branchDraft.trim() === '' ? {} : { branch: branchDraft.trim() }),
+									},
+								}),
+							}, t('保存')),
+							h('button', {
+								type: 'button',
+								className: 'luwi-sync-btn',
+								disabled: !canConfigure,
+								title: t('改了要重启 host 才生效'),
+								onClick: () => setPending({ op: 'configure', target, extra: { on: !syncOn } }),
+							}, syncOn ? t('同步: 关') : t('同步: 开')))),
 					h('div', { className: 'luwi-sync-card', key: 'target' },
 						h('div', { className: 'luwi-sync-card-title' }, h('span', { className: 'luwi-sync-strong' }, t('目标'))),
 						h('div', { className: 'luwi-sync-actions' },
@@ -748,18 +819,22 @@ window.__ModuleLoader__.load({
 
 					// 写动作: 两次点击
 					pending === null ? null : h('div', { className: 'luwi-sync-confirm', key: 'confirm' },
-						h('div', null, pending.op === 'push'
-							? t('推送会把这台机器的全量镜像推到远端 —— 手机侧走的是移动数据时这笔账很大')
-							: t('拉取会把远端的变化合进本地 (keep-both, 本地被改的文件进不了回收站之外任何地方)')),
+						h('div', null, pending.op === 'configure'
+							? t('写下这段配置')
+							: pending.op === 'push'
+								? t('推送会把这台机器的全量镜像推到远端 —— 手机侧走的是移动数据时这笔账很大')
+								: t('拉取会把远端的变化合进本地 (keep-both, 本地被改的文件进不了回收站之外任何地方)')),
 						h('div', { className: 'luwi-sync-dim' },
-							`${pending.target} · ${pending.op === 'push' && mirror && mirror.cost ? `${mirror.cost.files} ${t('个文件')} · ${formatBytes(mirror.cost.bytes)} · ` : ''}${t('远端')} ${config.remoteState === 'set' ? t('已配置') : t('未配置')}`),
+							pending.op === 'configure'
+								? t('改了要重启 host 才生效')
+								: `${pending.target} · ${pending.op === 'push' && mirror && mirror.cost ? `${mirror.cost.files} ${t('个文件')} · ${formatBytes(mirror.cost.bytes)} · ` : ''}${t('远端')} ${config.remoteState === 'set' ? t('已配置') : t('未配置')}`),
 						h('div', { className: 'luwi-sync-actions' },
 							h('button', {
 								type: 'button',
 								className: 'luwi-sync-btn',
 								'data-primary': '1',
 								disabled: busy || !writesAllowed,
-								onClick: () => void call(pending.op, pending.target, true),
+								onClick: () => void call(pending.op, pending.target, true, pending.extra),
 							}, t('确认')),
 							h('button', { type: 'button', className: 'luwi-sync-btn', onClick: () => setPending(null) }, t('取消')))),
 

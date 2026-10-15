@@ -103,6 +103,8 @@ import { renderDiff, renderPeers, renderPull, renderPush, renderStatus, errorVal
 import { confirmSync, hasOpenTurn, makeEventGate, maybeAppendSessionEvent, openTurnFromProjection } from './lib/gate.mjs'
 import { sessionSyncDomainSpec } from './lib/domain.mjs'
 import { luwiBridgeFromEnv, luwiWorktreeProblem, makeLuwiBridgeRunner, readLuwiSyncConfig } from './lib/luwi-bridge-runner.mjs'
+// Luwi 加 (2026-10-15): 面板写配置 (主人要"在 PC 面板里填仓库地址、拨开关")
+import { applyConfigure, syncConfigPath } from './lib/luwi-configure.mjs'
 import { adoptMergedSessions } from './lib/luwi-adopt.mjs'
 import { resolveWorkspaceMirror } from './lib/luwi-workspace.mjs'
 import { readPeerCards, writePeerCard } from './lib/luwi-peers.mjs'
@@ -948,7 +950,15 @@ function applyInner(ctx, config = {}) {
   // > DEFAULTS。schema 已不带 .default, 所以 config 里只有真的写过的键: 写了 false 就是
   // false, 不会被 JSON 翻过来; 手机侧只写 JSON (overlay 行不带 config), 电脑侧只写 profile
   // 的覆盖行 —— 同一份代码两边都对
-  const fileLayer = readLuwiSyncConfig()
+  // Luwi 修 (2026-10-15): home 从 sessionRoot 的父目录推 —— 桌面宿主 (Electron main) 的进程
+  // env 里没有 DSH_HOME, 而 sessionRoot 一定拿得到 (显式键 > DSH_HOME, 都缺会响亮失败)。少了
+  // 这一步 PC 侧的文件层永远是空的: 面板 (或手改文件) 写进去的 remote 与三档自动值都读不回来
+  const configHome = (() => {
+    const explicitSessionRoot = typeof config.sessionRoot === 'string' ? config.sessionRoot.trim() : ''
+    if (explicitSessionRoot !== '') return dirname(explicitSessionRoot)
+    return typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : ''
+  })()
+  const fileLayer = readLuwiSyncConfig(process.env, configHome)
   const merged = {}
   // Luwi 修 (G1 面板, 2026-10-14): 这一圈以前遍历 `Object.keys(DEFAULTS)` (UPPER_SNAKE)
   // 却拿它去 index 两层 camelCase 的字典 —— 每一次都是 undefined, 于是显式 cordis 键与
@@ -1445,7 +1455,11 @@ function applyInner(ctx, config = {}) {
           // 同步面 = 未归档 + 从相连之后有新活动 (正在跑的那一场永远算"当下")
           .filter((item) => {
             const id = String(item.sessionId ?? '')
-            if (archived.has(id) || peerSessionIds.has(id)) return false
+            if (archived.has(id)) return false
+            // 2026-10-15 真机修正: 正在跑的那一场永远是**本机当下的会话**。它可能同时出现在对端
+            // 报来的清单里 (对端把本机这场的副本又报回来了), 但它不是"投影的投影" —— 少了这一条,
+            // 对端会以为本机没有它, 反手把自己那场投影归档 (症状: 在手机上说一句, 那场就消失)
+            if (peerSessionIds.has(id) && item.running !== true) return false
             if (item.running === true) return true
             return epoch === 0 || Number(item.updatedAt ?? 0) >= epoch
           })
@@ -2390,7 +2404,11 @@ function applyInner(ctx, config = {}) {
         // 对端不再报这一场 (它归档了 / 会话没了), 或者它本来就属于"相连之前的过往": 本机这一场
         // 投影也该从不分组面隐掉 —— 归档不是删, 它还在, 只是不再占一行
         const peerSessionId = key.split('|')[1] ?? ''
-        if (peerSessionId !== '' && allPeerIds.has(peerSessionId) && !stalePeerIds.has(peerSessionId)) continue
+        // 2026-10-15 真机修正: 对端**这一轮报了这一场** (只是没进 wantedProxyKeys: 被上限截掉、
+        // 或者被那条 stale 线挡住) 时就只摘账, **绝不归档本机这一场** —— 归档就是"从列表里消失",
+        // 而 stale 那条线是拿两端的时钟/口径比出来的, 误判一次主人就丢一场
+        // (症状: 手机上说完一句, 那场会话消失, 回复也没处落)
+        if (peerSessionId !== '' && allPeerIds.has(peerSessionId)) continue
         await archiveLocalSession(String(record?.localId ?? ''), peerSessionId)
       }
       let fetched = 0
@@ -2850,6 +2868,27 @@ function applyInner(ctx, config = {}) {
   // webServer 是**可选**服务, 用 ctx.inject 起子 fiber —— 顶层 inject 写了就等于"没有 HTTP
   // 服务的 profile 上一整行停在 pending" (与 tools 那一处同型, 见 §4.4)。路由注册随这个
   // 子 fiber 撤销; 没有 webServer 的宿主上这一整块安静地不发生, 主行照跑。
+  // Luwi 加 (2026-10-15): 面板写配置的那一半 —— 写的是 <DSH_HOME>/lw/session-sync.json,
+  // 也就是**手机设置页读写的同一份**。这个 home 从 sessionRoot 的父目录推 (桌面宿主的进程
+  // env 里没有 DSH_HOME, 只有 argv)。写完必须重启 host: 插件是挂载时读配置的
+  const syncConfigFile = syncConfigPath(dirname(sessionRoot))
+
+  /**
+   * 把面板发来的那几个键写进配置文件 (其余键一个字节都不碰, 语义见 lib/luwi-configure.mjs)。
+   * @param {object} request - 面板的 POST 体。
+   * @returns {Promise<{ok: boolean, changed: string[], error?: string}>} 结果。
+   */
+  async function configureFromPanel(request) {
+    const patch = {}
+    for (const key of ['remote', 'branch', 'autoPullOnStart', 'autoPushOnTurnEnd', 'pullIntervalMinutes', 'on']) {
+      if (request[key] !== undefined) patch[key] = request[key]
+    }
+    const result = await applyConfigure(syncConfigFile, patch)
+    if (result.ok === true) logger.info(`panel configure wrote ${result.changed.join(', ')} (restart the host to take effect)`)
+    else warn(`panel configure refused: ${result.error}`)
+    return result
+  }
+
   const panel = createPanel({
     mirrors: [
       {
@@ -2875,6 +2914,8 @@ function applyInner(ctx, config = {}) {
     // Luwi 加 (G1-2): 快照多一块 peer (通道开关 / 对端地址与可达性 / 队列与计数 / 令牌只出打码),
     // 外加影子工作区与投影会话那一份读数 —— 面板那张卡的「影子工作区」那一行读的就是它
     readPeer: async () => ({ ...(await peerRuntime.status()), workspace: await peerProxyView() }),
+    // Luwi 加 (2026-10-15): 面板的写配置口 (宿主半见 lib/panel-routes.mjs 的 CONFIGURE)
+    configure: configureFromPanel,
     collectDoctor,
     info: {
       plugin: PLUGIN_NAME,

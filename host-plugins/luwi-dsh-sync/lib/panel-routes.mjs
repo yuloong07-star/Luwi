@@ -42,10 +42,13 @@ export const PANEL_OPS = Object.freeze({
   PUSH: 'push',
   PEERS: 'peers',
   DOCTOR: 'doctor',
+  // Luwi 加 (2026-10-15): 写配置 —— 主人要"在 PC 面板里填仓库地址、拨开关", 写的就是
+  // $DSH_HOME/lw/session-sync.json (手机设置页读写的同一份)
+  CONFIGURE: 'configure',
 })
 
-/** 会改远端/本地工作树的那两个: 要 confirm, 要单飞。 */
-export const WRITE_OPS = Object.freeze([PANEL_OPS.PULL, PANEL_OPS.PUSH])
+/** 会改远端/本地工作树/配置的那三个: 要 confirm, 要单飞。 */
+export const WRITE_OPS = Object.freeze([PANEL_OPS.PULL, PANEL_OPS.PUSH, PANEL_OPS.CONFIGURE])
 
 /** POST 体上限: 这条通道只收一个短 JSON, 大一点的都是误用。 */
 export const MAX_BODY_BYTES = 4096
@@ -373,6 +376,31 @@ export function createPanel(deps) {
     if (!Object.values(PANEL_OPS).includes(op)) {
       return { status: 400, body: { ok: false, error: `unknown op ${JSON.stringify(request.op)}` } }
     }
+
+    // configure 是**全局**的 (写那份配置文件, 不针对哪一根镜像), 所以排在 target/mirror 那两道
+    // 检查前面 —— 否则远端还没配上 (mirror.engine 为 null) 时, 恰恰是最需要写配置的那一刻被挡住
+    if (op === PANEL_OPS.CONFIGURE) {
+      if (deps.info.config.panelOps !== true) {
+        return { status: 403, body: { ok: false, error: 'panel-initiated writes are disabled (panelOps: false)' } }
+      }
+      if (request.confirm !== true) {
+        return { status: 400, body: { ok: false, error: 'op configure requires confirm: true (the panel asks twice on purpose)' } }
+      }
+      if (typeof deps.configure !== 'function') {
+        return { status: 501, body: { ok: false, error: 'this host cannot write the sync config (no configure hook)' } }
+      }
+      try {
+        const result = await deps.configure(request)
+        if (result === null || result.ok !== true) {
+          return { status: 200, body: { ok: false, action: op, error: result?.error ?? 'the configuration was not written' } }
+        }
+        // 插件是**挂载时**读配置的, 所以写完必须重启 host 才生效 —— 这一句由面板转告给人
+        return { status: 200, body: { ok: true, action: op, changed: result.changed ?? [], restartRequired: true } }
+      } catch (thrown) {
+        return { status: 200, body: { ok: false, action: op, error: messageOf(thrown) } }
+      }
+    }
+
     let target
     try {
       target = normalizeTarget(request.target)

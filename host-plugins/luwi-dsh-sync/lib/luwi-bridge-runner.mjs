@@ -77,10 +77,15 @@ export function luwiBridgeFromEnv(env = process.env) {
  * 手机上没有 profile 编辑器, 这份 JSON 就是用户侧的配置面 (见施工单第 2 节的覆盖示例)。
  * 读不动 / 不是 JSON / 不是对象都回 {} 并留一句警告 —— 配置坏掉不该让插件整个不挂
  * @param {Record<string, string|undefined>} [env] 环境变量表 (测试注入)。
+ * @param {string} [homeOverride] 显式 home (桌面宿主 env 里没有 DSH_HOME, 由宿主按 sessionRoot 推给它)。
  * @returns {Record<string, unknown>} 解析出来的对象, 缺省 {}。
  */
-export function readLuwiSyncConfig(env = process.env) {
-  const home = typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : ''
+export function readLuwiSyncConfig(env = process.env, homeOverride = '') {
+  // Luwi 修 (2026-10-15): 多一个显式 home。桌面宿主 (Electron main) 的进程 env 里**没有**
+  // DSH_HOME —— 它只按 argv 把 profile 目录传给 host。只认 env 的话, PC 侧这份文件层永远是空
+  // 的: 面板把地址写进文件也读不回来 (现象就是 remote 明明写了却报 unset)
+  const explicit = typeof homeOverride === 'string' ? homeOverride.trim() : ''
+  const home = explicit !== '' ? explicit : (typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : '')
   if (home === '') return {}
   const file = join(home, 'lw', 'session-sync.json')
   let text

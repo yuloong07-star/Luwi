@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.2] - 2026-10-15
+
+### Added
+
+- **The sync panel can write the configuration** (a `configure` op plus the Repository card
+  in the Actions tab): fill in the git remote, set the branch and flip the sync switch
+  without editing `$DSH_HOME/lw/session-sync.json` by hand. Turning sync off parks the
+  address in `lw.savedRemote` and zeroes the three auto values, exactly like the phone's
+  settings page does; turning it on puts them back. Every key this layer does not own is
+  kept byte for byte.
+- **The file layer now works on a desktop host too.** `readLuwiSyncConfig` only ever looked
+  at `env.DSH_HOME`, and the Electron main process does not put that into the host's
+  environment — it passes the profile directory as argv. So on a desktop the JSON layer was
+  empty all along, and the panel could write an address that nothing ever read (the
+  symptom: `remoteState: unset` while the address sits in the file). The home directory is
+  now derived from the parent of `sessionRoot`, which is always available.
+
+### Fixed
+
+- **A session could vanish right after a line was typed into it, and the answer would land
+  in a different session** (a real device, 2026-10-15). Two rules were fighting each other:
+  the desktop reported its session list without the sessions the peer had reported back (an
+  echo guard), and the phone reported the desktop's own adopted copies straight back to it —
+  so the desktop stopped reporting a session the phone was actively projecting, the phone
+  concluded the peer no longer had it, and archived its own projection (hiding a session
+  from every grouped list). The echo guard now always reports a session that is running,
+  and a session the peer *did* report this round is only dropped from the projection ledger,
+  never archived.
 ## [0.2.24] - 2026-10-10
 
 ### Changed
