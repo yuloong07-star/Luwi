@@ -166,8 +166,10 @@ internal object BallGeometry {
      * 半隐比例: 贴边时藏起来的那一份球宽 (0 = 全露, 1 = 全藏)
      *
      * **主人 2026-10-05 点过名: "半隐藏"就是球的一半在屏幕外** —— 所以是 0.5, 不是参考那份 demo 的
-     * 0.3。48 dp 的球藏掉 24 dp, 而球体本身画在窗口中间那 45 dp 上 (见 [BallView.BALL_DRAW_DP]),
+     * 0.3。48 dp 的球藏掉 24 dp, 而球体本身画在窗口中间那 45 dp 上 (见 [BallView] 的 `drawDp`),
      * 于是**看得见的那颗球正好一半留在屏外**: (24 - 1.5) / 45 = 0.5
+     *
+     * 比例与球多大无关, 所以两档尺寸 (48 / 72) 都是"藏掉自己的一半"
      */
     const val HALF_HIDE = 0.5f
 
@@ -241,6 +243,16 @@ internal object BallSpot {
      */
     private const val KEY_FEEL = "ball-feel"
 
+    /**
+     * 「半透明」那一档 (2026-10-15 主人: "在浮标设置里加上半透明和半隐藏开关")
+     *
+     * 开着时整颗球压到 [TRANSLUCENT]，不挡屏幕底下的东西；半隐那一档是**再乘**它
+     */
+    private const val KEY_TRANSLUCENT = "ball-translucent"
+
+    /** 「闲置后半隐藏」那个开关: 关掉就永不自动贴边 (碰一下仍然会滑回来) */
+    private const val KEY_AUTOPEEK = "ball-peek"
+
     fun on(context: Context): Boolean = prefs(context).getBoolean(KEY_ON, false)
 
     fun setOn(context: Context, on: Boolean) {
@@ -253,6 +265,20 @@ internal object BallSpot {
 
     fun setFeel(context: Context, feel: BallFeel) {
         prefs(context).edit().putString(KEY_FEEL, feel.name).apply()
+    }
+
+    /** 半透明: 缺省**关** (原来那颗球是全不透明的) */
+    fun translucent(context: Context): Boolean = prefs(context).getBoolean(KEY_TRANSLUCENT, false)
+
+    fun setTranslucent(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TRANSLUCENT, on).apply()
+    }
+
+    /** 闲置之后自动贴边半藏: 缺省**开** —— 这本来就是它一直以来的行为, 开关只是给一个"别动它" */
+    fun autoPeek(context: Context): Boolean = prefs(context).getBoolean(KEY_AUTOPEEK, true)
+
+    fun setAutoPeek(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTOPEEK, on).apply()
     }
 
     // **那个"手势提示只给一次"的记号已经删掉了** (2026-10-05 主人: 关于球的所有操作都不要有提示):
@@ -318,6 +344,14 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
 
         /** 松手: 该吸附了 */
         fun onDrop()
+
+        /**
+         * 球换了一档尺寸 (挑了 / 退了外观插件)
+         *
+         * 窗口是照 view 的测量尺寸开的, 所以换档之后贴边、半隐、回复框那几条算式都要按新的算一遍 ——
+         * 那几处都在 [OverlayService] 里, 由它自己重摆
+         */
+        fun onBallSizeChanged()
     }
 
     private val label = TextView(context).apply {
@@ -344,10 +378,10 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
     /**
      * 蓝紫渐变那颗球: 底色是渐变, 描边跟着状态换
      *
-     * **球体住在窗口里居中那一层上** ([BALL_DRAW_DP] = 45 dp, 窗口仍是 48 dp): 拖动时放大到 1.06 倍
-     * (47.7 dp) 正好还在窗口里, 而窗口是**照着 view 的测量尺寸**开的 —— 球画满 48 dp 的话, 放大
-     * 之后四边会超出窗口被裁掉一圈 (主人 2026-10-05 报的就是这个: "球形四边会超出边框, 四边被削掉
-     * 一部分")。放大与圆形裁剪都落在这层上, 所以图标与字也一起被裁进这颗球里
+     * **球体住在窗口里居中那一层上** (球体是窗口的 94%: 48 dp 时 45, 72 dp 时 67): 拖动时放大到
+     * 1.06 倍正好还在窗口里, 而窗口是**照着 view 的测量尺寸**开的 —— 球画满窗口的话, 放大之后四边
+     * 会超出窗口被裁掉一圈 (主人 2026-10-05 报的就是这个: "球形四边会超出边框, 四边被削掉一部分")。
+     * 放大与圆形裁剪都落在这层上, 所以图标与字也一起被裁进这颗球里
      */
     private val circle = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
@@ -357,14 +391,13 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
         setStroke(dp(STROKE_DP), NEUTRAL)
     }
 
-    /** 球体那一层: 45 dp 见方、居窗口正中, 放大缩的是它 */
+    /** 球体那一层: 居窗口正中, 放大缩的是它 (尺寸两档, 由 [applyCoreSize] 摆) */
     private val core = FrameLayout(context).apply {
         background = circle
         clipToOutline = true
         // 标记那一层居中、比球还大一圈, 多出来的透明边由上面那句圆裁剪吃掉 —— 只有中间那块墨迹
         // 落进球里, 于是"标记占球多大"就是 [GLYPH_INK_RATIO] 这个数
-        val side = dp(GLYPH_DP)
-        addView(glyph, LayoutParams(side, side, Gravity.CENTER))
+        addView(glyph, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         addView(label, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
 
@@ -394,6 +427,28 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
     private var faceIndex = 0
     private var faceIntervalMs = 0
     private val faceAdvance = Runnable { advanceFace() }
+
+    /**
+     * 现在这颗球多大 (dp): **有主题 72 / 没主题 48** (主人 2026-10-15 定的两档, 见 [BALL_THEME_DP])
+     *
+     * 缓存在这儿而不是每次去问 `BallTheme`, 因为 [onMeasure] 会反复走, 而那一条要读文件; 什么时候
+     * 刷新由 [applyTheme] 管 —— 它是唯一会让这件事变卦的地方
+     */
+    private var sizeDp = BALL_SIZE_DP
+
+    /** 球体本身画多大 (dp): 窗口的 94%, 拖动放大那 1.06 倍仍在窗口里 */
+    private fun ballDrawDp(): Int = drawDp(sizeDp)
+
+    /**
+     * 窗口与命中范围的边长 (px)
+     *
+     * 定位那些算式 (贴边 / 半隐 / 回复框 / 涟漪圆心) 一律问这个, 不要自己拿 [BALL_SIZE_DP] 乘 ——
+     * 挑过外观插件时窗口是 72 dp
+     */
+    fun sizePx(): Int = dp(sizeDp)
+
+    /** 现在用的是哪一档 (dp), 读数与测试用 */
+    fun sizeDp(): Int = sizeDp
 
     /** 平台自己那一档门槛: 标准灵敏度用它, 防误触那一档拿它当垫底 (见 [BallFeel]) */
     private val platformSlop = ViewConfiguration.get(context).scaledTouchSlop
@@ -451,13 +506,27 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
      */
     private var lastColor: Int = NEUTRAL
 
+    /**
+     * 上一拍是不是画的"半隐"那张脸
+     *
+     * 外观插件可以把「贴边半藏」那一档单独画一张 (`peeked`, BallPet 就有): 它不属于 [BallWord], 只是
+     * 位置, 所以它是 [show] 的另一个入参 —— 变了也要重画
+     */
+    private var lastPeeked: Boolean = false
+
     init {
-        // 那 3 dp 的余量是留给拖动放大的 (见 [core])
-        addView(
-            core,
-            LayoutParams(dp(BALL_DRAW_DP), dp(BALL_DRAW_DP), Gravity.CENTER),
-        )
+        // 尺寸两档 (见 [BALL_THEME_DP]), 所以球体与标记那块 layout 交给 [applyCoreSize] 摆一次
+        applyCoreSize()
+        addView(core, core.layoutParams)
         show(null, animate = false)
+    }
+
+    /** [core] 与它里面那个标记的尺寸跟着 [sizeDp] 走, 换档之后调一次这个 */
+    private fun applyCoreSize() {
+        val side = dp(ballDrawDp())
+        core.layoutParams = LayoutParams(side, side, Gravity.CENTER)
+        val glyphSide = dp((ballDrawDp() * GLYPH_INK_RATIO / ICON_INK_RATIO).toInt())
+        glyph.layoutParams = LayoutParams(glyphSide, glyphSide, Gravity.CENTER)
     }
 
     /**
@@ -466,13 +535,39 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
      * **必须走 `super.onMeasure`**: 球体 (含图标与字) 是里面居中那一层, 只 `setMeasuredDimension`
      * 的话孩子根本不会被量 —— 表现就是"球在视觉上看不见了" (2026-10-05 主人报的, 而且那次之前的
      * 图标与状态词其实也一直没被画出来, 只是圆形底色挂在 view 自己身上, 所以看着像没问题)
+     *
+     * **尺寸两个来源** (2026-10-15): 主人设的那一档 ([BallSize], 缺省 48) 与外观插件要求的下限
+     * ([BallTheme.BallSpec.minDp], 鲸鱼娘那份是 72) —— 取大的那个, 见 [BallSize.resolve]。
+     * 这一条路径会被反复走, 而那一次问的是个小文件 (与 [applyTheme] 同一个数)
      */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val size = dp(BALL_SIZE_DP)
+        sizeDp = BallSize.resolve(context, themeMinDp())
+        val size = dp(sizeDp)
         val exact = MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY)
         super.onMeasure(exact, exact)
         setMeasuredDimension(size, size)
     }
+
+    /**
+     * 尺寸跟着"主人设的那一档 + 当前主题要求的下限"走, 变了就当场换过来
+     *
+     * **不必重启** (2026-10-15 主人问过"改球大小要不要重启"): `show()` 每 400 ms 心跳走一趟, 而它本来
+     * 就在那一拍检测"外观插件换没换", 于是尺寸变化顺手也在这儿检测 —— 改完设置下一拍就换。
+     * 早先只在 [onMeasure] 里读, 而改设置不会让球重新测量, 所以看着像"要重启才生效"
+     */
+    private fun syncSize() {
+        val want = runCatching { BallSize.resolve(context, themeMinDp()) }.getOrDefault(sizeDp)
+        if (want == sizeDp) return
+        sizeDp = want
+        applyCoreSize()
+        requestLayout()
+        // 窗口尺寸变了, 定位那几条算式 (贴边 / 半隐 / 回复框) 要按新的算一遍
+        listener.onBallSizeChanged()
+    }
+
+    /** 当前主题要求的下限 (没挑主题 / 那份没声明就是 0) */
+    private fun themeMinDp(): Int =
+        runCatching { BallTheme.active(context)?.spec?.minDp ?: 0 }.getOrDefault(0)
 
     /**
      * 换状态: 空闲画那个标, 有状态画三个字, 描边一起换
@@ -487,14 +582,30 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
      * 只有描边跟着会话换, 字恒白 —— 两个会话同时在想时要凑近看那一圈才分得出是哪一场。所以 [ring]
      * 进来之后两边一起上色, 而**换色但字没换那一下也要重画** (会话轮换时 `next` 是同一个 THINKING,
      * 光看"字变没变"会把这次换色吃掉)
+     *
+     * **外观插件也可以给每个状态一个环色** (`theme/ball.json` 的 `ring`, 2026-10-16 收进来): 优先级是
+     * **显式的会话色 > 主题色 > 内置色** —— 「正在想」那一档的颜色按会话固定, 那条口径不动; 主题只
+     * 给"没有会话色"的那几档上色
+     *
+     * @param peeked 球现在是不是贴边半藏 (BallPet 给这一档单独画了一张 `peeked`; 内置画法没有, 照旧
+     *   按 idle 画)
      */
-    fun show(next: BallWord?, animate: Boolean = true, ring: Int? = null) {
+    fun show(next: BallWord?, animate: Boolean = true, ring: Int? = null, peeked: Boolean = false) {
         val changed = next != word
-        val color = ring ?: next?.ring() ?: NEUTRAL
+        val state = stateName(next, peeked)
+        val color = ring
+            ?: runCatching { BallTheme.ring(context, state) }.getOrNull()
+            ?: next?.ring()
+            ?: NEUTRAL
         val recolored = color != lastColor
+        // 尺寸: 主人在设置里改了那一档 (或换了带 minDp 的外观) 就在这一拍换过来 —— 不必重启
+        syncSize()
         // 外观插件那一档: 挑中哪一个的那一行文件改了, 这一拍就重画 (不必等状态变化)
         val themeNow = runCatching { BallTheme.currentId(context) }.getOrDefault("")
         val rethemed = themeNow != themeKey
+        // 半隐/回弹那一拍也要重画 (主题有 peeked 那张脸时它就是另一张图)
+        val repeeked = peeked != lastPeeked
+        lastPeeked = peeked
         themeKey = themeNow
         word = next
         lastColor = color
@@ -503,19 +614,28 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
         breathe(color, next == BallWord.SPEAKING || next == BallWord.LISTENING)
         val text = next?.label(context).orEmpty()
         val size = if (next == null) LABEL_SP else WORD_SP
-        if (!changed && !recolored && !rethemed && label.text.isNotEmpty()) return
+        if (!changed && !recolored && !rethemed && !repeeked && label.text.isNotEmpty()) return
         // 字换了才值得闪一下; 只换色 (会话轮换) 直接落色, 不该看着像闪了一下
         if (!changed || !animate) {
             label.animate().cancel()
-            apply(next, text, size, color)
+            apply(next, text, size, color, peeked)
             return
         }
         label.animate().cancel()
         label.animate().alpha(0f).setDuration(FADE_MS / 2).withEndAction {
-            apply(next, text, size, color)
+            apply(next, text, size, color, peeked)
             label.animate().alpha(1f).setDuration(FADE_MS / 2).start()
         }.start()
     }
+
+    /**
+     * 外观那一档认的状态名
+     *
+     * 半藏不是 [BallWord] (它是位置), 但 BallPet 给它单独画了一张 —— 只有"真的闲着而且半藏"时才用
+     * `peeked`, 别的状态照旧 (半藏着念回答时那张脸仍是 speaking)
+     */
+    private fun stateName(next: BallWord?, peeked: Boolean): String =
+        if (next == null && peeked) "peeked" else next?.name?.lowercase() ?: "idle"
 
     /**
      * 那一口呼吸开不开: [on] 为假时**立刻落回满亮的实心描边** (不留在半亮上)
@@ -572,8 +692,8 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
      *
      * [color] 与描边那一个环色同源 (见 [show]) —— 空闲时它是那颗标的白 (文字不可见, 这个色用不上)
      */
-    private fun apply(next: BallWord?, text: String, size: Float, color: Int) {
-        val themed = applyTheme(next)
+    private fun apply(next: BallWord?, text: String, size: Float, color: Int, peeked: Boolean = false) {
+        val themed = applyTheme(next, peeked)
         glyph.visibility = if (next == null && !themed) VISIBLE else GONE
         label.visibility = if (next != null && (!themed || !hideBuiltinText)) VISIBLE else GONE
         label.text = text
@@ -588,46 +708,68 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
     /**
      * 球体那一层换成插件给的那张图 (方案 3.1 的 `theme/ball.json`)
      *
+     * `fit: contain` 那一档**不裁圆**: 素材是全身立绘时, 圆裁会掉头和脚 (2026 主人要的"人物代替球")。
+     * 两种 fit 的区别只在这一点上 —— 圆裁剪与 bitmap 的摆放方式, 别的 (心跳换帧、状态映射、
+     * 读不到就回内置) 一个字都不分岔
+     *
      * @return true 表示这一档生效了 (调用方就不用再画标记 / 字)
      */
-    private fun applyTheme(next: BallWord?): Boolean {
-        val state = next?.name?.lowercase() ?: "idle"
+    private fun applyTheme(next: BallWord?, peeked: Boolean): Boolean {
+        val state = stateName(next, peeked)
         val face = runCatching { BallTheme.face(context, state) }.getOrNull()
         stopFace()
+        // 尺寸跟着主题走 (见 [syncSize]): 换脸与换档绑在一起做, 免得这一拍用着旧尺寸去贴图
+        syncSize()
         if (face == null) {
             hideBuiltinText = false
+            core.clipToOutline = true
             core.background = circle
             return false
         }
         hideBuiltinText = face.hideBuiltinText
-        val maxPx = dp(BALL_DRAW_DP).coerceAtLeast(96)
+        val maxPx = dp(ballDrawDp()).coerceAtLeast(96)
         val frames = face.frames?.let { spec ->
             BallTheme.framesOf(context, state, spec)?.mapNotNull { file -> BallTheme.decode(file, maxPx) }
         }.orEmpty()
+        // 立绘那一档不裁圆; 圆球那一档照旧 (clipToOutline 会把 bitmap 裁成圆)
+        core.clipToOutline = face.fit == BallTheme.Fit.COVER
         if (frames.size >= 2) {
             faceFrames = frames
             faceIndex = 0
             faceIntervalMs = face.frames?.intervalMs ?: 100
-            core.background = android.graphics.drawable.BitmapDrawable(resources, frames[0])
+            core.background = faceDrawable(frames[0])
             postDelayed(faceAdvance, faceIntervalMs.toLong())
             return true
         }
         val bitmap = BallTheme.decode(face.file, maxPx)
         if (bitmap == null) {
             hideBuiltinText = false
+            core.clipToOutline = true
             core.background = circle
             return false
         }
         faceFrame = bitmap
-        core.background = android.graphics.drawable.BitmapDrawable(resources, bitmap)
+        core.background = faceDrawable(bitmap)
         return true
     }
+
+    /**
+     * 主题给的那张图怎么摆
+     *
+     * `FILL` 是"按比例缩到刚好装下, 多出来的居中" —— 正是 `fit: contain` 要的, 而立绘四周本来就是
+     * 透明的, 缩完留白也看不出来。用 `BitmapDrawable` 而不是 `ImageView`, 是因为球体那一层得留着
+     * 当容器 (拖动缩放、圆裁剪都落在它身上)
+     */
+    private fun faceDrawable(bitmap: Bitmap): android.graphics.drawable.BitmapDrawable =
+        android.graphics.drawable.BitmapDrawable(resources, bitmap).apply {
+            gravity = android.view.Gravity.FILL
+        }
 
     /** 帧序列那一拍: 换下一张, 排下一拍 */
     private fun advanceFace() {
         if (faceFrames.size < 2) return
         faceIndex = (faceIndex + 1) % faceFrames.size
-        core.background = android.graphics.drawable.BitmapDrawable(resources, faceFrames[faceIndex])
+        core.background = faceDrawable(faceFrames[faceIndex])
         postDelayed(faceAdvance, faceIntervalMs.toLong())
     }
 
@@ -716,16 +858,34 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        /** D16 定的窗口尺寸 (约 48 dp): 窗口与命中范围都是它, **装了图标也不许改** */
+        /**
+         * 窗口尺寸 (命中范围也是它): **72 dp**
+         *
+         * D16 那会儿定的是 48 dp ("装了图标也不许改"), 但那是在球自己画一个标记的前提下。2026 主人
+         * 要把球换成**人物立绘** (`theme/ball.json` 的 `fit: contain`), 实机预览量下来 48 dp 时人物
+         * 五官是糊的, 72 dp 才认得出 —— 于是**主题球**用 72 dp; 窗口与命中范围仍是同一个数, 球"只吃
+         * 自己这一块"那条性质没变
+         *
+         * **2026-10-15 主人把两档分开了**: "ball 改为原来的尺寸, 鲸鱼娘 ball 也保持当前尺寸 72" ——
+         * 于是内置那套照旧 [BALL_SIZE_DP] (48), 只有挑了外观插件时才用 [BALL_THEME_DP] (72)。
+         * 尺寸跟着主题走, 所以定位那些算式一律问 [BallView.sizePx] 而不是拿常量自己乘
+         */
+        const val BALL_THEME_DP = 72
+
+        /**
+         * 内置画法那个球多大 (48 dp, D16 定的那个数)
+         *
+         * 它同时是"没有主题时"的窗口尺寸与命中范围 —— 见 [BALL_THEME_DP] 那句
+         */
         const val BALL_SIZE_DP = 48
 
         /**
-         * 球体本身画多大: 45 dp, 比窗口小 3 dp
+         * 球体本身画多大: 比窗口小一档, 好让拖动放大那 1.06 倍仍落在窗口里
          *
-         * 拖动时整颗球放大到 1.06 倍 = 47.7 dp, 正好还在 48 dp 的窗口里 —— 画满窗口的话放大那四边
-         * 会被窗口裁掉一圈
+         * 那是**窗口的 94%** —— 48 dp 时是 45, 72 dp 时是 67, 两个数都是照这个比例来的 (画满窗口
+         * 的话放大之后四边会被窗口裁掉一圈, 主人 2026-10-05 报过 "球形四边会超出边框")
          */
-        const val BALL_DRAW_DP = 45
+        fun drawDp(sizeDp: Int): Int = (sizeDp * 94 / 100).coerceAtLeast(1)
 
         private const val LABEL_SP = 20f
 
@@ -757,8 +917,7 @@ internal class BallView(context: Context, private val listener: Listener) : Fram
          */
         private const val ICON_INK_RATIO = 0.46f
 
-        /** 承载标记那块 view 的边长 (dp): 见上面两个比例 */
-        private val GLYPH_DP = (BALL_DRAW_DP * GLYPH_INK_RATIO / ICON_INK_RATIO).toInt()
+        /** 承载标记那块 view 的边长, 由 [applyCoreSize] 按当前球体尺寸算 (见上面两个比例) */
 
         private const val PRESS_SCALE = 0.94f
         private const val DRAG_SCALE = 1.06f

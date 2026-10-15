@@ -124,9 +124,9 @@ if (protocol === null) {
     table.filter((one) => one.wired).map((one) => decorated(one.name)).sort(),
   )
   check(
-    '文档里的接通数是 9 条 (7 + ui.widget + ui.theme)',
+    '文档里的接通数是 11 条 (7 + ui.widget + ui.theme + files.read + net.http)',
     rows.filter((one) => one.wired).length,
-    9,
+    11,
   )
 }
 
@@ -185,7 +185,7 @@ const hostEnums = [.../enum: \['list', 'read', 'install', 'enable', 'disable', '
 check('lw_plugin 的 op 名单两侧一致', hostEnums, operations)
 check('snapshot 只在桥上', [lwPlugin.includes('const val OP_SNAPSHOT = "snapshot"'), operations.includes('snapshot')], [true, false])
 
-check('工具数的下限抬到 61', Number(/(?:const FLOOR = )(\d+)/.exec(hostCheck)[1]), 61)
+check('工具数的下限抬到 62', Number(/(?:const FLOOR = )(\d+)/.exec(hostCheck)[1]), 62)
 check('宿主里注册了 lw_plugin', host.includes("'lw_plugin',"), true)
 check('设置页有插件那一段', settings.includes('key = "plugin"'), true)
 check(
@@ -647,6 +647,124 @@ check(
   '鲸鱼娘那一份已经收进 archive/samples/, samples/ 下不再有它',
   [archivedWhale.includes('whale-widget'), samplesNow.includes('whale-widget')],
   [true, false],
+)
+
+/* ── 七、G3 能力沙盒 (2026-10-12) ───────────────────────────────────────── */
+
+// 两条带参数的能力从"声明可装"推到"接通": 边界就是声明里那一截。几处**漂开了也不会当场报错** ——
+// 装包时不再查参数形状 (包能装进去, 到调用才炸)、运行时的前缀不按 canonical 判 (软链一下就出去)、
+// net.http 跟着 302 走而不重查 (跳到谁家都去)。这里对着源码字面守, 真跑数的在 JVM 测试
+// `PluginBoundaryTest` 与回执里 (docs/LW-能力沙盒-回执.md)
+const boundaries = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginBoundaries.kt')
+const sandboxRuntime = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginCapabilitySandbox.kt')
+const capabilityRuntime = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginCapabilityRuntime.kt')
+check(
+  '两条带参数的能力在运行时里接通 (不是回"还没接通")',
+  [
+    capabilityRuntime.includes('PluginCapabilitySandbox.filesRead'),
+    capabilityRuntime.includes('PluginCapabilitySandbox.netHttp'),
+  ],
+  [true, true],
+)
+check(
+  '装包时两条参数都过语法闸 (清单解析那条链上)',
+  [
+    manifestRules.includes('PluginFilesReadBoundary.validateDeclaration'),
+    manifestRules.includes('PluginNetBoundary.validateDeclaration'),
+  ],
+  [true, true],
+)
+check(
+  'files.read 的前缀按 canonical 判, 私有目录装与调用各拦一遍',
+  [
+    boundaries.includes('canonicalFile'),
+    boundaries.includes('forbiddenRoots'),
+    pluginInstaller.includes('checkSandboxScopes'),
+    sandboxRuntime.includes('context.dataDir'),
+  ],
+  [true, true, true, true],
+)
+check(
+  'net.http 只走 https, 重定向每一跳都重查',
+  [
+    boundaries.includes('.isHttps'),
+    boundaries.includes('checkHop'),
+    sandboxRuntime.includes('followRedirects(false)'),
+    (sandboxRuntime.match(/checkHop/g) ?? []).length >= 2,
+  ],
+  [true, true, true, true],
+)
+check(
+  '两条新能力的边界有单测 (兄弟前缀 / 软链 / 私有目录 / 子域)',
+  [
+    (await read('app/src/test/java/io/github/yuloong07star/luwi/plugin/PluginBoundaryTest.kt'))
+      .includes('siblingPrefixIsNotInside'),
+  ],
+  [true],
+)
+
+/* ── 七、官方索引那一档 (2026-10-16) ───────────────────────────────────── */
+
+const pluginIndex = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginIndex.kt')
+const settingsSource = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/SettingsScreen.kt')
+const repoIndex = await readFile(new URL('../../luwi-plugins/index.json', import.meta.url), 'utf8').catch(() => '')
+
+check(
+  '索引只认 lw-plugin-index/1, 缓存落 $DSH_HOME/plugins/.index.json',
+  [
+    pluginIndex.includes('"lw-plugin-index/1"'),
+    pluginIndex.includes('.index.json'),
+    pluginIndex.includes('PluginStore.root(context)'),
+  ],
+  [true, true, true],
+)
+check(
+  '取 JSON 不走 PluginDownload.fetch (它按 PK 头判死), 而且只收 https',
+  [
+    // 只查"有没有调用" (KDoc 里那一条链接引用不算)
+    !/PluginDownload\.fetch\(/.test(pluginIndex),
+    pluginIndex.includes('startsWith("https://")'),
+    pluginIndex.includes('MAX_BYTES = 1L * 1024 * 1024'),
+  ],
+  [true, true, true],
+)
+check(
+  '地址表是多镜像 + 旧 tag 兜底, 默认钉在 index-2',
+  [
+    pluginIndex.includes('REF_CURRENT = "index-2"'),
+    pluginIndex.includes('REF_PREVIOUS = "index-1"'),
+    pluginIndex.includes('fastly.jsdelivr.net'),
+    pluginIndex.includes('gcore.jsdelivr.net'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '装之前两道闸都在: 整包 sha256 + 大小, 以及发布者指纹',
+  [
+    settingsSource.includes('PluginIndex.digestOf(file)'),
+    settingsSource.includes('file.length() != entry.size'),
+    settingsSource.includes('PluginSignature.fingerprint(manifest.publisherKey)'),
+  ],
+  [true, true, true],
+)
+check(
+  '平时只读缓存, 刷新那一颗才联网 (与技能目录同一个分工)',
+  [
+    settingsSource.includes('PluginIndex.cached(context)'),
+    settingsSource.includes('PluginIndex.refresh(context)'),
+  ],
+  [true, true],
+)
+check(
+  '生态仓那份索引的每一条都带描述与标签 (侧车合并进去了)',
+  repoIndex !== '' && (JSON.parse(repoIndex).plugins ?? []).every((one) =>
+    typeof one.description === 'string' && one.description.length > 0 && Array.isArray(one.tags)),
+  true,
+)
+check(
+  'README 里那三处联网的口径改成了四处 (索引是第四处)',
+  (await read('README.md')).includes('④'),
+  true,
 )
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)

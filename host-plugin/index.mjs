@@ -23,7 +23,7 @@ import { createWriteStream } from 'node:fs'
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -125,6 +125,21 @@ export function apply(ctx) {
     startBallPhase(ctx)
   } catch (error) {
     warn(ctx, `the ball phase was not started: ${error?.message ?? error}`)
+  }
+
+  // 「看余额」那一档 (2026-10-16): 账号缝里那个数只有宿主拿得到, 落成文件应用才看得见 ——
+  // 起来刷一次 / 每轮结束刷一次 / 应用点「看余额」的请求记号一出现就刷 (见 startBalance)
+  try {
+    startBalance(ctx)
+  } catch (error) {
+    warn(ctx, `the balance feed was not started: ${error?.message ?? error}`)
+  }
+
+  // 视频模式的独立模型 (3.0.2 需求 2): turn/start 那个触发点 + 目录喂给应用的那条 (见 startModeModel)
+  try {
+    startModeModel(ctx)
+  } catch (error) {
+    warn(ctx, `the mode model correction was not started: ${error?.message ?? error}`)
   }
 
   // 语音输入是 dsh 里可选的一套 (voice-input bundle 带的那个客户端录音按钮): 服务在才注册
@@ -840,6 +855,17 @@ function sessionIdOf(exec) {
   return id === undefined || id === null ? null : String(id)
 }
 
+/**
+ * 这一场会话的工作目录, 拿不到就是 null
+ *
+ * 与 dsh 自己的 shell 工具读的是同一个东西 (`agent.session.header.cwd`, 见 tool-bash 的
+ * resolveWorkdir), 所以 `lw_linux` 里那个 /work 与"别的工具说的当前目录"是同一个目录
+ */
+function sessionCwdOf(exec) {
+  const cwd = exec?.agent?.session?.header?.cwd
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : null
+}
+
 /** 这一次 `lw_mode` 是不是要切进视频模式 */
 function wantsVideo(args) {
   return String(args?.mode ?? '').trim().toLowerCase() === MODE_VIDEO
@@ -906,6 +932,25 @@ function cameraAndModeGate(exec) {
 }
 
 /**
+ * 订阅一次会话事件 —— **必须走这一条, 不要直接写 `ctx.on('session/event', ...)`**
+ *
+ * 2026-10-15 真机上查出来的: 会话事件是**带载体**派发的 (`Session.append` 拿 `entry.carrier` 当
+ * `this`), 而载体的 `Context.filter` 只放行它那个作用域里的监听器 (cordis
+ * `vendor/cordis/src/events.ts` 那句 `hook.global || !filter || filter.call(thisArg, hook.ctx)`)。
+ * 插件挂在 profile 上, 于是**本机 agent 跑出来的轮次一条都到不了它** —— 球上「正在想」与回复框
+ * 因此一直是空的, 而同步插件那条 `ctx.emit('session/event', session, event)` 是裸主体派发 (没有
+ * filter), 所以电脑侧的投影轮次反倒点亮了球。`{ global: true }` 就是 cordis 给的绕开筛选那一条
+ * (见 `packages/core/scope/README.md` 的 `scopeTarget`), 加上之后本机的轮次处处看得见
+ *
+ * @param {object} ctx - 插件上下文。
+ * @param {Function} listener - `(session, event)`。
+ * @returns {Function} cordis 那句 disposer。
+ */
+function onSessionEvent(ctx, listener) {
+  return ctx.on('session/event', listener, { global: true })
+}
+
+/**
  * 一场的轮结束就把相机占用放掉 (需求 3)
  *
  * 主人的口径是**每轮结束就放**: 一轮就是"这一场真的在用相机"那一小段, 所以只有两场同时在跑时才会
@@ -913,11 +958,637 @@ function cameraAndModeGate(exec) {
  * 崩了 / 被中断的那一轮不发, 那就由 20 分钟那条超时兜底 (见 [cameraOwner])
  */
 function startCameraOwnerWatch(ctx) {
-  ctx.on('session/event', (session, event) => {
+  onSessionEvent(ctx, (session, event) => {
+    // **便宜的判据排最前**: 这几条钩子跑在每条会话事件的同步链上, 而 `isPeerProjection` 要读会话头
+    // —— 逐字流与工具结果这些与这里无关的事件, 一个字都不该为它们做
     if (event.type !== 'turn/end') return
+    if (isPeerProjection(session)) return
     if (cameraOwnerPath() === null) return
     void releaseCameraOwner(String(session.id))
   })
+}
+
+/**
+ * 这一场是不是「对端会话在本机的投影」(luwi-dsh-sync 建的影子工作区里那一场)
+ *
+ * 投影会话的 `turn/start` / `turn/end` / `assistant/message` 是**同步插件自己追加**的 —— 那台机器
+ * 上的问与答在本机被折成了正常事件, 于是所有 `session/event` 的听众都会把它们当成"这台机器上刚刚
+ * 发生的一轮"。对**主人自己的对话**有效的那些动作不能这么算:
+ *   · 念回答/推进回复框: 那不是主人在跟球说话, 而且在真机上撞出过崩溃 (见下)
+ *   · 借出/收回相机、写「正在想」那本账、切视频模式那一对模型: 同理
+ * 判据用影子根 (`$DSH_HOME/lw/peer-workspaces`, 由 luwi-dsh-sync 的 `shadowRoot` 定死) 而不是
+ * 会话 id/来源 —— 投影会话的 user 消息虽然带 `source.via = 'peer'`, 但 `turn/start` 与 `turn/end`
+ * 上没有这个记号, 而这几条钩子看的正是轮次
+ *
+ * 2026-10-14 真机事故: 投影里第一次带上回答之后, 每一句对端的回答都被推去念、也被画进球的回复框,
+ * 而那块框超过 5000 字时 `BoxView.render` 会把光标设到截断前的长度上 → `IndexOutOfBoundsException`
+ * → 应用每 100 秒崩一次 (logcat 里三条 `setSpan ... ends beyond length 5000`)
+ * @param {object} session - 会话 (有 `header.cwd`)。
+ * @returns {boolean} 是对端投影就 true。
+ */
+function isPeerProjection(session) {
+  const cwd = session?.header?.cwd
+  const root = peerWorkspaceRoot()
+  if (typeof cwd !== 'string' || cwd === '' || root === null) return false
+  const canonical = normalizePath(cwd)
+  return canonical === root || canonical.startsWith(root + sep)
+}
+
+/**
+ * 影子根 (`$DSH_HOME/lw/peer-workspaces`) 的归一写法
+ *
+ * **这里一个文件系统调用都不许有**: 这几条钩子跑在**每条会话事件的同步链**上 (`Session.append` 直接
+ * 叫监听器), 而会话的 `cwd` 常在 `/storage/emulated/0` (FUSE) 上 —— 2026-10-15 真机上就是一次
+ * `realpath` 把 host 拖慢到"投一句话要十几秒" (流式事件一多, 每个事件都卡在 FUSE 上)
+ */
+function peerWorkspaceRoot() {
+  const home = process.env.DSH_HOME
+  if (!home) return null
+  return normalizePath(join(home, 'lw', 'peer-workspaces'))
+}
+
+/**
+ * 把一条路径的两种写法归一
+ *
+ * Android 上 `/data/user/0/<包名>` 与 `/data/data/<包名>` 指同一处: `DSH_HOME` 是前一种, 而影子会话
+ * 的 `cwd` 写的是后一种 —— 逐字比会漏 (漏了它, 电脑那一轮的投影会被当成"本机在跑"), 所以比之前先
+ * 都换成同一种
+ */
+function normalizePath(value) {
+  return String(value).replace(/^\/data\/data\//, '/data/user/0/')
+}
+
+/* ── 视频模式的独立模型 (3.0.2 需求 2) ──────────────────────────────────────
+ *
+ * 口径: 视频模式那一次请求用主人挑的模型 (`$DSH_HOME/lw/mode-model.json` 的 video 段),
+ * 回手机模式再变回来; **GUI 里那个「当前模型」在来回切换后必须与切换前一致** ——
+ * `controller.selectModel` 会顺手把部署默认写成被选中的那一个 (commands.ts:171-175 的
+ * `saveSelection`), 所以每一次切换之后都要立刻把默认还回去, 这一步是必须的不是锦上添花。
+ * 没挑 (两个键都空 / 只填一半) 时一个 RPC 都不发, 每一步都与没有这个功能时完全一样。
+ */
+
+/** 应用写的那份配置: `$DSH_HOME/lw/mode-model.json` (与应用侧 `ModeModel.FILE` 同一个约定) */
+const MODE_MODEL_FILE = 'mode-model.json'
+
+/**
+ * 自建端点挂成哪一条路由 (与应用侧 `ModeModel.ROUTE` 同一个字面量), 以及它的凭据引用
+ *
+ * 名字必须是**小写连字符**标识: pi-ai 的手写路由只认这种名字, 而这类名字不能走它的登录流 ——
+ * 我们本来就用 `apiKeyEnv`, 正好 (见 `llm-pi-ai/README.md` 的 "Sign in to a provider")
+ */
+const VIDEO_ROUTE = 'luwi-video'
+const VIDEO_KEY_REF = 'LUWI_VIDEO_API_KEY'
+
+/** 自建端点那条路由的展示名 (它会出现在 dsh 自己的模型选择器里, 名字要能一眼认出是谁加的) */
+const VIDEO_ROUTE_LABEL = 'Luwi 视频模式'
+
+/** 自建端点写进设置与凭据的账 (内存): 指纹没变就不重复写 */
+const videoRouteState = { written: null, lastError: null }
+
+/** 宿主写给应用的那份目录: `$DSH_HOME/lw/model-catalog.json` (与应用侧 `LwModel` 同一个约定) */
+const MODEL_CATALOG_FILE = 'model-catalog.json'
+
+/** 应用→宿主那条"现在刷一次目录"的记号: `{"at":ms}` (与 balance-request.json 同一个形状) */
+const MODEL_CATALOG_REQUEST_FILE = 'model-catalog-request.json'
+
+/** 那份读数: 切了几次 / 还了几次 / 哪几场在视频模型上 (上面那个函数写的) */
+const MODE_MODEL_STATE_FILE = 'mode-model-state.json'
+
+/** 应用那个请求记号多久之内算数 (与应用侧 `LwModel.requestFresh` 同一个数, 谁都不许单边改) */
+const MODEL_CATALOG_REQUEST_FRESH_MS = 30 * 1000
+
+/**
+ * 起来那几次重试的间隔 (2026-10-16 真机上量出来的)
+ *
+ * 插件挂在**命令行覆盖层**上, 它的 `apply()` 可能早于 web bundle 把 `sessionController` 注册上 ——
+ * 那时写出去的目录是 `ok:false` + 空 items, 而这份文件看起来与"这台机器一个模型都没有"一模一样。
+ * 所以起来之后按这三个间隔再试, 成了就不再试; 之后还有应用那条请求记号兜着 (打开设置那一段就刷)
+ */
+const MODEL_CATALOG_RETRY_MS = [3_000, 10_000, 30_000]
+
+/** 载入期只许读一份小文件: 与 luwi-bridge-runner.mjs 读 session-sync.json 那条上限同一个数 */
+const MODE_MODEL_MAX_BYTES = 64 * 1024
+
+/** 读数与"要还回去的那一个" (内存): 宿主重启就没了 —— 重启后第一轮本来就没有可还的 */
+const modeModelState = {
+  switches: 0,
+  restored: 0,
+  lastError: null,
+  lastDefault: null,
+  /** 被我们切到视频模型的那几场: 退出那一刻要按名字还回去 (见 [restoreModeModelSessions]) */
+  sessions: new Set(),
+  /** 那份读数文件是按哪一份配置写的 (配置改了但什么 RPC 都没发时, 靠它把文件补上) */
+  writtenConfig: null,
+  /** 上一次落盘的那份读数 (含自建端点那一段): 变了才重写 */
+  writtenState: null,
+}
+
+/** 目录那份文件的取数状态: 起来那几次重试 (`settled` 之后不再自己试, 只认应用的请求记号) */
+const modelCatalogState = { settled: false, tries: 0, nextAt: 0 }
+
+/**
+ * 读应用写的那份视频模型配置
+ *
+ * 64 KiB 上限、不是 JSON / 不是对象都回 null 并留一句警告 —— 配置坏掉不该让 lw_mode 整个不干。
+ * 文件不在是常态 (没配过), 静默回 null。两个键**都**非空才算配置; 只填一半与全空一样按
+ * 「跟随当前模型」算 (与应用侧 `ModeModel.Snapshot.followsCurrent` 同一个口径)
+ *
+ * 这里**每次都读** (不加缓存): 与 [activeMode] 同一条路 —— 这个文件是几十个字节, 而读它的两个
+ * 触发点 (lw_mode 切换 / turn/start) 都是人的节奏, 省这一次读换不来什么, 而"改完设置下一次就
+ * 生效"才要紧
+ * @returns {{provider: string, model: string}|null} 配置好了的一对, null = 跟随当前模型。
+ */
+function readModeModelFile() {
+  const path = homePath('lw', MODE_MODEL_FILE)
+  if (path === null) return { video: null, endpoint: null }
+  let text
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    return { video: null, endpoint: null }
+  }
+  if (text.length > MODE_MODEL_MAX_BYTES) {
+    console.warn(`luwi-channel: ${path} is larger than 64 KiB, ignoring it`)
+    return { video: null, endpoint: null }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    console.warn(`luwi-channel: ${path} is not valid JSON, ignoring it: ${error?.message ?? error}`)
+    return { video: null, endpoint: null }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    console.warn(`luwi-channel: ${path} is not a JSON object, ignoring it`)
+    return { video: null, endpoint: null }
+  }
+  const pairOf = (section) => {
+    if (section === null || typeof section !== 'object' || Array.isArray(section)) return null
+    const provider = typeof section.provider === 'string' ? section.provider.trim() : ''
+    const model = typeof section.model === 'string' ? section.model.trim() : ''
+    return provider === '' || model === '' ? null : { provider, model }
+  }
+  const fieldsOf = (section) => {
+    if (section === null || typeof section !== 'object' || Array.isArray(section)) return null
+    const str = (key) => (typeof section[key] === 'string' ? section[key].trim() : '')
+    const url = str('url')
+    const model = str('model')
+    // 自建端点要**地址与模型名都在**才算配好 (pi-ai 对手写路由要求非空 models, 只有地址起不来)
+    if (url === '' || model === '') return null
+    return {
+      url,
+      model,
+      api: str('api') || 'openai-completions',
+      apiKey: str('apiKey'),
+    }
+  }
+  return { video: pairOf(parsed.video), endpoint: fieldsOf(parsed.endpoint) }
+}
+
+/**
+ * 读应用写的那份视频模型配置
+ *
+ * 两种档**只有一份生效**: 填了自建端点 (`endpoint` 段地址与模型名都在) 就走它, 否则是 `video` 段
+ * 那一对 (目录里挑的 / 跟随当前)。两个都空 = 跟随当前模型 = 一个 RPC 都不发
+ *
+ * 这里**每次都读** (不加缓存): 与 [activeMode] 同一条路 —— 这个文件是几十个字节, 而读它的两个
+ * 触发点 (lw_mode 切换 / turn/start) 都是人的节奏, 省这一次读换不来什么, 而"改完设置下一次就
+ * 生效"才要紧
+ * @returns {{provider: string, model: string}|null} 视频模式该用的那一对, null = 跟随当前模型。
+ */
+function readModeModelConfig() {
+  const { video, endpoint } = readModeModelFile()
+  if (endpoint) return { provider: VIDEO_ROUTE, model: endpoint.model }
+  return video
+}
+
+/** 自建端点那一段 (没配好就是 null) */
+function readModeEndpoint() {
+  return readModeModelFile().endpoint
+}
+
+/**
+ * 「切不切, 切到哪」的判定 (纯函数, `tools/check-mode-model.mjs` 量的是这一份)
+ *
+ * @param {string} activeMode 现在的模式 (读 `modes/.active` 的那一个)。
+ * @param {{provider: string, model: string}|null} config 应用写的那对 (null = 跟随当前)。
+ * @param {{provider: string, model: string}|null} sessionModel 这一场当前生效的模型
+ *   (modelSelection 投影的 `pending ?? lastUsed`, 见 [readSessionModel])。
+ * @param {{provider: string, model: string}|null} restoreModel 要还回去的那一个
+ *   (进入视频那一刻记下的 lastDefault, 与部署默认同步; 没有就是 null)。
+ * @returns {null|{provider: string, model: string}|{restore: true, provider: string, model: string}}
+ *   null = 什么都不做 (默认 / 相同 / 读不到那一场的模型 / 别的模式); 无 restore = 切到这一对;
+ *   restore = 把这一场切回 restoreModel。
+ */
+function resolveModeModel(activeMode, config, sessionModel, restoreModel) {
+  if (!config) return null
+  const same = (left, right) => left !== null && right !== null
+    && left.provider === right.provider && left.model === right.model
+  if (activeMode === MODE_VIDEO) {
+    if (!sessionModel) return null
+    if (same(sessionModel, config)) return null
+    return { provider: config.provider, model: config.model }
+  }
+  if (activeMode === MODE_PHONE) {
+    if (!sessionModel || !restoreModel) return null
+    // 还没切过去 (或已经还回来了) 就不用还; 要还的与视频模型一样也不发 (发了也是同一个)
+    if (!same(sessionModel, config)) return null
+    if (same(sessionModel, restoreModel)) return null
+    return { restore: true, provider: restoreModel.provider, model: restoreModel.model }
+  }
+  return null
+}
+
+/**
+ * 这一场当前生效的模型: modelSelection 投影的 pending, 没有就是 lastUsed
+ *
+ * 投影由 dsh 的 `sessionProjections` 服务养着 (modelSelection 单元, session-controller 挂的),
+ * 与 `sessionController.selectModel` 写的是同一份账 —— 所以"要不要发 RPC"的判据直接读它,
+ * pending 已经等于目标的那一轮一个 RPC 都不发 (每轮只发一次)
+ */
+function readSessionModel(ctx, agent) {
+  try {
+    const state = ctx.get('sessionProjections')?.stateOf?.(agent?.session, 'modelSelection')
+    const current = state?.pending ?? state?.lastUsed
+    if (current && typeof current.provider === 'string' && typeof current.model === 'string') {
+      return { provider: current.provider, model: current.model }
+    }
+  } catch (error) {
+    console.warn(`luwi-channel: could not read the session's model: ${error?.message ?? error}`)
+  }
+  return null
+}
+
+/**
+ * 把一场会话的模型按口径校正一次
+ *
+ * @param ctx 宿主上下文。
+ * @param {string|null} sessionId 会话 id (null = 没有会话身份, 不做)。
+ * @param {string} mode 目标模式 (video | phone)。
+ * @param {{provider: string, model: string}|null} preDefault 切进视频**前**那一刻的部署默认
+ *   (调用方现取的, 不信任旧值): selectModel 之后立刻把它 saveSelection 回去。
+ * @returns {object|null} 实际做了的那一次 (与 [resolveModeModel] 的结论同形), 没做就是 null。
+ */
+async function applyModeModelToSession(ctx, sessionId, mode, preDefault) {
+  if (sessionId === null) return null
+  const controller = ctx.get('sessionController')
+  const defaults = ctx.get('agentDefaultModel')
+  if (!controller || !defaults) return null
+  const resolved = await ctx.agents.withoutInitiator(() => controller.resolveAgent(sessionId))
+  if ('error' in resolved) throw resolved.error
+  const sessionModel = readSessionModel(ctx, resolved.agent)
+  const restore = modeModelState.lastDefault
+    ?? (typeof defaults.currentSelection === 'function' ? defaults.currentSelection() : null)
+  const conclusion = resolveModeModel(activeMode(), readModeModelConfig(), sessionModel, restore)
+  if (!conclusion) return null
+  await controller.selectModel({
+    sessionId, provider: conclusion.provider, model: conclusion.model,
+  })
+  if (conclusion.restore) {
+    // selectModel 顺手把部署默认写成了被选中的那一个 —— 这里把它还回去 (必须的一步)
+    if (typeof defaults.saveSelection === 'function') {
+      await defaults.saveSelection({ provider: conclusion.provider, model: conclusion.model })
+    }
+    modeModelState.restored += 1
+    modeModelState.lastDefault = null
+    modeModelState.sessions.delete(sessionId)
+  } else {
+    if (preDefault && typeof defaults.saveSelection === 'function') {
+      await defaults.saveSelection(preDefault)
+    }
+    modeModelState.lastDefault = preDefault
+    modeModelState.switches += 1
+    // 记下这一场: 退出视频模式那一刻要按名字还回去, 而不是等它的下一轮 (见下面那个函数)
+    modeModelState.sessions.add(sessionId)
+  }
+  modeModelState.lastError = null
+  await writeModeModelState()
+  return conclusion
+}
+
+/**
+ * 退出视频模式那一刻, 把**被我们切过的那几场**当场还回去 (2026-10-16 真机上量出来的那一笔)
+ *
+ * 为什么不能只靠 `turn/start` 那一个兜底: 真机上量到的是 —— 轮开始之后 selectModel 才落地, 而那一轮
+ * 的**第一个请求**已经发出去了, 于是"退出后再发一句"的第一句仍然用视频模型回, 与主人要的"回到 A"
+ * 差一轮。所以退出那一刻就按记下来的名字还 (只还**当前在跑**的: `resolveAgent` 会把冷会话恢复起来,
+ * 那等于替主人开一场)
+ *
+ * 与 [resolveModeModel] 同一份算术: 那一场还在视频模型上、并且与"要还的那一个"不同, 才发 RPC
+ * @param ctx 宿主上下文。
+ * @returns 这一次真的还回去几场。
+ */
+async function restoreModeModelSessions(ctx) {
+  if (modeModelState.sessions.size === 0) return 0
+  const controller = ctx.get('sessionController')
+  const defaults = ctx.get('agentDefaultModel')
+  if (!controller || !defaults) return 0
+  const config = readModeModelConfig()
+  if (config === null) {
+    // 配置被清掉了 (跟随当前模型): 没有"视频模型"可认, 也就没有什么要还原的
+    modeModelState.sessions.clear()
+    return 0
+  }
+  const listed = await controller.list({}, new AbortController().signal)
+  // 判据是 `agentAvailable` 而不是 `running`: 退出那一刻视频那一轮**已经结束** (running=false),
+  // 而会话自己的 Agent 还活着 —— 真机上按 running 判过一次, 结果是"退出时一场都没还, 第一句仍用
+  // 视频模型回"。而 `agentAvailable` 为真时 resolveAgent 拿的是活着的那个 Agent, **不会唤醒冷会话**
+  const live = new Set(
+    (listed?.items ?? [])
+      .filter((item) => item && item.agentAvailable === true && item.origin !== 'subagent' && !item.parentSessionId)
+      .map((item) => String(item.sessionId)),
+  )
+  let restored = 0
+  for (const sessionId of [...modeModelState.sessions]) {
+    // Agent 已经不在的那几场从这里摘掉: 它下一次开轮时由 turn/start 那一条兜
+    if (!live.has(sessionId)) {
+      modeModelState.sessions.delete(sessionId)
+      continue
+    }
+    try {
+      const resolved = await ctx.agents.withoutInitiator(() => controller.resolveAgent(sessionId))
+      if ('error' in resolved) throw resolved.error
+      const sessionModel = readSessionModel(ctx, resolved.agent)
+      const restore = modeModelState.lastDefault ?? defaults.currentSelection()
+      const conclusion = resolveModeModel(MODE_PHONE, config, sessionModel, restore)
+      if (!conclusion) {
+        // 已经不在视频模型上 (或没有可还的): 这一场不用再记着
+        modeModelState.sessions.delete(sessionId)
+        continue
+      }
+      await controller.selectModel({
+        sessionId, provider: conclusion.provider, model: conclusion.model,
+      })
+      if (typeof defaults.saveSelection === 'function') {
+        await defaults.saveSelection({ provider: conclusion.provider, model: conclusion.model })
+      }
+      modeModelState.restored += 1
+      modeModelState.sessions.delete(sessionId)
+      restored += 1
+    } catch (error) {
+      modeModelState.lastError = `restoring ${sessionId} after the mode switch failed: ${error?.message ?? error}`
+    }
+  }
+  if (restored > 0) {
+    modeModelState.lastDefault = null
+    modeModelState.lastError = null
+  }
+  await writeModeModelState()
+  return restored
+}
+
+/** `lw_mode op=status` 里 model 那一行的读数 (与施工单里那份字段一一对应) */
+function modeModelStatus() {
+  const endpoint = readModeEndpoint()
+  return {
+    configured: readModeModelConfig(),
+    active: modeModelState.lastDefault,
+    switches: modeModelState.switches,
+    restored: modeModelState.restored,
+    lastError: modeModelState.lastError,
+    sessions: [...modeModelState.sessions],
+    endpoint: {
+      // 地址与模型名 (没配好时都是空), 以及**这一档现在挂的是哪条路由**
+      url: endpoint?.url ?? '',
+      model: endpoint?.model ?? '',
+      api: endpoint?.api ?? '',
+      keySet: (endpoint?.apiKey ?? '') !== '',
+      route: endpoint ? VIDEO_ROUTE : '',
+      lastError: videoRouteState.lastError,
+    },
+  }
+}
+
+/** 把一段路径拼成一层的 patch: `['providers']` + 值 → `{providers: 值}` (pi-ai 的 settingsPath) */
+function patchAt(path, value) {
+  return path.reduceRight((inner, key) => ({ [key]: inner }), value)
+}
+
+/**
+ * 把自建端点挂成 pi-ai 的一条真路由 (2026-10-16 主人: url / api 等放进视频模式设置)
+ *
+ * 三件事, 顺序有意:
+ * 1. **用户设置**: `settings.update('<pi-ai 的段>', {providers: {'luwi-video': profile}})` ——
+ *    providers 是 volatile 字段, 写入即校验, 而且下一轮请求就生效 (不用重启 host)。这条 patch 是
+ *    **合并**语义, 所以别人那几条路由 (自建网关 / 目录里的那几家) 一个字节都不动
+ * 2. **凭据**: `credentials.set('LUWI_VIDEO_API_KEY', key)` —— key 不进设置文件, 由 pi-ai 每轮请求
+ *    经凭据缝取; 端点不要 key 时 profile 里干脆不写 `apiKeyEnv`
+ * 3. 指纹没变就一个字节都不写 (这条函数挂在 3 s 轮询上)
+ *
+ * 清掉自建端点时**不动设置**: 那条路由留在那儿不再被选 (读数里写 route 空), 免得把一条别人可能
+ * 也在用的配置删掉 —— 见 3.0.3 施工单第 4 节
+ * @param ctx 宿主上下文。
+ * @returns {Promise<void>} 失败只写进 [videoRouteState.lastError], 不抛 (轮询那一拍不该因此停摆)。
+ */
+async function ensureVideoRoute(ctx) {
+  const endpoint = readModeEndpoint()
+  if (!endpoint) {
+    videoRouteState.lastError = null
+    return
+  }
+  const fingerprint = [endpoint.url, endpoint.model, endpoint.api, endpoint.apiKey].join('\u0000')
+  if (fingerprint === videoRouteState.written) return
+  const settings = ctx.get('settings')
+  if (!settings || typeof settings.update !== 'function') {
+    videoRouteState.lastError = 'this host has no settings service, so the custom endpoint cannot be mounted'
+    return
+  }
+  try {
+    // 段名与那一层的路径**从 pi-ai 自己登记的目录里读**, 不写死: 部署换过行 id 也照样对得上
+    const entry = (ctx.get('llm')?.listConfigurableProviders?.() ?? [])
+      .find((row) => Array.isArray(row?.settingsPath) && row.settingsPath[0] === 'providers')
+    const ns = typeof entry?.settingsNs === 'string' && entry.settingsNs !== '' ? entry.settingsNs : 'llm-pi-ai'
+    const path = entry?.settingsPath ?? ['providers']
+    const profile = {
+      displayName: VIDEO_ROUTE_LABEL,
+      api: endpoint.api,
+      baseURL: endpoint.url,
+      models: [{ id: endpoint.model }],
+      ...(endpoint.apiKey === '' ? {} : { apiKeyEnv: VIDEO_KEY_REF }),
+    }
+    await settings.update(ns, patchAt(path, { [VIDEO_ROUTE]: profile }))
+    let credentialProblem = null
+    if (endpoint.apiKey !== '') {
+      const credentials = ctx.get('credentials')
+      if (credentials && typeof credentials.set === 'function') {
+        await credentials.set(VIDEO_KEY_REF, endpoint.apiKey)
+      } else {
+        // 没有凭据缝: 那条路由下一轮会以 MISSING_CREDENTIAL 失败 —— 这句话要留在读数里
+        credentialProblem = 'this host has no credentials service, so the endpoint has no key'
+      }
+    }
+    videoRouteState.written = fingerprint
+    videoRouteState.lastError = credentialProblem
+  } catch (error) {
+    // 写入即校验: 地址 / 模型名 / 协议不对时 pi-ai 会在这里拒, 照实记下来给读数看
+    videoRouteState.lastError = `mounting the custom endpoint failed: ${error?.message ?? error}`
+    videoRouteState.written = null
+  }
+}
+
+/**
+ * 那份读数也落成文件: `$DSH_HOME/lw/mode-model-state.json` (2026-10-16)
+ *
+ * 三个理由: **量它不必再解那份压缩的会话日志** (`cat` 一下就是"发了几个 RPC"这个数 —— 真机验收
+ * 用到的那一条), 应用那一侧以后要看一眼也有个地方, 而"这一场被切走了"这件事因此不是只活在内存里。
+ * 原子写, 与 ball-phase.json / balance.json 同一条路
+ */
+async function writeModeModelState() {
+  const path = homePath('lw', MODE_MODEL_STATE_FILE)
+  if (path === null) return
+  const configured = readModeModelConfig()
+  // `configured` 由 [modeModelStatus] 现读给出, 这里只是把它记下来看下一拍要不要补写
+  const payload = { v: 1, at: Date.now(), ...modeModelStatus() }
+  const temporary = `${path}.tmp`
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(temporary, `${JSON.stringify(payload)}\n`)
+    await rename(temporary, path)
+    // 记下"这份文件是按哪一份配置写的": 配置改了而这一档什么都没做时, 轮询要把它补上 (见 startModeModel)
+    modeModelState.writtenConfig = JSON.stringify(configured)
+    modeModelState.writtenState = JSON.stringify(modeModelStatus())
+  } catch (error) {
+    console.warn(`luwi-channel: the mode model state was not written: ${error?.message ?? error}`)
+  }
+}
+
+/**
+ * 模型目录喂给应用的那条 (需求 2 的 T3)
+ *
+ * 目录只有宿主拿得到 (`sessionController.modelCatalog`, 与 GUI 那个模型选择器同源), 而挑模型的那
+ * 一行在应用进程里 —— 还是「文件即真相」: 原子写 (`.tmp` + rename)。起来刷一次, 应用打开那一段时
+ * 写的请求记号一出现就刷 (3 s 轮询顺手看一眼)。取不到目录就回 `items: []`, 设置页退两个文本框
+ */
+async function writeModelCatalog(ctx) {
+  const path = homePath('lw', MODEL_CATALOG_FILE)
+  if (path === null) return false
+  const payload = { v: 1, at: Date.now(), ok: false, current: { provider: '', model: '' }, items: [] }
+  try {
+    const defaults = ctx.get('agentDefaultModel')
+    const current = typeof defaults?.currentSelection === 'function' ? defaults.currentSelection() : null
+    if (current) payload.current = { provider: String(current.provider ?? ''), model: String(current.model ?? '') }
+    const controller = ctx.get('sessionController')
+    if (controller && typeof controller.modelCatalog === 'function') {
+      const catalog = await controller.modelCatalog()
+      payload.items = (catalog?.groups ?? []).flatMap((group) => (group?.models ?? []).map((model) => ({
+        provider: String(group.id ?? ''),
+        model: String(model.id ?? ''),
+        label: `${group.name ?? group.id} · ${model.name ?? model.id}`,
+      })))
+    } else {
+      // **说得清为什么空**: 起得太早时服务还没挂上, 那不是"这台机器没有模型" (真机 2026-10-16)
+      payload.reason = 'this host has no session controller at this moment, so the catalog cannot be read yet'
+    }
+    payload.ok = payload.items.length > 0
+  } catch (error) {
+    // 目录取不到不算失败: ok:false + 空 items, 应用那边退文本框, 不让请求死在这
+    payload.reason = `building the model catalog failed: ${error?.message ?? error}`
+  }
+  const temporary = `${path}.tmp`
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(temporary, `${JSON.stringify(payload)}\n`)
+    await rename(temporary, path)
+  } catch (error) {
+    console.warn(`luwi-channel: the model catalog was not written: ${error?.message ?? error}`)
+    return false
+  }
+  if (payload.ok) modelCatalogState.settled = true
+  return payload.ok
+}
+
+/** 应用那个"现在刷一次目录"的记号是不是刚写的 (30 s 之内) */
+async function modelCatalogRequested() {
+  const path = homePath('lw', MODEL_CATALOG_REQUEST_FILE)
+  if (path === null) return false
+  try {
+    const at = JSON.parse(await readFile(path, 'utf8'))?.at
+    const age = Date.now() - at
+    return typeof at === 'number' && age >= 0 && age <= MODEL_CATALOG_REQUEST_FRESH_MS
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 视频模式独立模型的两处挂载
+ *
+ * 1. **`turn/start` 钩子 (只根会话)**: 兜住 GUI 自己开的会话 —— 每轮开始读那一场的当前模型,
+ *    与 [resolveModeModel] 的结论不同才发 RPC (投影里 pending 已经等于目标就跳过)。
+ *    视频模式里顺手认一遍「要还回去的那一个」: 主人在 GUI 里换过模型就以当下的为准重记。
+ * 2. **目录那一条**: 起来刷一次 + 应用的请求记号 (3 s 轮询, unref 掉不挡退出)。
+ *
+ * `lw_mode` 切换那一路不在这里 (它要走 exec 里的 `exec.agent.id`, 见工具定义那一段)
+ */
+function startModeModel(ctx) {
+  onSessionEvent(ctx, (session, event) => {
+    if (event.type !== 'turn/start') return
+    if (session.meta?.origin === 'subagent') return
+    // 对端投影的那一轮不是在这台机器上跑的: 它不该换本地那一对模型 (见 isPeerProjection)
+    if (isPeerProjection(session)) return
+    const mode = activeMode()
+    if (mode !== MODE_VIDEO && mode !== MODE_PHONE) return
+    const sessionId = String(session.id)
+    if (mode === MODE_VIDEO) {
+      // 主人在 GUI 里换过模型: 以当下的 currentSelection() 为准重记 lastDefault, 不信任旧值
+      const defaults = ctx.get('agentDefaultModel')
+      const config = readModeModelConfig()
+      const current = typeof defaults?.currentSelection === 'function' ? defaults.currentSelection() : null
+      if (config && current && modeModelState.lastDefault
+        && (current.provider !== modeModelState.lastDefault.provider
+          || current.model !== modeModelState.lastDefault.model)
+        && (current.provider !== config.provider || current.model !== config.model)) {
+        modeModelState.lastDefault = current
+      }
+    }
+    void applyModeModelToSession(ctx, sessionId, mode, null).catch((error) => {
+      modeModelState.lastError = `correcting the session model at turn start failed: ${error?.message ?? error}`
+    })
+  })
+  void writeModelCatalog(ctx).catch((error) => {
+    warn(ctx, `the model catalog was not written: ${error?.message ?? error}`)
+  })
+  // 应用配了自建端点的话, 起来就把它挂上 (第一次进视频模式不必等那 3 s 轮询)
+  void ensureVideoRoute(ctx).catch((error) => {
+    warn(ctx, `the custom endpoint was not mounted: ${error?.message ?? error}`)
+  })
+  // 读数也先落一份: 起来就有文件可看 (设备上 `cat` 一下就知道这一档现在是"跟随"还是配了什么)
+  void writeModeModelState().catch((error) => {
+    warn(ctx, `the mode model state was not written: ${error?.message ?? error}`)
+  })
+  const timer = setInterval(() => {
+    // 自建端点那一段变了就先把它挂成路由 (写设置 + 写凭据) —— 排在校正与目录前面: 那一轮要用的
+    // 路由得先在
+    void ensureVideoRoute(ctx).catch(() => {})
+    // 已经不是视频模式了, 而我们手上还记着被切过的会话: 当场还回去 (球单击 / 设备上那几个脚本
+    // 切回手机模式时, 宿主这一段一个 RPC 都没参与, 只能这样看见)
+    if (modeModelState.sessions.size > 0 && activeMode() !== MODE_VIDEO) {
+      void restoreModeModelSessions(ctx).catch((error) => {
+        modeModelState.lastError = `restoring the recorded sessions failed: ${error?.message ?? error}`
+      })
+    }
+    // 配置改了但这一档什么都没做 (比如改回「跟随当前模型」): 读数文件也要跟上, 免得它拿着一份
+    // 过期配置给人看 (读数本身是现读的, 过期的是那份落盘的文件)
+    if (JSON.stringify(modeModelStatus()) !== modeModelState.writtenState) {
+      void writeModeModelState().catch(() => {})
+    }
+    void modelCatalogRequested().then((wanted) => {
+      if (wanted) {
+        // 应用在看着呢: 记号一来就刷, 顺便把"起来那几次没成"那笔账重置掉
+        modelCatalogState.tries = 0
+        modelCatalogState.nextAt = 0
+        void writeModelCatalog(ctx).catch(() => {})
+        return
+      }
+      // 起来那几次没成 (服务还没注册) 时按 [MODEL_CATALOG_RETRY_MS] 再试 —— 试满就停手, 之后靠记号
+      if (modelCatalogState.settled || modelCatalogState.tries >= MODEL_CATALOG_RETRY_MS.length) return
+      if (Date.now() < modelCatalogState.nextAt) return
+      modelCatalogState.nextAt = Date.now() + MODEL_CATALOG_RETRY_MS[modelCatalogState.tries]
+      modelCatalogState.tries += 1
+      void writeModelCatalog(ctx).catch(() => {})
+    })
+  }, PLUGIN_POLL_MS)
+  if (typeof timer.unref === 'function') timer.unref()
 }
 
 /**
@@ -1118,8 +1789,41 @@ const TOOLS = [
             + ' lw_look will be refused until the user releases it'
         }
       }
+      if (answer.switched === true && session !== null) {
+        // 需求 2 (3.0.2): 切模式那一刻把那一场的模型也校正了。切进视频之前**现取**一次部署默认
+        // (不信任旧值): selectModel 会把它写成视频模型, 所以切换之后要立刻把这一个还回去
+        //
+        // **这里用 hostCtx 不是 ctx** (2026-10-16 真机上踩的): 工具那一层是 `execute(args, exec)`,
+        // 作用域里没有 `ctx` 这个名字, 而插件挂在模块级的 hostCtx 上 —— 写成 `ctx.get(...)` 会在
+        // 运行期抛 "ctx is not defined", 而它被下面那个 catch 兜住, 回执上只是少了一行、看不出哪里错
+        try {
+          const defaults = hostCtx.get('agentDefaultModel')
+          const preDefault = typeof defaults?.currentSelection === 'function'
+            ? defaults.currentSelection()
+            : null
+          // 自建端点那一段要是刚改过, 先把它挂成路由 —— 这一轮就要用它了 (3 s 轮询可能还没轮到)
+          await ensureVideoRoute(hostCtx)
+          const corrected = await applyModeModelToSession(hostCtx, session, toVideo ? MODE_VIDEO : MODE_PHONE, preDefault)
+          if (corrected?.restore) {
+            note += `\nmodel: restored ${corrected.provider}/${corrected.model} for this conversation`
+          } else if (corrected) {
+            note += `\nmodel: this conversation now uses ${corrected.provider}/${corrected.model}`
+          }
+          // 退出视频模式: 别场 (被我们切过的那几场) 也当场还回去, 不等它们的下一轮
+          if (!toVideo) {
+            const restored = await restoreModeModelSessions(hostCtx)
+            if (restored > 0) note += `\nmodel: restored ${restored} more conversation(s) that were on the video model`
+          }
+        } catch (error) {
+          modeModelState.lastError = `correcting the model after the mode switch failed: ${error?.message ?? error}`
+          note += `\nmodel: left as it was (${modeModelState.lastError})`
+        }
+      }
       if (answer.switched === false) return answer.detail
-      if (answer.modes) return `modes: ${answer.modes}\nactive: ${answer.active}`
+      if (answer.modes) {
+        return `modes: ${answer.modes}\nactive: ${answer.active}\n`
+          + `model: ${JSON.stringify(modeModelStatus())}`
+      }
       if (answer.switched === true) return modeLines(answer).join('\n') + note
       return `mode: ${answer.mode} (${answer.name})\n`
         + `prompt file: ${answer.promptWritten ? 'written' : 'missing'} (${answer.promptFile})`
@@ -2100,6 +2804,53 @@ const TOOLS = [
     },
   ),
 
+  // Linux 沙盒 (2.7.7): 一台真正能装包 / 能编译的 Alpine, 命令一条一条跑, /work 就是会话工作区
+  defineTool({
+    name: 'lw_linux',
+    description:
+      'Run commands inside a small Alpine Linux (musl) userland this app carries with it, on this'
+      + ' device. It exists because the phone itself has neither a package manager nor a compiler:'
+      + ' inside it, `apk add python3`, `apk add build-base` or `apk add git` reach the internet and'
+      + ' install normally, and `cc`/`python3` then work on anything under /work. **op=run** runs one'
+      + ' shell command and answers with its output; /work is this session\'s workspace (the same'
+      + ' directory the file and shell tools work in), /work is the only part of the phone it can'
+      + ' see, and the network is up. **op=install** unpacks the Alpine base the app ships (it'
+      + ' replaces the whole root filesystem, so ask the user before re-running it once things are'
+      + ' installed inside); op=status reports whether it is installed, how large it is and whether'
+      + ' anything is running; op=reset deletes it and everything installed into it (destructive -'
+      + ' only when the user asks for that). Things to know: each call is one shot - the working'
+      + ' directory, environment and any background process do not survive it, so chain what belongs'
+      + ' together with `&&`, or write a script under /work and run that; `apk add` can take several'
+      + ' minutes on a slow mirror, and timeoutMs (default 120000, up to 600000) bounds one call.'
+      + ' It is not a security sandbox: output has to be treated like output from any shell.',
+    parameters: {
+      op: {
+        type: 'string',
+        required: true,
+        description: 'run a command, install (or reinstall) the bundled Alpine, read status, or reset',
+        enum: ['run', 'install', 'status', 'reset'],
+      },
+      command: {
+        type: 'string',
+        description: 'For op=run: the shell command, as it would be typed into `sh -lc` inside the sandbox',
+      },
+      timeoutMs: {
+        type: 'integer',
+        description: 'For op=run: how long that one command may take. Default 120000, at most 600000',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value }],
+    },
+    async execute(args, exec) {
+      // 会话工作区是插件这一侧补上的: 应用那一侧只认"一个真目录", 而"哪一场会话在哪工作"这件事
+      // 只有 dsh 的会话对象说了算 (见 sessionCwdOf)
+      const work = sessionCwdOf(exec)
+      return answerOf(await call('linux', drop({ ...args, work: work ?? undefined })))
+    },
+  }),
+
   simpleTool(
     'lw_sensor',
     'List the device\'s sensors, or read one of them once. The value is a single sample, so a sensor'
@@ -2610,6 +3361,58 @@ const TOOLS = [
       dayEnd: {
         type: 'string',
         description: 'For op=free: the latest time of day to consider, HH:MM. Default 22:00',
+      },
+    },
+  ),
+
+  // ---- 会话同步那份配置 (2026-10-14): "让 agent 帮你配置" ----
+  //
+  // 那个开关住在应用的设置页「同步」那一段 (与进设置之前的顶栏菜单同一份状态), 而**模型碰不到它**:
+  // dsh 的 fs 工具关在工作区, lw_linux 的 proot 也只 `-b <work>:/work`。所以配了这一条 —— 设置页
+  // 第一排那句"让 agent 帮你配置"就是把主人领到这里, 而语义 (保留未知键 / 「关」= 地址挪进 lw 段 +
+  // 三个自动值归零) 只有应用那一侧一份实现
+  simpleTool(
+    'lw_sync',
+    'The session sync of this phone (luwi-dsh-sync): whether it is on, which git remote it pushes'
+    + ' to, and how often it runs by itself. **When the user says "让 agent 帮你配置" / "帮我配置同步"'
+    + ' (or that sentence arrives from the settings page\'s first row), this is the tool that does it.**'
+    + ' op=status reads the current configuration (the token is masked). op=set writes only the fields'
+    + ' you pass: remote (the git URL both machines push to - **ask the user for it and never invent'
+    + ' one**; an empty string clears it and turns sync off), branch, interval (minutes between'
+    + ' periodic pulls, 0 = off), autoPull (pull once as the plugin mounts), autoPush (mirror and push'
+    + ' after every turn), on (true turns the master switch on using the address already configured or'
+    + ' the one kept from last time; false turns it off, parks the address and zeroes the three auto'
+    + ' values - that is the default state). **Sync is off by default and nothing runs in the'
+    + ' background while it is off**, so a fresh configuration is: remote + optionally branch/interval.'
+    + ' The file is DSH_HOME/lw/session-sync.json and only this tool may change it: the agent\'s own'
+    + ' file tools are sandboxed to the workspace and cannot see DSH_HOME. **Changes take effect only'
+    + ' after the DSH host restarts** (the plugin reads the file when it mounts), and you cannot'
+    + ' restart it from here - tell the user to tap 同步 in the top-bar menu (it restarts for them) or'
+    + ' Settings -> 同步. Telling the user that sentence is part of doing this job.',
+    'sync',
+    {
+      op: {
+        type: 'string',
+        required: true,
+        description: 'status reads the configuration, set writes the fields you pass',
+        enum: ['status', 'set'],
+      },
+      remote: {
+        type: 'string',
+        description: 'set only: the git remote for sessions (https://user:token@host/repo.git, git://,'
+          + ' ssh:// or a local path). Ask the user for it. Empty string clears it and turns sync off',
+      },
+      branch: { type: 'string', description: 'set only: the branch in that repository (default main)' },
+      interval: {
+        type: 'number',
+        description: 'set only: minutes between periodic pulls, 0..10080, 0 turns the periodic pull off',
+      },
+      autoPull: { type: 'boolean', description: 'set only: pull once when the plugin mounts' },
+      autoPush: { type: 'boolean', description: 'set only: mirror and push after every conversation round' },
+      on: {
+        type: 'boolean',
+        description: 'set only: the master switch. false parks the address in lw.savedRemote and zeroes'
+          + ' the three auto values (nothing runs); true puts the address back',
       },
     },
   ),
@@ -5076,11 +5879,11 @@ async function voiceReadNew(inbox) {
     if (!Number.isFinite(seq) || seq <= since || !said) continue
     // `wake` 是"这一句是唤醒之后的头一句"那个记号 (应用那侧只有头一句带它, 见 VoiceInbox.append) ——
     // **2026-10-06 起它只是记号, 不再是"另开一场"的判据**: 选哪一场由 [voiceCurrentSession] 那一笔
-    // 账 (2026-10-07 起 20 分钟, 2026-10-11 起 10 分钟) 定, 见 [voiceTargetSession]。老版本写的行没有这个键, 读起来与
+    // 账 (2026-10-07 起 20 分钟, 2026-10-11 起 10 分钟) 定, 见 [voiceTargetCandidates]。老版本写的行没有这个键, 读起来与
     // false 是一回事
     //
     // `to` 是**回复框点名的那一场** (2026-10-06 加): 框在屏上时, 框里发出去的那句话投给"发出那条
-    // 回复的会话" (见 [voiceTargetSession] 的第一条判据)。老版本写的行没有这个键, 读起来就是"没点名"
+    // 回复的会话" (见 [voiceTargetCandidates] 的第一条判据)。老版本写的行没有这个键, 读起来就是"没点名"
     const to = typeof record?.to === 'string' ? record.to.trim() : ''
     fresh.push({
       seq,
@@ -5294,55 +6097,81 @@ async function voiceSessionBump(sessionId) {
  * 了 —— 主人报的正是这一条。现在 [voiceDeliver] 只问这一个函数, 而它只认浮标自己那一场: 那一场正在跑
  * 就 `steer`, 没在跑就 `followup`, 两种都落在浮标工作区
  */
-async function voiceTargetSession(controller, signal, fresh, to) {
-  // 三条判据, **顺序就是优先级** (前一条不成立才看后一条):
-  //
-  // 1. **回复框点名的会话** (`to`, 2026-10-06 加): 框里发出去的那句话投给"发出那条回复的会话"。
-  //    它必须还活着、而且是个根会话 (子代理那一场不是"能对话的窗"); 不成立时**不当它是错**,
-  //    直接落回下面那条小时账 —— 框里的字照旧发得出去, 只是回到老规矩
-  // 2. **时间那一笔** ([voiceCurrentSession]): 10 分钟内那一场复用, 唤醒头句 / 点球头句也一样
-  //    (主人 2026-10-06 改的口径: "只要是 1 小时内, 无论点球/喊唤醒词 都只在同一场对话",
-  //    2026-10-07 那个数由主人改成 20 分钟, 2026-10-11 又缩到 10 分钟);
-  //    `fresh` 只是记号, 不决定开不开新场
-  // 3. 都没有 (或那场不在了) 才开一场新的
-  const listed = await controller.list({}, signal)
-  const roots = listed.items.filter((item) => item.origin !== 'subagent' && !item.parentSessionId)
-  const asked = to ? roots.find((item) => String(item.sessionId) === String(to)) : undefined
-  if (asked !== undefined) {
-    return {
-      sessionId: asked.sessionId,
-      running: asked.running,
-      why: 'the reply box asked for its own conversation',
-    }
+/**
+ * 这一句话该试哪些会话, **按优先级排**: 点名的那一场 → 浮标那一笔账 (10 分钟); 空表就是"开一场新的"
+ *
+ * (前两条是主人 2026-10-06 的口径: "只要是 1 小时内, 无论点球/喊唤醒词 都只在同一场对话" +
+ * 当天那条例外 "有回复框时, 框里进的输入走发出回复那个窗口"; 那个 1 小时 2026-10-07 改成 20 分钟,
+ * 2026-10-11 又缩到 10 分钟。`fresh` 只是记号, 不决定开不开新场)
+ *
+ * **这里一次会话表都不扫** (2026-10-15 真机上量到 `controller.list` 要 **11~12.8 秒** —— 投递总耗时
+ * 的 99%, 因为它要读全部会话头与投影缓存, 而这台机器 38 个工作区里堆了上千场): 目标本来就有 id,
+ * 那两场真的不在了 (被删 / 换过工作区), 由投递时 `resolveAgent` 的失败来发现 —— 调用方按这个顺序
+ * 逐个试, 全试不出去才开新的一场 ([voiceDeliver] 里那个 for)
+ */
+async function voiceTargetCandidates(to) {
+  const candidates = []
+  const asked = String(to ?? '').trim()
+  if (asked !== '') {
+    candidates.push({ sessionId: asked, why: 'the reply box asked for its own conversation' })
   }
   const current = await voiceCurrentSession()
-  if (current === null) {
+  if (current !== null && current !== asked) {
+    candidates.push({ sessionId: current, why: 'the ball conversation, reused' })
+  }
+  return candidates
+}
+
+/**
+ * 开一场新的浮标对话
+ *
+ * **这一跳要带一个能解析出来的预设** (2026-10-09): 见 [chooseVoicePreset] 上面那段; 解析得出来但
+ * 起不来 (broken mount) 时再退一次 `standard`, 别的错照抛
+ *
+ * @returns `{ sessionId, preset, presetWhy }` (后两个进读数, 见 `voiceDelivery.preset`)
+ */
+async function openBallConversation(ctx, controller, workspace) {
+  const preset = await chooseVoicePreset(ctx)
+  const request = {
+    ...(workspace === null ? {} : { cwd: workspace }),
+    ...(preset.id === undefined ? {} : { agentPreset: preset.id }),
+  }
+  try {
+    const created = await controller.create(request)
+    return { sessionId: created.sessionId, preset: preset.id ?? '', presetWhy: preset.why }
+  } catch (error) {
+    if (preset.id === undefined || preset.id === 'standard') throw error
+    const retry = await controller.create({
+      ...(workspace === null ? {} : { cwd: workspace }),
+      agentPreset: 'standard',
+    })
     return {
-      sessionId: null,
-      running: false,
-      why: fresh
-        ? 'the hour was up, so the wake word opened a new conversation'
-        : 'the ball had no conversation, so this opened one',
+      sessionId: retry.sessionId,
+      preset: 'standard',
+      presetWhy: `${preset.why}; the create failed (${describePresetFailure(error)}),`
+        + ' so standard was used instead',
     }
   }
-  const reused = roots.find((item) => String(item.sessionId) === current)
-  if (reused === undefined) {
-    return { sessionId: null, running: false, why: 'the ball conversation is gone, so this opened one' }
-  }
-  return { sessionId: reused.sessionId, running: reused.running, why: 'the ball conversation, reused' }
 }
+
 /**
- * 这一句话该投给哪一个会话, `null` 就是"没有可投的, 开一个新的"
+ * 把一句话投进那一场: 正在跑就插进当前轮 (D6), 否则排上并唤醒它
  *
- * **"没有"有两种写法, 这是它踩过的一次坑** (2026-10-06): 会话列表为空时 [voiceTargetSession] 回
- * `null`, 而唤醒词那一句回的是一张 `sessionId: null` 的记账卡 (那张卡要顺带说清"为什么开新对话")。
- * 调用方只判 `target === null` 就会把后一种当成"有会话", 拿着一个 null 去 `resolveAgent` —— 那一步
- * 必然失败, 而队列是"投成功才前移游标", 于是**这一句后面的每一句都卡死在队列里** (真机上就是
- * "键盘输入谈不了话", 见 docs/floating-input.md 那一节). 所以"到底投给谁"只由这一个函数回答: 两种
- * "没有"收成同一个 `null`
+ * **`resolveAgent` 是这条链上唯一的"这一场还在不在"判据** —— 它快 (真机实测 60 ms 上下), 于是
+ * "要不要扫会话表"这件事整个不需要了 (见 [voiceTargetCandidates])
  */
-function voiceTargetId(target) {
-  return target?.sessionId ?? null
+async function deliverToBall(ctx, controller, sessionId, line, auto) {
+  return ctx.agents.withoutInitiator(async () => {
+    const resolved = await controller.resolveAgent(sessionId)
+    if ('error' in resolved) throw resolved.error
+    const { agent } = resolved
+    const running = agent.status === 'running'
+    const message = await createVoiceMessage(line.text, auto.images)
+    if (running) agent.steer(message)
+    else agent.followup(message)
+    const flushed = await ctx.sessions.flush(agent.session)
+    return { running, flushed, screenshot: auto.images.length > 0 }
+  })
 }
 
 /**
@@ -5607,7 +6436,10 @@ async function runVoiceInterrupt(ctx, line) {
   }
   const signal = new AbortController().signal
   const listed = await controller.list({}, signal)
-  const sessionId = pickInterruptTarget(listed.items, ballTurns())
+  // **这里是 [ballTurnList] 不是 [ballTurns]** (2026-10-12 修): 后者是一张 Map, 当函数调会在宿主侧抛
+  // "ballTurns is not a function" —— 双击打断从 2.6.0 起一直死在这一行 (真机上量到: 语句进了收件箱、
+  // 宿主也认出它了, 却在挑目标这一步整个失败, 那一轮照跑), 判据见 tools/check-voice-inbox.mjs
+  const sessionId = pickInterruptTarget(listed.items, ballTurnList())
   let cancelled = false
   let detail = 'no turn was running, so there was nothing to interrupt'
   if (sessionId !== null) {
@@ -5634,6 +6466,11 @@ async function runVoiceCommand(command, line) {
   try {
     const answer = await applyMode(command.mode)
     const switched = answer.switched === true
+    // 退出视频模式那一路也当场还原 (语音命令没有会话身份, 所以按记下来的那几场还) ——
+    // 只靠 turn/start 兜的话, 退出后的**第一句**仍然会用视频模型回 (真机 2026-10-16 量到的)
+    if (switched && command.mode === MODE_PHONE) {
+      await restoreModeModelSessions(hostCtx)
+    }
     voiceCommands.count += 1
     voiceCommands.error = switched ? null : `"${line.text}" did not switch the mode: ${answer.detail}`
     voiceCommands.last = { at: Date.now(), said: line.text, mode: answer.mode ?? command.mode, switched }
@@ -5667,7 +6504,7 @@ const voiceDelivery = {
   why: null,
   steered: 0,
   queued: 0,
-  /** 其中几条真的**新开了一场** (那笔账过了 / 那一场不在了, 见 [voiceTargetSession]) */
+  /** 其中几条真的**新开了一场** (那笔账过了 / 那一场不在了, 见 [voiceTargetCandidates]) */
   opened: 0,
   /** 试满 [VOICE_DELIVER_TRIES] 次也没投出去、被跳过的句子有几条 */
   skipped: 0,
@@ -5729,7 +6566,7 @@ async function createVoiceMessage(text, images = []) {
  * "应用在后台说了一句话"不会因为界面没开着而丢掉
  *
  * **`line.wake` 不再改写目标** (主人 2026-10-06 改口径: "只要是 1 小时内, 无论点球/喊唤醒词 都只在
- * 同一场对话"): 它只是"这一句是唤醒之后的头一句"那个记号, 选哪一场由 [voiceTargetSession] 按那一
+ * 同一场对话"): 它只是"这一句是唤醒之后的头一句"那个记号, 选哪一场由 [voiceTargetCandidates] 按那一
  * 时间定 —— 10 分钟内一律复用浮标那一场 (正在跑就 steer), 那笔账过了才新开一场。界面**不会跟着切过去**:
  * 会话是这里建的, 而"在看哪一个"是浏览器自己的路由状态, 应用那侧没有一条让页面切会话的路 —— 所以
  * 新对话真的在跑、回答也会念出来, 但人可能正看着另一个会话。这是主人选的"改动最小"那一档
@@ -5785,50 +6622,30 @@ async function voiceDeliver(ctx, line) {
   if (!controller) {
     throw new Error('this profile has no session controller, so a spoken line has nowhere to go')
   }
-  const signal = new AbortController().signal
   const fresh = line.wake === true
+  // **每一段各花多少毫秒要量** (2026-10-15 主人: "从 ball 到会话发送能缩到最小吗"): 投一句要 5~11 秒,
+  // 而链上有五段各自可能很贵 (`list` 要扫全部会话头, 截图要过特权通道, `resolveAgent` 要把冷会话
+  // 连预设一起复活) —— 不分开量就只能猜
+  const startedAt = Date.now()
+  const timing = {}
+  const clock = { mark: startedAt }
+  const beat = (key) => {
+    timing[key] = Date.now() - clock.mark
+    clock.mark = Date.now()
+  }
   // **自动指令每次新开一场** (主人 2026-10-08 定): 不接回复框点名, 也不复用浮标那 10 分钟的一场 ——
   // "到点了提醒我"不是接着刚才那件事说, 而一次性提醒也不该把上下文带进主人的聊天里
-  const target = automated
-    ? { sessionId: null, running: false, why: 'an automatic command opened its own conversation' }
-    : await voiceTargetSession(controller, signal, fresh, line.to)
+  const candidates = automated ? [] : await voiceTargetCandidates(line.to)
   // **新开的对话落在浮标那个专用工作区里** (主人 2026-10-06): 只对"这一句要开新对话"那一条路生效
   // (没有可复用的当前对话时: 那笔账过了 / 那一场不在了 / 从来没有过); 复用一个已经在跑的会话时不改它
   // 的目录 —— 一个会话的 cwd 是它自己的事, 中途换掉就是 `ApiSessionCwdConflict`
   const workspace = await ensureBallWorkspace()
-  // **判的是"这一句投给谁", 不是"那张记账卡在不在"** ([voiceTargetId] 那一处写着这次踩的坑):
-  // "没有"那张卡上 `sessionId` 是 null, 而它必须走新建
-  const existing = voiceTargetId(target)
-  const opened = existing === null
-  let sessionId = existing
-  if (opened) {
-    // 开新会话这一跳**要带一个能解析出来的预设** (2026-10-09): 见 [chooseVoicePreset] 上面那段
-    const preset = await chooseVoicePreset(ctx)
-    voiceDelivery.preset = preset.id ?? ''
-    voiceDelivery.presetWhy = preset.why
-    const request = {
-      ...(workspace === null ? {} : { cwd: workspace }),
-      ...(preset.id === undefined ? {} : { agentPreset: preset.id }),
-    }
-    try {
-      sessionId = (await controller.create(request)).sessionId
-    } catch (error) {
-      // "解析得出来但起不来" (broken mount) 的那一档: 再退一次 standard, 别的错照抛
-      if (preset.id === undefined || preset.id === 'standard') throw error
-      const retry = await controller.create({
-        ...(workspace === null ? {} : { cwd: workspace }),
-        agentPreset: 'standard',
-      })
-      sessionId = retry.sessionId
-      voiceDelivery.preset = 'standard'
-      voiceDelivery.presetWhy = `${preset.why}; the create failed (${describePresetFailure(error)}),`
-        + ' so standard was used instead'
-    }
-  }
+  beat('workspace')
   // **投递之前先把"指代不明"那一张图备好** (批次 4 的需求 9): 截的是主人手里那块屏 (display 0), 而
   // 它不进正文 —— 图块与那句话一起构成这一条用户消息。截不出来照投文字, 理由记在读数里 (见
   // [autoScreenShot]): "这一句没投出去"与"这句投出去了但没带图"是两件事, 前者会重试, 后者不会
   const auto = await autoScreenShot(line.text)
+  beat('shot')
   if (auto.tried) {
     voiceDelivery.autoShot.tried += 1
     if (auto.images.length > 0) voiceDelivery.autoShot.attached += 1
@@ -5841,25 +6658,46 @@ async function voiceDeliver(ctx, line) {
     attached: auto.images.length > 0,
     why: auto.images.length > 0 ? 'the phone\'s own screen went in with the line' : auto.why,
   }
-  const outcome = await ctx.agents.withoutInitiator(async () => {
-    const resolved = await controller.resolveAgent(sessionId)
-    if ('error' in resolved) throw resolved.error
-    const { agent } = resolved
-    const running = agent.status === 'running'
-    const message = await createVoiceMessage(line.text, auto.images)
-    // 正在跑就插进当前轮 (D6), 否则排上并唤醒它
-    if (running) agent.steer(message)
-    else agent.followup(message)
-    const flushed = await ctx.sessions.flush(agent.session)
-    return { running, flushed, screenshot: auto.images.length > 0 }
-  })
+  // **按候选逐个试, 一个都投不出去才开新的一场** (2026-10-15): 这些 id 本来就是手上有的, 不用扫
+  // 会话表; "那一场不在了"由 [deliverToBall] 里 `resolveAgent` 的失败来说
+  let used = null
+  let sessionId = null
+  let outcome = null
+  let failure = null
+  for (const candidate of candidates) {
+    try {
+      outcome = await deliverToBall(ctx, controller, candidate.sessionId, line, auto)
+      sessionId = candidate.sessionId
+      used = candidate
+      break
+    } catch (error) {
+      failure = error
+      voiceDelivery.retried = (voiceDelivery.retried ?? 0) + 1
+    }
+  }
+  beat('candidates')
+  const opened = outcome === null
+  if (opened) {
+    const created = await openBallConversation(ctx, controller, workspace)
+    sessionId = created.sessionId
+    voiceDelivery.preset = created.preset
+    voiceDelivery.presetWhy = created.presetWhy
+    beat('open')
+    outcome = await deliverToBall(ctx, controller, sessionId, line, auto)
+  }
+  beat('agent')
   // 投出去了才记"当前对话": 这一笔是从**这一句**起算的 10 分钟 (需求: 每次发送完成后 10 分钟内)
   await voiceSessionBump(sessionId)
   voiceDelivery.lines += 1
   voiceDelivery.sessionId = String(sessionId)
-  voiceDelivery.reused = (voiceDelivery.reused ?? 0) + (target?.why === 'the ball conversation, reused' ? 1 : 0)
+  voiceDelivery.reused = (voiceDelivery.reused ?? 0) + (used?.why === 'the ball conversation, reused' ? 1 : 0)
   voiceDelivery.current = String(sessionId)
-  voiceDelivery.why = target?.why ?? 'there was no conversation, so this opened one'
+  voiceDelivery.why = used?.why
+    ?? (failure === null
+      ? fresh
+        ? 'the hour was up, so the wake word opened a new conversation'
+        : 'the ball had no conversation, so this opened one'
+      : `the conversation we knew was gone (${failure?.message ?? failure}), so this opened one`)
   if (opened) voiceDelivery.opened += 1
   if (outcome.running) voiceDelivery.steered += 1
   else voiceDelivery.queued += 1
@@ -5869,7 +6707,7 @@ async function voiceDeliver(ctx, line) {
     sessionId: String(sessionId),
     steered: outcome.running,
     newConversation: opened,
-    reused: target?.why === 'the ball conversation, reused',
+    reused: used?.why === 'the ball conversation, reused',
     source: line.source ?? 'voice',
     screenshot: outcome.screenshot === true,
     // 新开一场时用的是哪个预设 (复用那一场时不记: 那是它自己的事, 见 [chooseVoicePreset])
@@ -5877,6 +6715,16 @@ async function voiceDeliver(ctx, line) {
     presetWhy: opened ? voiceDelivery.presetWhy : null,
   }
   voiceDelivery.error = null
+  // **一段一段报出来** (主人 2026-10-15: "从 ball 到会话发送能缩到最小吗"): `console.log` 走 stdout,
+  // 也就是应用抓的 logcat 那一份 (`ctx.logger.info` 不进那里), 所以要用它才量得到
+  timing.total = Date.now() - startedAt
+  voiceDelivery.timing = timing
+  console.log(
+    `luwi-channel: line #${line.seq} delivery took ${timing.total}ms`
+      + ` (workspace ${timing.workspace ?? 0}, shot ${timing.shot ?? 0},`
+      + ` candidates ${timing.candidates ?? 0} of ${candidates.length},`
+      + ` ${opened ? 'open' : 'reuse'} ${timing.open ?? 0}, agent ${timing.agent ?? 0})`,
+  )
   ctx.logger?.info?.(
     `voice line #${line.seq} ${opened ? 'opened a new conversation' : outcome.running ? 'steered into' : 'queued on'}`
       + ` ${String(sessionId)} (${voiceDelivery.why})`
@@ -5917,8 +6765,13 @@ const voiceReading = { count: 0, skipped: 0, last: null, error: null }
 function startReadAloud(ctx) {
   // sessionId -> 这一轮最后那条助手正文,一轮里会有好几条, 后一条顶掉前一条
   const pending = new Map()
-  ctx.on('session/event', (session, event) => {
+  onSessionEvent(ctx, (session, event) => {
+    if (event.type !== 'assistant/message' && event.type !== 'turn/end') return
     if (session.meta?.origin === 'subagent') return
+    // **对端投影的回答不念、也不推进回复框** (2026-10-14 真机): 那不是在跟球说话, 而这个钩子当初
+    // 只见过"本机跑出来的一轮"。真机上是这么炸的: 投影带上回答之后, 对端那句长回答被推去念 →
+    // 也画进球的回复框 → 超过 5000 字时 BoxView.render 的光标越界 → 应用每 100 秒崩一次
+    if (isPeerProjection(session)) return
     if (event.type === 'assistant/message') {
       // 被打断的那条不作数: 它后面还可能跟着真正的回答
       if (event.data.interrupted === true) {
@@ -5941,6 +6794,10 @@ function startReadAloud(ctx) {
     if (text === undefined || event.data.reason?.kind !== 'completed') return
     const spoken = readAloudText(text)
     if (!spoken) return
+    // **回复框与「自动朗读」是两件事** (2026-10-15 真机: 朗读关着时主人"完成了也没有回复框"):
+    // 把回答推回浮标那块框从来不是"念出来"的附属品 —— 问一句、看一眼回答, 与要不要出声无关,
+    // 所以这一句排在开关前面, 开关只管念不念
+    reportReply(replyChannelText(spoken), session.id)
     // 设置页那个「自动朗读回答」关掉之后就不念 —— 开关在应用那一侧 (它与音色/语速放在一起),
     // 所以这里先问一句。**读不到设定时照念**: 桥出错不该让这个功能静默消失, 只记一行
     void call('speak', { op: 'status' })
@@ -5953,10 +6810,6 @@ function startReadAloud(ctx) {
         voiceReading.count += 1
         voiceReading.last = { at: Date.now(), characters: spoken.length, text: spoken }
         voiceReading.error = null
-        // 这一句回答同时推回浮标那个输入通道 (主人 2026-10-05: "回复结果也传此通道"): 问与答
-        // 落在同一块框里, 眼睛不必在浮标与页面之间来回找。通道没开着时应用那侧**攒着**, 下次张开
-        // 再补上, 所以这里不区分开没开
-        reportReply(spoken, session.id)
         // 不 await: 这是 emit 钩子, 念多久都不该把会话的事挡在后面
         return call('speak', { op: 'speak', text: spoken })
       })
@@ -5973,6 +6826,18 @@ function startReadAloud(ctx) {
 }
 
 /**
+ * 推给浮标那块框的正文
+ *
+ * **2000 字是留的余量**: 应用那侧 `BoxView.render` 的硬上限是 5000, 超过它光标会落到截断前的长度上
+ * 越界崩 (2026-10-14 真机: 对端那句长回答把应用每 100 秒崩一次)。框本来就是"看一眼回答"的地方,
+ * 截了不丢信息 —— 完整的还在会话里
+ */
+function replyChannelText(text) {
+  const line = String(text ?? '').trim()
+  return line.length <= 2000 ? line : `${line.slice(0, 2000)}…`
+}
+
+/**
  * 把一句回答推回浮标那个输入通道 (主人 2026-10-05: "回复结果也传此通道")
  *
  * 与「正在想」那一句同一个去向 (`overlay` 那一个通道方法), 只是 op=reply: 应用那侧把它画进那块
@@ -5982,7 +6847,7 @@ function startReadAloud(ctx) {
  * 时补上 (问完就去别的应用里是常态, 而"回来时回答不见了"是最让人恼火的那种丢)
  *
  * **`session` 是那条回复是哪一场发来的** (2026-10-06 加): 应用那一侧的回复框记住它, 之后从框里
- * 发出去的话就点名投回这一场 (见 `voiceTargetSession` 的第一条判据) —— 少了它, "接着回答"就只能
+ * 发出去的话就点名投回这一场 (见 `voiceTargetCandidates` 的第一条判据) —— 少了它, "接着回答"就只能
  * 靠那笔账撞运气
  *
  * 推不出去只记一行: 没装应用 / 应用在后台被杀掉的时候它本来就没有落脚处, 而不是一条要报给模型的错
@@ -6155,8 +7020,11 @@ async function writeBallPhase() {
  * 重启 (那本账随进程没了, 所以起来时先写一次空表), 以及进程被杀 (应用那边会看到宿主不在跑)
  */
 function startBallPhase(ctx) {
-  ctx.on('session/event', (session, event) => {
+  onSessionEvent(ctx, (session, event) => {
+    if (event.type !== 'turn/start' && event.type !== 'turn/end') return
     if (session.meta?.origin === 'subagent') return
+    // 投影追加的那些轮次不进球上那本账: 球上写着「正在想」的必须是**这台机器上真的在跑的那一场**
+    if (isPeerProjection(session)) return
     if (event.type === 'turn/start') {
       ballTurns.set(session.id, Date.now())
       void writeBallPhase()
@@ -6170,6 +7038,489 @@ function startBallPhase(ctx) {
   // **起来先写一次空表**: 宿主刚起来时账上一定是空的, 这一下顺手把应用里可能残留的旧字清掉
   // (应用重启时它自己也会读一次, 所以两份都对得上)
   void writeBallPhase()
+}
+
+/* ── 余额 (2026-10-16, 「看余额」那一档) ──────────────────────────────────── */
+
+/**
+ * 两次自己刷之间至少隔多久
+ *
+ * 每轮结束都去问一次账号缝等于把 Platform 那个接口当成心跳, 没有这个必要 —— 余额平时自己按这个
+ * 节拍走; 应用那边点「看余额」的请求记号不算在这里, 那一条是"主人正看着呢"
+ */
+const BALANCE_MIN_INTERVAL_MS = 3 * 60 * 1000
+
+/** 应用那个请求记号多久之内算数 (与应用那侧 `BalanceFile.requestFresh` 同一个数, 谁都不许单边改) */
+const BALANCE_REQUEST_FRESH_MS = 30 * 1000
+
+/** 一次取数最多等多久: 主人正看着那块框, 网络不通也要尽快给个答案 (失败也是答案) */
+const BALANCE_TIMEOUT_MS = 8000
+
+/**
+ * 起来之后补刷的那几拍 (毫秒)
+ *
+ * 这一拍挂在命令行覆盖层上, 而 llm 的目录是 web bundle 那边注册的 —— **起来那一刻
+ * `listConfigurableProviders()` 还是空的**, 于是"当前模型"认不出余额源, 第一份文件写出去的就是
+ * 「不支持」。2026-10-17 真机上量到的正是这个: 18:43:18 那一份是 `unsupported: true`, 八秒后
+ * 再刷一次就是 `¥343.61`。所以按这三拍各补一次, 而且**只补"上一拍答的是不支持"那一种** ——
+ * 与模型目录那条同一个理由 (见 [writeModelCatalog] 的 3 / 10 / 30 秒三次重试)
+ */
+const BALANCE_WARMUP_MS = [3000, 10000, 30000]
+
+/**
+ * 试 DeepSeek 登录账号那条缝的 route (dsh 的 `llm-deepseek-account` 注册的那一个)
+ *
+ * **`deepseek-official` 不在这里**, 这一点正是 2026-10-17 修掉的那条真 bug: 它是
+ * `llm-deepseek-api-key` 注册的那一条 (**API Key 路线**), 余额要拿那把 key 去问
+ * `api.deepseek.com/user/balance` —— 而 2026-10-16 那一版把它接在账号缝上, 而真机这台部署里**根本
+ * 没加载 `llm-deepseek-account`**, 于是 `balance.json` 上一直写着
+ * `this host has no deepseekAccount service`, 主人看到的就是「当前模型不支持查询余额」
+ */
+const ACCOUNT_ROUTES = ['deepseek-account']
+
+/** DeepSeek 系的 route: 拿不到 API Key 时这几个都试一次账号缝 (登录过的部署照样查得出来) */
+const DEEPSEEK_ROUTES = ['deepseek-official', 'deepseek-account', 'deepseek']
+
+/** 那条账号缝的服务名 */
+const ACCOUNT_SEAM = 'deepseekAccount'
+
+let balanceLastAt = 0
+
+/** 上一次写出去的那一份 (补刷那几拍要看它: 已经答出数了就不补) */
+let balanceLast = null
+
+/** 那份文件: `$DSH_HOME/lw/balance.json` (与应用那侧的 `BalanceFile` 是同一个约定) */
+function balancePath() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', 'balance.json') : null
+}
+
+/** 应用→宿主那条"现在刷一次"的记号: `$DSH_HOME/lw/balance-request.json` ({"at":ms}) */
+function balanceRequestPath() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', 'balance-request.json') : null
+}
+
+/** 那个记号是不是主人刚写的 (30 s 之内) */
+async function balanceRequested() {
+  const path = balanceRequestPath()
+  if (!path) return false
+  try {
+    const at = JSON.parse(await readFile(path, 'utf8'))?.at
+    const age = Date.now() - at
+    return typeof at === 'number' && age >= 0 && age <= BALANCE_REQUEST_FRESH_MS
+  } catch {
+    return false
+  }
+}
+
+/** 金额那一档: 定点两位的十进制字符串 (算出来的数也走它, 不把浮点的尾巴露给人) */
+function decimalOf(value) {
+  return Number.isFinite(value) ? (Math.round(value * 100) / 100).toFixed(2) : ''
+}
+
+/** 订阅制那几家给的是「已用百分比」, 取最紧的那一档算剩余 (几档窗口里最紧的才是主人要问的) */
+function quotaPercentOf(body) {
+  const limits = Array.isArray(body?.data?.limits) ? body.data.limits : []
+  const used = limits
+    .map((row) => Number(row?.TOKENS_LIMIT?.percentage))
+    .filter((value) => Number.isFinite(value))
+  if (used.length === 0) return null
+  return { kind: 'quota', percent: Math.round(100 - Math.max(...used)) }
+}
+
+/** 月之暗面双站同一份响应的读法 (国内站与国际站是两个独立账号体系) */
+function moonshotWallet(body) {
+  const data = body?.data
+  const value = data?.available_balance ?? data?.balance
+  if (value === undefined || value === null) return null
+  const bonus = data?.voucher_balance
+  return {
+    kind: 'money',
+    currency: 'CNY',
+    value: String(value),
+    bonus: bonus === undefined || bonus === null ? '' : String(bonus),
+  }
+}
+
+/** MiniMax 那份额度: 两个窗口 (本周期 / 本周) 里更紧的那个 */
+function minimaxQuota(body) {
+  const rows = Array.isArray(body?.model_remains) ? body.model_remains : []
+  const left = rows
+    .map((row) => Number(row?.current_interval_remaining_percent ?? row?.current_weekly_remaining_percent))
+    .filter((value) => Number.isFinite(value))
+  if (left.length === 0) return null
+  return { kind: 'quota', percent: Math.round(Math.min(...left)) }
+}
+
+/**
+ * 哪些提供方有"余额"这件事可查, 以及怎么问它 (2026-10-17 主人: 「能查看主流 llm 的余额」)
+ *
+ * 「看余额」仍然只查**当前模型**那一家 (2026-10-16 主人定的口径没变), 变的是那一家从只有 DeepSeek
+ * 官方扩到主流厂商: 一张表 + 一段通用取数, 蓝本是社区里把"哪家真能查、字段在哪"写全的那一份
+ * (pigeon189/zcode-fox-widget 的 `lib/vendors.mjs`, MIT)。**能查不到的一律回 `unsupported`,
+ * 绝不自己编一个 0 出来** —— OpenAI 那条 `dashboard/billing` 官方已经下线, 阿里云百炼 / 火山方舟 /
+ * 百度千帆 / 腾讯混元要云账号的 AK/SK (与推理用的 API Key 是两套凭据), Anthropic 只在 Admin API 上
+ * 给组织级成本报表, 硅基流动 2026-08-14 停掉了 `/user/info` —— 这几家都不进这张表
+ *
+ * 答案两档: `money` 是金额 (带币种与赠金), `quota` 是订阅制那种"还剩百分之多少"的额度窗口
+ *
+ * 命中判据两条, **baseURL 的 host 优先**: route 名是用户自己起的 (自建 / 中转站对不上), 而地址骗
+ * 不了人 —— 只要 baseURL 的主机是 api.moonshot.cn, 那一条路由叫什么查的都是月之暗面
+ *
+ * 以后哪一家有了余额接口, 在这张表里加一行就行 (取数的样子照下面那几条写)
+ */
+const BALANCE_SOURCES = [
+  {
+    label: 'DeepSeek',
+    hosts: ['api.deepseek.com'],
+    routes: ['deepseek-official', 'deepseek'],
+    url: 'https://api.deepseek.com/user/balance',
+    parse: (body) => {
+      const wallets = Array.isArray(body?.balance_infos) ? body.balance_infos : []
+      const wallet = wallets.find((row) => row?.currency === 'CNY') ?? wallets[0]
+      if (wallet === undefined) return null
+      return {
+        kind: 'money',
+        currency: wallet.currency ?? 'CNY',
+        value: String(wallet.total_balance ?? ''),
+        bonus: String(wallet.granted_balance ?? ''),
+      }
+    },
+  },
+  {
+    label: 'Moonshot',
+    hosts: ['api.moonshot.cn'],
+    routes: ['moonshot', 'moonshot-cn', 'kimi'],
+    url: 'https://api.moonshot.cn/v1/users/me/balance',
+    parse: moonshotWallet,
+  },
+  {
+    label: 'Moonshot (intl)',
+    hosts: ['api.moonshot.ai'],
+    routes: ['moonshot-intl'],
+    url: 'https://api.moonshot.ai/v1/users/me/balance',
+    parse: moonshotWallet,
+  },
+  {
+    label: 'OpenRouter',
+    hosts: ['openrouter.ai'],
+    routes: ['openrouter'],
+    url: 'https://openrouter.ai/api/v1/credits',
+    parse: (body) => {
+      // 这一家给两个独立的数 (买过多少 / 用过多少), 余额是算出来的那个差
+      const credits = Number(body?.data?.total_credits)
+      const usage = Number(body?.data?.total_usage)
+      if (!Number.isFinite(credits) || !Number.isFinite(usage)) return null
+      return { kind: 'money', currency: 'USD', value: decimalOf(credits - usage) }
+    },
+  },
+  {
+    label: 'StepFun',
+    hosts: ['api.stepfun.com'],
+    routes: ['stepfun'],
+    url: 'https://api.stepfun.com/v1/accounts',
+    parse: (body) => {
+      const value = body?.balance ?? body?.data?.balance
+      if (value === undefined || value === null) return null
+      return { kind: 'money', currency: 'CNY', value: String(value) }
+    },
+  },
+  {
+    label: 'Novita',
+    hosts: ['api.novita.ai'],
+    routes: ['novita'],
+    url: 'https://api.novita.ai/v3/user/balance',
+    parse: (body) => {
+      // 这一家的余额以 1e-4 美元为单位 (官方口径), 换算成元那两位才给人看
+      const raw = Number(body?.availableBalance)
+      if (!Number.isFinite(raw)) return null
+      return { kind: 'money', currency: 'USD', value: decimalOf(raw / 10000) }
+    },
+  },
+  {
+    label: 'PPIO',
+    hosts: ['api.ppio.com'],
+    routes: ['ppio'],
+    url: 'https://api.ppio.com/openapi/v1/billing/balance/detail',
+    parse: (body) => {
+      const value = body?.availableBalance ?? body?.data?.availableBalance
+      if (value === undefined || value === null) return null
+      return { kind: 'money', currency: 'CNY', value: String(value) }
+    },
+  },
+  {
+    label: 'Zhipu GLM',
+    hosts: ['open.bigmodel.cn'],
+    routes: ['zai', 'zhipu', 'glm'],
+    url: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit',
+    // 智谱这一家认裸 key, 前面**不带** Bearer (照那一份蓝本的 auth 模板, 它没给任何一家写特殊头)
+    headers: (key) => ({ Authorization: key }),
+    parse: quotaPercentOf,
+  },
+  {
+    label: 'Z.ai GLM',
+    hosts: ['api.z.ai'],
+    routes: ['zai-intl', 'zhipu-intl'],
+    url: 'https://api.z.ai/api/monitor/usage/quota/limit',
+    headers: (key) => ({ Authorization: key }),
+    parse: quotaPercentOf,
+  },
+  {
+    label: 'MiniMax',
+    hosts: ['api.minimaxi.com'],
+    routes: ['minimax'],
+    url: 'https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains',
+    parse: minimaxQuota,
+  },
+  {
+    label: 'MiniMax (intl)',
+    hosts: ['api.minimax.io'],
+    routes: ['minimax-intl'],
+    url: 'https://api.minimax.io/v1/api/openplatform/coding_plan/remains',
+    parse: minimaxQuota,
+  },
+]
+
+/** 一条地址的主机名 (取不出来就是空串: 自建端点写的可能是半截地址) */
+function hostOf(url) {
+  try {
+    return new URL(url).host.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+/** 这一次查哪一家: host 优先, 其次是 route 名 */
+function balanceSourceFor(provider, baseURL) {
+  const host = hostOf(baseURL)
+  const route = String(provider ?? '').toLowerCase()
+  return BALANCE_SOURCES.find((source) => host !== '' && source.hosts.includes(host))
+    ?? BALANCE_SOURCES.find((source) => source.routes.includes(route))
+    ?? null
+}
+
+/**
+ * 某条路由的 profile (baseURL / apiKeyEnv / displayName)
+ *
+ * 段名与那一层路径**从适配器自己登记的目录里读**, 不写死 (与「添加模型」那条同一个来源, 部署换过
+ * 行 id 也对得上); 值从 `settings.describe()` 里取 —— 那是这份配置的 live 值
+ *
+ * 路径有两档, 都得认: pi-ai 那几家是 `['providers']` (再按 route 取一层), 而 dsh 自家那几家
+ * (`llm-deepseek`) 登记的是**空路径** —— 那一段本身就是 profile
+ */
+function providerProfile(ctx, provider) {
+  const entry = (ctx.get('llm')?.listConfigurableProviders?.() ?? []).find((row) => row?.provider === provider)
+  if (entry === undefined) return null
+  const section = (ctx.get('settings')?.describe?.() ?? []).find((row) => row.ns === entry.settingsNs)
+  const path = Array.isArray(entry.settingsPath) ? entry.settingsPath : []
+  let node = section?.value
+  for (const key of path) {
+    if (node === null || node === undefined || typeof node !== 'object') return null
+    node = node[key]
+  }
+  const profile = path.length === 0 || node === null || node === undefined ? node : node[provider]
+  return profile !== undefined && profile !== null && typeof profile === 'object' ? profile : null
+}
+
+/** 给人看的名字: 优先适配器自己登记的那个 displayName, 没有就用表里写的那一个 */
+function profileLabel(profile, fallback) {
+  return typeof profile?.displayName === 'string' && profile.displayName !== '' ? profile.displayName : fallback
+}
+
+/**
+ * 那条路由的 API Key, 以及"为什么没有"
+ *
+ * 名字挂在 profile 的 apiKeyEnv 上, 值住在凭据缝里 (与 dsh 每轮请求取的是同一份)。没有的时候
+ * [problem] 是一句能照着修的人话 —— 它会被拼进失败那句原话, 于是一次查询就能看出卡在哪一环
+ */
+async function providerKey(ctx, profile) {
+  if (profile === null) return { key: '', problem: 'this host knows no profile for that route' }
+  const ref = typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : ''
+  if (ref === '') return { key: '', problem: 'that route names no credential reference' }
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined || typeof credentials.resolve !== 'function') {
+    return { key: '', problem: 'this host has no credentials service' }
+  }
+  const resolved = await credentials.resolve(ref)
+  if (typeof resolved?.value !== 'string' || resolved.value === '') {
+    return { key: '', problem: `the credential ${ref} is not configured on this host` }
+  }
+  return { key: resolved.value, problem: '' }
+}
+
+/**
+ * 一次真正的取数
+ *
+ * 失败一律抛, 调用方把那句话写进 [payload].reason —— 应用那一侧只把原话递上去, 不自己编一句
+ */
+async function readWallet(source, key) {
+  const response = await fetch(source.url, {
+    headers: {
+      Accept: 'application/json',
+      ...(typeof source.headers === 'function' ? source.headers(key) : { Authorization: `Bearer ${key}` }),
+    },
+    signal: AbortSignal.timeout(BALANCE_TIMEOUT_MS),
+  })
+  if (!response.ok) throw new Error(`${source.label} answered HTTP ${response.status}`)
+  const wallet = source.parse(await response.json())
+  if (wallet === null) throw new Error(`${source.label} answered something this build cannot read`)
+  return wallet
+}
+
+/**
+ * DeepSeek 登录账号那一条: 走它的账号缝 (`deepseekAccount.getBalance`, 与 GUI 里那个账户余额同源)
+ *
+ * 这条**不需要 API Key**, 所以它不进 [BALANCE_SOURCES] 那张 HTTP 表。它只是 DeepSeek 系的**兜底**:
+ * 手上有 `DEEPSEEK_API_KEY` 时走的是 HTTP 那一条 (见 [refreshBalance])。部署里没加载这条缝时
+ * (真机上量到的正是这一档) 回一句「不支持」, 绝不编一个数出来
+ *
+ * @param ctx 宿主上下文 (拿服务与 locale)
+ * @param payload 正在攒的那份答案 (就地改写)
+ * @param note 另一条路为什么也没走通 —— 拼在"没有那条缝"后面, 一句原话要说清卡在哪一环
+ */
+async function readAccountBalance(ctx, payload, note = '') {
+  const account = ctx.get(ACCOUNT_SEAM)
+  if (account === undefined || typeof account.getBalance !== 'function') {
+    // 那条缝整个不在: 对主人来说与"不支持"是一回事 (这一档永远答不出数)
+    // [note] 是"另一条路为什么也没走通", 拼在后面 —— 失败那句原话要能一次说清卡在哪
+    payload.unsupported = true
+    payload.reason = `this host has no ${ACCOUNT_SEAM} service${note === '' ? '' : `; ${note}`}`
+    return
+  }
+  // client 元数据与 GUI 那一侧同一个形状 (version / locale / 时区偏移): 凭据不过这一层
+  const client = {
+    version: process.env.DSH_CLIENT_VERSION || 'luwi',
+    locale: ctx.locale?.getSnapshot?.()?.active || 'zh-CN',
+    timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+  }
+  const result = await account.getBalance(client)
+  if (result === null) {
+    payload.reason = 'the DeepSeek account is not signed in on this host'
+  } else if (result.status !== 'ready' || !Array.isArray(result.value) || result.value.length === 0) {
+    payload.reason = 'the account service reported a failure'
+  } else {
+    payload.ok = true
+    payload.currency = result.value[0]?.currency ?? ''
+    payload.value = result.value[0]?.balance ?? ''
+    payload.bonus = Array.isArray(result.bonusWallets) ? (result.bonusWallets[0]?.balance ?? '') : ''
+  }
+}
+
+/**
+ * 把"当前模型那一边的余额"写给应用
+ *
+ * 数只有宿主拿得到, 而球与那块文本框在应用进程里 —— 所以还是那条老路: **文件即真相** (与
+ * ball-phase.json 同一条), 原子写 (`.tmp` + rename), 应用用 inotify 盯着那个目录
+ *
+ * 四种结果各说各的话, **绝不编 0**:
+ * - 主流厂商那几家 → 读那条路由的 baseURL 与凭据, 按 [BALANCE_SOURCES] 取一次数 (DeepSeek 官方
+ *   这一档就是这么查的: 它是 `llm-deepseek-api-key` 那条路线, 手上有 `DEEPSEEK_API_KEY`)
+ * - DeepSeek 系而手上没有 API Key → 退到登录账号那条缝 (`deepseekAccount`)
+ * - 其余主流厂商 → 读那条路由的 baseURL 与凭据, 按 [BALANCE_SOURCES] 取一次数
+ * - 不在表里 (或连"当前模型"都取不到) → `unsupported: true`, 应用说「当前模型不支持查询余额」
+ * - 取数本身失败 (没配 key / 网络 / 那家答的东西读不出来) → `ok: false` + 一句原话, 应用照念
+ *
+ * @param ctx 宿主上下文 (拿服务与 locale)
+ * @param force 请求记号那一路传 true —— "主人正看着呢"不吃节流
+ */
+async function refreshBalance(ctx, force = false) {
+  const now = Date.now()
+  if (!force && now - balanceLastAt < BALANCE_MIN_INTERVAL_MS) return
+  balanceLastAt = now
+  const path = balancePath()
+  if (path === null) return
+  const payload = {
+    v: 2, at: now, ok: false, unsupported: false, provider: '', label: '', model: '',
+    kind: '', currency: '', value: '', bonus: '', percent: 0, reason: '',
+  }
+  try {
+    // 先认当前模型: 没有这条缝 / 取不到, 都是"不支持查询当前模型"那一档
+    const defaults = ctx.get('agentDefaultModel')
+    const current = typeof defaults?.currentSelection === 'function' ? defaults.currentSelection() : null
+    const provider = typeof current?.provider === 'string' ? current.provider : ''
+    payload.provider = provider
+    payload.model = typeof current?.model === 'string' ? current.model : ''
+    if (provider === '') {
+      payload.unsupported = true
+      payload.reason = 'the current model is unknown on this host'
+    } else {
+      const profile = await providerProfile(ctx, provider)
+      const source = balanceSourceFor(provider, profile?.baseURL)
+      if (source === null && !DEEPSEEK_ROUTES.includes(provider)) {
+        payload.unsupported = true
+        payload.reason = `no balance source for the current model (${provider}/${payload.model})`
+      } else if (source === null) {
+        // 表里没有这一家, 但它是 DeepSeek 系的: 还有登录账号那一条路
+        payload.kind = 'money'
+        payload.label = profileLabel(profile, 'DeepSeek')
+        await readAccountBalance(ctx, payload, 'that route is not in the balance table either')
+      } else {
+        payload.label = profileLabel(profile, source.label)
+        const { key, problem } = await providerKey(ctx, profile)
+        if (key !== '') {
+          const wallet = await readWallet(source, key)
+          payload.ok = true
+          payload.kind = wallet.kind
+          payload.currency = wallet.currency ?? ''
+          payload.value = wallet.value ?? ''
+          payload.bonus = wallet.bonus ?? ''
+          payload.percent = wallet.percent ?? 0
+        } else if (DEEPSEEK_ROUTES.includes(provider)) {
+          // 手边没有那把 key: DeepSeek 系还有那条账号缝 (与 GUI 里的账户余额同源)
+          payload.kind = 'money'
+          payload.label = profileLabel(profile, 'DeepSeek')
+          await readAccountBalance(ctx, payload, `no API key: ${problem}`)
+        } else {
+          payload.reason = `this host holds no API key for ${provider}: ${problem}`
+        }
+      }
+    }
+  } catch (error) {
+    payload.reason = `fetching the balance failed: ${error?.message ?? error}`
+  }
+  // 补刷那几拍要看"上一拍答的是什么": 这一份在任何一条返回路径上都要记下来
+  balanceLast = payload
+  const temporary = `${path}.tmp`
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(temporary, `${JSON.stringify(payload)}\n`)
+    await rename(temporary, path)
+  } catch (error) {
+    console.warn(`luwi-channel: the balance file was not written: ${error?.message ?? error}`)
+  }
+}
+
+/**
+ * 余额那条喂给应用的四条触发
+ *
+ * 起来刷一次 (应用的文本框一开就有数可看), **起来后按 [BALANCE_WARMUP_MS] 补几拍** (起来那一刻
+ * llm 的目录可能还没注册完, 那时只能答"不支持"), 每轮结束刷一次 (它本来就是"用完顺手看一眼"的数),
+ * 以及应用那个请求记号: 自己一条 3 s 的轮询盯着它 (与应用侧那条插件轮询同一个节拍, unref 掉不挡退出)
+ */
+function startBalance(ctx) {
+  onSessionEvent(ctx, (session, event) => {
+    if (event.type !== 'turn/end') return
+    if (session.meta?.origin === 'subagent') return
+    // 对端投影每折一条回答都会发一个 turn/end: 拿它当"这一轮用完了"去问一次余额是白跑的桥往返
+    if (isPeerProjection(session)) return
+    void refreshBalance(ctx)
+  })
+  const timer = setInterval(() => {
+    void balanceRequested().then((wanted) => {
+      if (wanted) void refreshBalance(ctx, true)
+    })
+  }, PLUGIN_POLL_MS)
+  if (typeof timer.unref === 'function') timer.unref()
+  void refreshBalance(ctx)
+  // 起来那一下可能太早 (llm 的目录那时还没注册完), 按这几拍补一补 —— 见 [BALANCE_WARMUP_MS]
+  for (const delay of BALANCE_WARMUP_MS) {
+    const warmup = setTimeout(() => {
+      if (balanceLast !== null && balanceLast.unsupported !== true) return
+      void refreshBalance(ctx, true)
+    }, delay)
+    if (typeof warmup.unref === 'function') warmup.unref()
+  }
 }
 
 /**

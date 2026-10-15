@@ -54,6 +54,7 @@ internal object PluginInstaller {
             val manifest = read(context, prepared)
             checkSignature(context, prepared, manifest, developerMode)
             checkInlineTrust(context, manifest)
+            checkSandboxScopes(context, manifest)
             PluginPaths.checkPackage(manifest, prepared)?.let { problem -> throw IllegalArgumentException(problem) }
             checkUpgrade(context, manifest)
             // 升级之前的那个版本: 它要是绑着伴侣 APK 而新这份不绑了, 记一笔 (界面上说"可以卸掉它了")
@@ -215,6 +216,26 @@ internal object PluginInstaller {
                 "这个作者不在白名单里 (指纹 $identity) —— inline 域只对白名单作者开放," +
                     " 主人手工把它写进 \$DSH_HOME/plugins/${PluginTrust.FILE} 才放行",
             )
+        }
+    }
+
+    /**
+     * G3 能力沙盒 (2026-10-12): 声明的 `files.read:` 前缀不许碰 Luwi 自己的私有目录
+     *
+     * 装的时候就拒, 而不是每次调用才拒 —— "要读 Luwi 的私有目录"对插件是一件没有正当用途的事
+     * (它自己那份数据有 `files.own` 与 `store` 两条路)。运行时的 [PluginFilesReadBoundary.resolve]
+     * 还有一遍兜底: 前缀装的那一刻可能还不存在, 软链也是运行时才看得清的
+     */
+    private fun checkSandboxScopes(context: Context, manifest: PluginManifest) {
+        val dataDir = runCatching { context.dataDir.canonicalFile }.getOrNull() ?: return
+        manifest.declared.filter { it.startsWith("files.read:") }.forEach { declared ->
+            val prefix = declared.removePrefix("files.read:")
+            val canonicalPrefix = runCatching { File(prefix).canonicalFile }.getOrNull() ?: return@forEach
+            if (canonicalPrefix.startsWith(dataDir)) {
+                throw IllegalArgumentException(
+                    "$declared 落在 Luwi 自己的私有目录里 (${dataDir.path}), files.read 的范围不包括它",
+                )
+            }
         }
     }
 

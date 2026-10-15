@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -74,8 +75,11 @@ import io.github.yuloong07star.luwi.lock.LockSecretData
 import io.github.yuloong07star.luwi.lock.LockSetting
 import io.github.yuloong07star.luwi.tool.LwCamera
 import io.github.yuloong07star.luwi.tool.LwAutomation
+import io.github.yuloong07star.luwi.tool.LwLinux
+import io.github.yuloong07star.luwi.tool.LwModel
 import io.github.yuloong07star.luwi.tool.LwQuick
 import io.github.yuloong07star.luwi.tool.VideoLooks
+import io.github.yuloong07star.luwi.tool.bytes
 import io.github.yuloong07star.luwi.voice.VoiceInbox
 import io.github.yuloong07star.luwi.constants.UiSpacing
 import io.github.yuloong07star.luwi.host.AppSkills
@@ -83,7 +87,9 @@ import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
 import io.github.yuloong07star.luwi.plugin.CompanionApk
 import io.github.yuloong07star.luwi.plugin.PluginDownload
+import io.github.yuloong07star.luwi.plugin.PluginIndex
 import io.github.yuloong07star.luwi.overlay.BallGeometry
+import io.github.yuloong07star.luwi.overlay.BallSize
 import io.github.yuloong07star.luwi.overlay.BallFeel
 import io.github.yuloong07star.luwi.overlay.BallSpot
 import io.github.yuloong07star.luwi.overlay.BallSwitch
@@ -108,6 +114,8 @@ import io.github.yuloong07star.luwi.scaffolds.LazyColumn
 import io.github.yuloong07star.luwi.scaffolds.SectionSmallTitle
 import io.github.yuloong07star.luwi.scaffolds.SectionTitle
 import io.github.yuloong07star.luwi.scaffolds.SuperTextField
+import io.github.yuloong07star.luwi.sync.ModeModel
+import io.github.yuloong07star.luwi.sync.SyncSetting
 import io.github.yuloong07star.luwi.theme.MonetKeyColorOptions
 import io.github.yuloong07star.luwi.theme.ThemeSettings
 import io.github.yuloong07star.luwi.theme.ThemeStore
@@ -156,6 +164,7 @@ import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.More
+import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -263,6 +272,11 @@ fun SettingsScreen() {
     val context = LocalContext.current
     val settings = ThemeStore.current
     val scrollBehavior = MiuixScrollBehavior()
+    // 右上角那个刷新 (2026-10-17 主人): 这一页里那些"进页面读一次"的设置都活在下面那棵子树的
+    // remember 里 (同步 / 视频模式模型 / 模型目录 / 各个偏好), 加一下这个数就把它们整棵重建一遍 ——
+    // 每个 remember 重新去读文件, 每个 LaunchedEffect(Unit) 重新跑一次。收起来的那几段是
+    // rememberSaveable, 刷新不动它 (那记的是"看哪儿", 不是数据)
+    var reload by remember { mutableIntStateOf(0) }
     // ⋮ 里那三件事 (检测更新 / 捐赠 / 关于) 共用这一个"现在开着哪一页"的记号, null = 都没开
     // 同一刻只画一个对话框, 见 AboutDialogs 的文件头
     var about by remember { mutableStateOf<AboutPage?>(null) }
@@ -293,7 +307,23 @@ fun SettingsScreen() {
                 },
                 // 这一页里"不用常驻"的事全收在这里: 检测更新 / 捐赠 / 关于 / 要重启 host 才生效的改动
                 // 页面上就不必每个面板各放一个按钮 (2026-10-08 加了前三条, 见开发计划 2.4 与 2.14)
+                // **G1-D 那几行「打开 <对端名>」2026-10-17 撤掉了** (主人: "没用就删掉"): 它载入的
+                // 是对端名片里手填的 publicUrl, 而电脑侧填的是回环地址 —— 手机上 127.0.0.1 指的是
+                // 自己 (实测那台真机只在 127.0.0.1:3080 上听本机 host, 也没有 adb reverse 隧道),
+                // 点开必白页; 真要看/操作电脑那份 GUI, 走浏览器与「（PC）」影子工作区那两条路
+                // (插件侧名片与 `/sync peers` 不受影响, 那两样是 G1-D 的读数面)
                 actions = {
+                    // 「更多」左边那一个刷新 (2026-10-17 主人): 把这一页的设置当场重读一遍, 不必退出去
+                    // 再进来 —— 改完**要重启 host** 的那几项仍然要重启 (那是另一件事, 仍在右边那个 ⋮ 里)
+                    IconButton(onClick = {
+                        reload += 1
+                        Toast.makeText(context, R.string.settings_refreshed, Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(
+                            imageVector = MiuixIcons.Refresh,
+                            contentDescription = stringResource(R.string.settings_refresh),
+                        )
+                    }
                     OverlayIconDropdownMenu(
                         entry = DropdownEntry(
                             items = listOf(
@@ -338,277 +368,317 @@ fun SettingsScreen() {
             )
         },
     ) { innerPadding ->
-        LazyColumn(
-            contentPadding = innerPadding,
-            scrollBehavior = scrollBehavior,
-        ) {
-            // **省电那一段单独排在第一个** (主人 2026-10-08: "省电模式单独拿出来放第一排"): 它原本是
-            // 「唤醒词」里的三行, 而"现在别听我说话"这件事与唤醒词本身是两笔账 —— 一个是许可, 一个是
-            // 此刻的开关 (见 [PowerItems])。它自己一段之后, 要静音一次不必先展开唤醒词那一段
-            settingsSection(
-                key = "power",
-                title = R.string.settings_section_power,
-                summary = R.string.settings_section_power_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
+        key(reload) {
+            LazyColumn(
+                contentPadding = innerPadding,
+                scrollBehavior = scrollBehavior,
             ) {
-                Card { PowerItems() }
-            }
+                // **省电那一段单独排在第一个** (主人 2026-10-08: "省电模式单独拿出来放第一排"): 它原本是
+                // 「唤醒词」里的三行, 而"现在别听我说话"这件事与唤醒词本身是两笔账 —— 一个是许可, 一个是
+                // 此刻的开关 (见 [PowerItems])。它自己一段之后, 要静音一次不必先展开唤醒词那一段
+                settingsSection(
+                    key = "power",
+                    title = R.string.settings_section_power,
+                    summary = R.string.settings_section_power_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { PowerItems() }
+                }
 
-            // 两层分组的第一层 (2026-10-08 主人: "优化设置页排版"): 上面这一组是"天天要碰的",
-            // 下面那一组是"装完之后偶尔来调一次的能力", 而权限那一段仍然单独放在最后
-            item { GroupTitle(stringResource(R.string.settings_group_common)) }
+                // 两层分组的第一层 (2026-10-08 主人: "优化设置页排版"): 上面这一组是"天天要碰的",
+                // 下面那一组是"装完之后偶尔来调一次的能力", 而权限那一段仍然单独放在最后
+                item { GroupTitle(stringResource(R.string.settings_group_common)) }
 
-            settingsSection(
-                key = "appearance",
-                title = R.string.settings_section_appearance,
-                summary = R.string.settings_section_appearance_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Column {
-                    TabRow(
-                        tabs = themeModes.map { stringResource(it) },
-                        selectedTabIndex = settings.mode.coerceIn(0, themeModes.lastIndex),
-                        onTabSelected = { ThemeStore.update(settings.copy(mode = it)) },
-                    )
-                    Spacer(modifier = Modifier.height(UiSpacing.ContentVertical))
-                    Card {
-                        SwitchPreference(
-                            title = stringResource(R.string.settings_monet),
-                            summary = stringResource(R.string.settings_monet_summary),
-                            checked = settings.monet,
-                            onCheckedChange = { ThemeStore.update(settings.copy(monet = it)) },
+                settingsSection(
+                    key = "appearance",
+                    title = R.string.settings_section_appearance,
+                    summary = R.string.settings_section_appearance_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Column {
+                        TabRow(
+                            tabs = themeModes.map { stringResource(it) },
+                            selectedTabIndex = settings.mode.coerceIn(0, themeModes.lastIndex),
+                            onTabSelected = { ThemeStore.update(settings.copy(mode = it)) },
                         )
-                        AnimatedVisibility(settings.monet) {
-                            OverlayDropdownPreference(
-                                title = stringResource(R.string.settings_monet_key_color),
-                                summary = stringResource(R.string.settings_monet_key_color_summary),
-                                items = MonetKeyColorOptions,
-                                selectedIndex = settings.seed.coerceIn(0, MonetKeyColorOptions.lastIndex),
-                                onSelectedIndexChange = { ThemeStore.update(settings.copy(seed = it)) },
+                        Spacer(modifier = Modifier.height(UiSpacing.ContentVertical))
+                        Card {
+                            SwitchPreference(
+                                title = stringResource(R.string.settings_monet),
+                                summary = stringResource(R.string.settings_monet_summary),
+                                checked = settings.monet,
+                                onCheckedChange = { ThemeStore.update(settings.copy(monet = it)) },
                             )
-                        }
-                        AnimatedVisibility(settings.monet && settings.seed > 0) {
-                            Column {
+                            AnimatedVisibility(settings.monet) {
                                 OverlayDropdownPreference(
-                                    title = stringResource(R.string.settings_monet_palette_style),
-                                    summary = stringResource(R.string.settings_monet_palette_style_summary),
-                                    items = paletteStyles,
-                                    selectedIndex = settings.palette.coerceIn(0, paletteStyles.lastIndex),
-                                    onSelectedIndexChange = { ThemeStore.update(settings.copy(palette = it)) },
-                                )
-                                OverlayDropdownPreference(
-                                    title = stringResource(R.string.settings_monet_color_spec),
-                                    summary = stringResource(R.string.settings_monet_color_spec_summary),
-                                    items = colorSpecs,
-                                    selectedIndex = settings.spec.coerceIn(0, colorSpecs.lastIndex),
-                                    onSelectedIndexChange = { ThemeStore.update(settings.copy(spec = it)) },
+                                    title = stringResource(R.string.settings_monet_key_color),
+                                    summary = stringResource(R.string.settings_monet_key_color_summary),
+                                    items = MonetKeyColorOptions,
+                                    selectedIndex = settings.seed.coerceIn(0, MonetKeyColorOptions.lastIndex),
+                                    onSelectedIndexChange = { ThemeStore.update(settings.copy(seed = it)) },
                                 )
                             }
+                            AnimatedVisibility(settings.monet && settings.seed > 0) {
+                                Column {
+                                    OverlayDropdownPreference(
+                                        title = stringResource(R.string.settings_monet_palette_style),
+                                        summary = stringResource(R.string.settings_monet_palette_style_summary),
+                                        items = paletteStyles,
+                                        selectedIndex = settings.palette.coerceIn(0, paletteStyles.lastIndex),
+                                        onSelectedIndexChange = { ThemeStore.update(settings.copy(palette = it)) },
+                                    )
+                                    OverlayDropdownPreference(
+                                        title = stringResource(R.string.settings_monet_color_spec),
+                                        summary = stringResource(R.string.settings_monet_color_spec_summary),
+                                        items = colorSpecs,
+                                        selectedIndex = settings.spec.coerceIn(0, colorSpecs.lastIndex),
+                                        onSelectedIndexChange = { ThemeStore.update(settings.copy(spec = it)) },
+                                    )
+                                }
+                            }
+                            SwitchPreference(
+                                title = stringResource(R.string.settings_squircle),
+                                summary = stringResource(R.string.settings_squircle_summary),
+                                checked = settings.squircle,
+                                onCheckedChange = { ThemeStore.update(settings.copy(squircle = it)) },
+                            )
                         }
+                    }
+                }
+
+                settingsSection(
+                    key = "navigation",
+                    title = R.string.settings_section_navigation,
+                    summary = R.string.settings_section_navigation_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card {
+                        OverlayDropdownPreference(
+                            title = stringResource(R.string.settings_transition),
+                            summary = stringResource(R.string.settings_transition_summary),
+                            items = transitionStyles.map { stringResource(it) },
+                            selectedIndex = settings.transition.coerceIn(0, transitionStyles.lastIndex),
+                            onSelectedIndexChange = { ThemeStore.update(settings.copy(transition = it)) },
+                        )
                         SwitchPreference(
-                            title = stringResource(R.string.settings_squircle),
-                            summary = stringResource(R.string.settings_squircle_summary),
-                            checked = settings.squircle,
-                            onCheckedChange = { ThemeStore.update(settings.copy(squircle = it)) },
+                            title = stringResource(R.string.settings_swipe_back),
+                            summary = stringResource(R.string.settings_swipe_back_summary),
+                            checked = settings.swipeBack,
+                            onCheckedChange = { ThemeStore.update(settings.copy(swipeBack = it)) },
                         )
                     }
                 }
-            }
 
-            settingsSection(
-                key = "navigation",
-                title = R.string.settings_section_navigation,
-                summary = R.string.settings_section_navigation_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card {
-                    OverlayDropdownPreference(
-                        title = stringResource(R.string.settings_transition),
-                        summary = stringResource(R.string.settings_transition_summary),
-                        items = transitionStyles.map { stringResource(it) },
-                        selectedIndex = settings.transition.coerceIn(0, transitionStyles.lastIndex),
-                        onSelectedIndexChange = { ThemeStore.update(settings.copy(transition = it)) },
-                    )
-                    SwitchPreference(
-                        title = stringResource(R.string.settings_swipe_back),
-                        summary = stringResource(R.string.settings_swipe_back_summary),
-                        checked = settings.swipeBack,
-                        onCheckedChange = { ThemeStore.update(settings.copy(swipeBack = it)) },
-                    )
+                settingsSection(
+                    key = "channel",
+                    title = R.string.settings_section_channel,
+                    summary = R.string.settings_section_channel_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { ChannelItems() }
                 }
-            }
 
-            settingsSection(
-                key = "channel",
-                title = R.string.settings_section_channel,
-                summary = R.string.settings_section_channel_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { ChannelItems() }
-            }
+                // 浮标 / 唤醒词 / 说话 三段的顺序 (2026-10-08 一起排的): 先"球在不在", 再"喊一声", 最后
+                // "回答怎么念" —— 这正是第一次用的时候会依次碰到的三件事
+                settingsSection(
+                    key = "ball",
+                    title = R.string.settings_section_ball,
+                    summary = R.string.settings_section_ball_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { BallItems() }
+                }
 
-            // 浮标 / 唤醒词 / 说话 三段的顺序 (2026-10-08 一起排的): 先"球在不在", 再"喊一声", 最后
-            // "回答怎么念" —— 这正是第一次用的时候会依次碰到的三件事
-            settingsSection(
-                key = "ball",
-                title = R.string.settings_section_ball,
-                summary = R.string.settings_section_ball_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { BallItems() }
-            }
+                settingsSection(
+                    key = "wake",
+                    title = R.string.settings_section_wake,
+                    summary = R.string.settings_section_wake_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { WakeItems() }
+                }
 
-            settingsSection(
-                key = "wake",
-                title = R.string.settings_section_wake,
-                summary = R.string.settings_section_wake_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { WakeItems() }
-            }
+                settingsSection(
+                    key = "speak",
+                    title = R.string.settings_section_speak,
+                    summary = R.string.settings_section_speak_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { SpeakItems() }
+                }
 
-            settingsSection(
-                key = "speak",
-                title = R.string.settings_section_speak,
-                summary = R.string.settings_section_speak_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { SpeakItems() }
-            }
+                // 「模式与模型」那一段 (3.0.2 需求 2) 已并进「视频模式」那一段 (2026-10-16): 视频模式用
+                // 哪一个模型、走哪个端点, 与那台相机的参数是同一件事的两个面, 分两段反而要人两头找
 
-            item { GroupTitle(stringResource(R.string.settings_group_ability)) }
+                item { GroupTitle(stringResource(R.string.settings_group_ability)) }
 
-            settingsSection(
-                key = "accessibility",
-                title = R.string.settings_section_accessibility,
-                summary = R.string.settings_section_accessibility_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { AccessibilityItems() }
-            }
+                settingsSection(
+                    key = "accessibility",
+                    title = R.string.settings_section_accessibility,
+                    summary = R.string.settings_section_accessibility_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { AccessibilityItems() }
+                }
 
-            settingsSection(
-                key = "notifications",
-                title = R.string.settings_section_notifications,
-                summary = R.string.settings_section_notifications_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { NotificationItems() }
-            }
+                settingsSection(
+                    key = "notifications",
+                    title = R.string.settings_section_notifications,
+                    summary = R.string.settings_section_notifications_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { NotificationItems() }
+                }
 
-            settingsSection(
-                key = "screenshot",
-                title = R.string.settings_section_screenshot,
-                summary = R.string.settings_section_screenshot_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { ScreenshotItems() }
-            }
+                settingsSection(
+                    key = "screenshot",
+                    title = R.string.settings_section_screenshot,
+                    summary = R.string.settings_section_screenshot_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { ScreenshotItems() }
+                }
 
-            settingsSection(
-                key = "look",
-                title = R.string.settings_section_look,
-                summary = R.string.settings_section_look_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { LookItems() }
-            }
+                settingsSection(
+                    key = "look",
+                    title = R.string.settings_section_look,
+                    summary = R.string.settings_section_look_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    // 视频模式那几件事都住这一段 (2026-10-16 主人: "视频模式选择的 llm 的 url, api 等放
+                    // 到 luwi 的视频模式设置里"): **用哪一个模型说话**在最上面 (它原来是单独一段
+                    // 「模式与模型」, 归并过来是因为"视频模式用哪个模型"就是这一段的事), 后面才是那台
+                    // 相机自己的参数 (抓几张 / 隔多久 / 多大 / 要不要拼网格)
+                    Card {
+                        Column {
+                            ModeItems()
+                            LookItems()
+                        }
+                    }
+                }
 
-            settingsSection(
-                key = "ocr",
-                title = R.string.settings_section_ocr,
-                summary = R.string.settings_section_ocr_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { OcrItems() }
-            }
+                settingsSection(
+                    key = "ocr",
+                    title = R.string.settings_section_ocr,
+                    summary = R.string.settings_section_ocr_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { OcrItems() }
+                }
 
-            // 锁屏这一段是批次 5 的落点 (点亮屏幕 + 按主人自己录的那一条解锁); 自动指令那一段仍是
-            // 批次 8 留下的占位 —— "先有那一段"比"功能做完了再多插一段"更不容易漏
-            settingsSection(
-                key = "lock",
-                title = R.string.settings_section_lock,
-                summary = R.string.settings_section_lock_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { LockItems() }
-            }
+                // 锁屏这一段是批次 5 的落点 (点亮屏幕 + 按主人自己录的那一条解锁); 自动指令那一段仍是
+                // 批次 8 留下的占位 —— "先有那一段"比"功能做完了再多插一段"更不容易漏
+                settingsSection(
+                    key = "lock",
+                    title = R.string.settings_section_lock,
+                    summary = R.string.settings_section_lock_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { LockItems() }
+                }
 
-            settingsSection(
-                key = "automation",
-                title = R.string.settings_section_automation,
-                summary = R.string.settings_section_automation_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { AutomationItems() }
-            }
+                settingsSection(
+                    key = "automation",
+                    title = R.string.settings_section_automation,
+                    summary = R.string.settings_section_automation_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { AutomationItems() }
+                }
 
-            // 快捷指令那一段 (批次 7): 与「自动指令」挨着, 因为两段都是"主人自己定的那几件事",
-            // 而这一段先做 (自动指令是批次 8)
-            settingsSection(
-                key = "quick",
-                title = R.string.settings_section_quick,
-                summary = R.string.settings_section_quick_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { QuickItems() }
-            }
+                // 快捷指令那一段 (批次 7): 与「自动指令」挨着, 因为两段都是"主人自己定的那几件事",
+                // 而这一段先做 (自动指令是批次 8)
+                settingsSection(
+                    key = "quick",
+                    title = R.string.settings_section_quick,
+                    summary = R.string.settings_section_quick_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { QuickItems() }
+                }
 
-            // 插件那一段 (2.5.1 批次 9 的 P0 / P1): 这一段是生态的入口 —— 装 / 启用 / 停用 / 卸 /
-            // 勾能力 / 看审计都在这里, 而"能力勾了才给"这一条只有这一页能答应
-            settingsSection(
-                key = "plugin",
-                title = R.string.settings_section_plugin,
-                summary = R.string.settings_section_plugin_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { PluginItems() }
-            }
+                // 插件那一段 (2.5.1 批次 9 的 P0 / P1): 这一段是生态的入口 —— 装 / 启用 / 停用 / 卸 /
+                // 勾能力 / 看审计都在这里, 而"能力勾了才给"这一条只有这一页能答应
+                settingsSection(
+                    key = "plugin",
+                    title = R.string.settings_section_plugin,
+                    summary = R.string.settings_section_plugin_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { PluginItems() }
+                }
 
-            // 技能那一段 (2.7.0): 与插件挨着 —— 两段都是"给这台机器加东西", 区别是技能只加提示词与
-            // 作业流程, 插件才碰得到能力。这一段的活儿只有一件: 按已安装的应用把对应技能装进 dsh
-            settingsSection(
-                key = "skills",
-                title = R.string.settings_section_skills,
-                summary = R.string.settings_section_skills_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { SkillItems() }
-            }
+                // 技能那一段 (2.7.0): 与插件挨着 —— 两段都是"给这台机器加东西", 区别是技能只加提示词与
+                // 作业流程, 插件才碰得到能力。这一段的活儿只有一件: 按已安装的应用把对应技能装进 dsh
+                settingsSection(
+                    key = "skills",
+                    title = R.string.settings_section_skills,
+                    summary = R.string.settings_section_skills_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { SkillItems() }
+                }
 
-            // 工作区与网络这两段已经从这里撤掉 (主人 2026-10-06): 工作区落在哪是 host 启动时按
-            // Workspace.resolve 那三档自己挑的, 网络那个开关改完也要重启 host —— 两件事都是"平时
-            // 不用动"的, 留在这里只把下面那些常用的段推得更远。**能力一个都没删**: 三档解析、
-            // Workspace.requestAllFilesAccess、HostSettings.lanAccess 与上面 ⋮ 里那条重启 host 照旧,
-            // 只是不再有这两个设置入口 (要改是 `tools/lw-install.ps1` 与重启那一步的事)
+                // Linux 沙盒那一段 (2.7.7): 也是"给这台机器加东西", 加的是一个能装包能编译的用户空间。
+                // 活儿有三件: 看状态与占用 / 装入 (或重装) / 删掉它 —— 第三件是这一页上唯二不可逆的动作
+                // (另一件是删技能), 所以走的也是"点一下先问一句"那条路
+                settingsSection(
+                    key = "linux",
+                    title = R.string.settings_section_linux,
+                    summary = R.string.settings_section_linux_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { LinuxItems() }
+                }
 
-            // 权限这一段放最后: 它是这一页最长的一段 (十七个能力), 放中间会把后面每一段都推到很远,
-            // 而这些权限本来就是装完之后偶尔来调一次的东西
-            settingsSection(
-                key = "permissions",
-                title = R.string.settings_section_permissions,
-                summary = R.string.settings_section_permissions_summary,
-                collapsed = collapsed,
-                onToggle = toggleSection,
-            ) {
-                Card { PermissionsItems() }
+                // Luwi-dsh-sync 那一段 (G1-2): 两台机器怎么连上这件事全在这里 —— 会话仓库 / 工作区仓库 /
+                // 设备名 / 本机地址 / 对端地址与连接口令。写的是 `$DSH_HOME/lw/session-sync.json`,
+                // 改完要重启 host, 所以段首把那句话摆在人眼前 (重启那一条在右上角 ⋮ 里)
+                settingsSection(
+                    key = "sync",
+                    title = R.string.settings_section_sync,
+                    summary = R.string.settings_section_sync_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { SyncItems() }
+                }
+
+                // 工作区与网络这两段已经从这里撤掉 (主人 2026-10-06): 工作区落在哪是 host 启动时按
+                // Workspace.resolve 那三档自己挑的, 网络那个开关改完也要重启 host —— 两件事都是"平时
+                // 不用动"的, 留在这里只把下面那些常用的段推得更远。**能力一个都没删**: 三档解析、
+                // Workspace.requestAllFilesAccess、HostSettings.lanAccess 与上面 ⋮ 里那条重启 host 照旧,
+                // 只是不再有这两个设置入口 (要改是 `tools/lw-install.ps1` 与重启那一步的事)
+
+                // 权限这一段放最后: 它是这一页最长的一段 (十七个能力), 放中间会把后面每一段都推到很远,
+                // 而这些权限本来就是装完之后偶尔来调一次的东西
+                settingsSection(
+                    key = "permissions",
+                    title = R.string.settings_section_permissions,
+                    summary = R.string.settings_section_permissions_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { PermissionsItems() }
+                }
             }
         }
 
@@ -1295,6 +1365,460 @@ private fun PlaceholderItems(text: String) {
 }
 
 /**
+ * 「Linux 沙盒」那一段 (2.7.7)
+ *
+ * 状态这一行是这一段的重点: 未安装 / 已安装 (版本·占用) / 有几条命令在跑 / 通道连没连 —— 四种事实
+ * 各说各的, 通道不在线时也把读得到的那一半照实读出来 (见 [LinuxSetting] 的文件头)
+ *
+ * **"删掉它"是这一页上不可逆的两件事之一**: 删掉的是 `/data/local/tmp/lwlinux` 下的整棵 rootfs,
+ * 里面 `apk add` 装的一切一起没, 所以点它先弹那一问; 而那一问里也要说清另一件事 —— 通道断开之后
+ * 那个目录连删除按钮都够不着 (残留只能走 adb 或重装应用清)
+ */
+/** 设置页「Luwi-dsh-sync」那一段的文本项 (逻辑名 → 标题/摘要/键盘形态) */
+private enum class SyncField(
+    val field: String,
+    val title: Int,
+    val summary: Int,
+    val secret: Boolean = false,
+    val uri: Boolean = false,
+    /** 对话框里那一格底下再补一句"该填成什么样" (0 = 不补) */
+    val note: Int = 0,
+) {
+    SESSION_REMOTE(SyncSetting.FIELD_SESSION_REMOTE, R.string.settings_sync_session_remote, R.string.settings_sync_session_remote_summary, uri = true, note = R.string.settings_sync_remote_hint),
+    WORKSPACE_REMOTE(SyncSetting.FIELD_WORKSPACE_REMOTE, R.string.settings_sync_workspace_remote, R.string.settings_sync_workspace_remote_summary, uri = true, note = R.string.settings_sync_remote_hint),
+    DEVICE_NAME(SyncSetting.FIELD_DEVICE_NAME, R.string.settings_sync_device_name, R.string.settings_sync_device_name_summary),
+    PUBLIC_URL(SyncSetting.FIELD_PUBLIC_URL, R.string.settings_sync_public_url, R.string.settings_sync_public_url_summary, uri = true),
+    PEER_URL(SyncSetting.FIELD_PEER_URL, R.string.settings_sync_peer_url, R.string.settings_sync_peer_url_summary, uri = true),
+    PEER_TOKEN(SyncSetting.FIELD_PEER_TOKEN, R.string.settings_sync_peer_token, R.string.settings_sync_peer_token_summary, secret = true),
+    BRANCH(SyncSetting.FIELD_BRANCH, R.string.settings_sync_branch, R.string.settings_sync_branch_summary),
+}
+
+/** 每一项现在写的是什么 (对话框的初值) */
+private fun syncInitial(field: SyncField, snapshot: SyncSetting.Snapshot): String = when (field) {
+    SyncField.SESSION_REMOTE -> snapshot.sessionRemote
+    SyncField.WORKSPACE_REMOTE -> snapshot.workspaceRemote
+    SyncField.DEVICE_NAME -> snapshot.deviceName
+    SyncField.PUBLIC_URL -> snapshot.publicUrl
+    SyncField.PEER_URL -> snapshot.peerUrl
+    SyncField.PEER_TOKEN -> snapshot.peerToken
+    SyncField.BRANCH -> snapshot.branch
+}
+
+/**
+ * 设置页「Luwi-dsh-sync」那一段 (G1-2 对端)
+ *
+ * 这一段写的是 `$DSH_HOME/lw/session-sync.json` —— **手机侧唯一的配置面** (插件在宿主里读它,
+ * 手机侧的 overlay 行不带 config, 所以这里写下的每个键都会生效)。三条口径:
+ *
+ * - **远端地址与连接口令都不回显原文**: 地址只报"已配置 / 未配置" (值里可能有 token), 口令显示
+ *   打码形态。要看原文去「看当前配置」那一页 (那里的口令也是打码的, 只有文件里才有真的)
+ * - **改完要重启 host**: 那一条在右上角 ⋮ 里, 所以段首把那句话摆在人眼前, 而不是在这里再放一个按钮
+ * - **对端那三行是一组**: 通道开关 + 对端地址 + 连接口令, 缺口令时通道是关的 (插件那一边是
+ *   失败关闭), 所以状态行会把这件事说出来
+ */
+@Composable
+private fun SyncItems() {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    // 存完由 SyncSetting.revision 叫醒这一段 (与锁屏那一段同一个做法)
+    val snapshot = remember(SyncSetting.revision) { SyncSetting.snapshot(context) }
+    var field by remember { mutableStateOf<SyncField?>(null) }
+    var showRaw by remember { mutableStateOf(false) }
+    var interval by remember(snapshot.pullInterval) { mutableIntStateOf(snapshot.pullInterval) }
+
+    PlaceholderItems(stringResource(R.string.settings_sync_note))
+
+    // ---- 第一排: 让 agent 帮你配置 (主人 2026-10-14) ----
+    // 这一段要填的东西不少, 而"照着上下文改一份配置"正好是 agent 拿手的: 点一下就把一段提示词投给
+    // 会话 (走的就是快捷指令那条路 —— VoiceInbox + SOURCE_QUICK), 它拿 `lw_sync` 工具自己看状态、
+    // 问主人要仓库地址、写下去。**它够不到 `$DSH_HOME` 是这条工具存在的理由**: dsh 的 fs 工具关在
+    // 工作区, lw_linux 的 proot 也只 bind 工作区
+    var asked by remember { mutableStateOf<String?>(null) }
+    ArrowPreference(
+        title = stringResource(R.string.settings_sync_ask_agent),
+        summary = stringResource(R.string.settings_sync_ask_agent_summary),
+        onClick = {
+            val seq = VoiceInbox.append(
+                context,
+                context.getString(R.string.settings_sync_agent_prompt),
+                source = VoiceInbox.SOURCE_QUICK,
+            )
+            asked = context.getString(
+                if (seq == null) R.string.settings_sync_agent_failed else R.string.settings_sync_agent_sent,
+            )
+        },
+    )
+    asked?.let { said -> PlaceholderItems(said) }
+
+    // ---- 总开关: **默认关** (新装没有远端地址 = 关), 打开之后才出现下面那几件该填的东西 ----
+    // 打开时如果还没填过地址, 直接就把地址那一行的对话框摆出来 (少走一次"自己去找那一行"), 存完
+    // 由 pendingSyncOn 把开关补上 —— 于是"想开同步"这件事是两次点击而不是四次
+    var pendingSyncOn by remember { mutableStateOf(false) }
+    SwitchPreference(
+        title = stringResource(R.string.settings_sync_master),
+        summary = stringResource(
+            if (snapshot.syncOn) R.string.settings_sync_master_on else R.string.settings_sync_master_off,
+        ),
+        checked = snapshot.syncOn,
+        onCheckedChange = { wanted ->
+            val problem = SyncSetting.setSyncOn(context, wanted)
+            if (problem == null && wanted && snapshot.sessionRemote.isBlank()) {
+                pendingSyncOn = true
+                field = SyncField.SESSION_REMOTE
+            }
+        },
+    )
+
+    if (!snapshot.syncOn) {
+        PlaceholderItems(stringResource(R.string.settings_sync_off_hint))
+    } else {
+        PlaceholderItems(stringResource(R.string.settings_sync_on_hint))
+
+        // ① 仓库: 会话那根是同步的主体 (工作区那根是可选的第二根)
+        PlaceholderItems(stringResource(R.string.settings_sync_step_git))
+        for (entry in listOf(SyncField.SESSION_REMOTE, SyncField.WORKSPACE_REMOTE)) {
+            val set = if (entry == SyncField.SESSION_REMOTE) snapshot.sessionRemoteSet else snapshot.workspaceRemoteSet
+            ArrowPreference(
+                title = stringResource(entry.title),
+                summary = stringResource(if (set) R.string.settings_sync_remote_set else R.string.settings_sync_remote_unset),
+                onClick = { field = entry },
+            )
+        }
+
+        // ② 什么时候同步 (三个都不选 = 只用时手动点, 这是刚打开时的样子)
+        PlaceholderItems(stringResource(R.string.settings_sync_step_auto))
+        SwitchPreference(
+            title = stringResource(R.string.settings_sync_auto_pull),
+            summary = stringResource(R.string.settings_sync_auto_pull_summary),
+            checked = snapshot.autoPull,
+            onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_AUTO_PULL, it) },
+        )
+        SwitchPreference(
+            title = stringResource(R.string.settings_sync_auto_push),
+            summary = stringResource(R.string.settings_sync_auto_push_summary),
+            checked = snapshot.autoPush,
+            onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_AUTO_PUSH, it) },
+        )
+        ArrowSlider(
+            title = stringResource(R.string.settings_sync_interval),
+            summary = stringResource(R.string.settings_sync_interval_summary, interval),
+            value = interval.toFloat(),
+            onValueChange = { raw ->
+                val next = raw.roundToInt().coerceIn(0, 60)
+                // 拖动时每一帧都写一次文件没有必要: 取整之后变了才存
+                if (next != interval) {
+                    interval = next
+                    SyncSetting.setPullInterval(context, next)
+                }
+            },
+            valueRange = 0f..60f,
+            steps = 0,
+            showKeyPoints = true,
+            keyPoints = listOf(0f, 1f, 5f, 15f, 30f, 60f),
+            unit = "min",
+            inputSummary = stringResource(R.string.settings_sync_interval_dialog),
+            inputLabel = "min",
+            inputInitialValue = interval.toString(),
+            inputFilter = { text -> text.filter(Char::isDigit) },
+            inputValueRange = 0f..60f,
+            onInputConfirm = { raw ->
+                raw.toIntOrNull()?.let { typed ->
+                    val next = typed.coerceIn(0, 60)
+                    interval = next
+                    SyncSetting.setPullInterval(context, next)
+                }
+            },
+        )
+        ArrowPreference(
+            title = stringResource(SyncField.BRANCH.title),
+            summary = if (snapshot.branch.isBlank()) "main" else snapshot.branch,
+            onClick = { field = SyncField.BRANCH },
+        )
+
+        // ③ 工作区那一根 (可选): 文件走的是另一个远端, 与上面会话那根各记各的账
+        PlaceholderItems(stringResource(R.string.settings_sync_step_workspace))
+        SwitchPreference(
+            title = stringResource(R.string.settings_sync_workspace_on),
+            summary = stringResource(R.string.settings_sync_workspace_on_summary),
+            checked = snapshot.workspaceOn,
+            onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_WORKSPACE_ON, it) },
+        )
+    }
+
+    // ---- 身份与跨设备通道: **与同步开关无关**, 关着同步时这几行照样能用 ----
+    PlaceholderItems(stringResource(R.string.settings_sync_step_peer))
+    ArrowPreference(
+        title = stringResource(SyncField.DEVICE_NAME.title),
+        summary = if (snapshot.deviceName.isBlank()) stringResource(R.string.settings_sync_device_name_none) else snapshot.deviceName,
+        onClick = { field = SyncField.DEVICE_NAME },
+    )
+    ArrowPreference(
+        title = stringResource(SyncField.PUBLIC_URL.title),
+        summary = if (snapshot.publicUrl.isBlank()) stringResource(R.string.settings_sync_remote_unset) else snapshot.publicUrl,
+        onClick = { field = SyncField.PUBLIC_URL },
+    )
+    SwitchPreference(
+        title = stringResource(R.string.settings_sync_peer_on),
+        summary = stringResource(R.string.settings_sync_peer_on_summary),
+        checked = snapshot.peerOn,
+        onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_PEER_ON, it) },
+    )
+    ArrowPreference(
+        title = stringResource(SyncField.PEER_URL.title),
+        summary = if (snapshot.peerUrl.isBlank()) stringResource(R.string.settings_sync_peer_url_none) else snapshot.peerUrl,
+        onClick = { field = SyncField.PEER_URL },
+    )
+    ArrowPreference(
+        title = stringResource(SyncField.PEER_TOKEN.title),
+        summary = stringResource(R.string.settings_sync_peer_token_state, SyncSetting.maskedToken(snapshot.peerToken)),
+        onClick = { field = SyncField.PEER_TOKEN },
+    )
+    SwitchPreference(
+        title = stringResource(R.string.settings_sync_peer_listen),
+        summary = stringResource(R.string.settings_sync_peer_listen_summary),
+        checked = snapshot.peerListen,
+        onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_PEER_LISTEN, it) },
+    )
+    SwitchPreference(
+        title = stringResource(R.string.settings_sync_peer_proxy),
+        summary = stringResource(R.string.settings_sync_peer_proxy_summary),
+        checked = snapshot.peerProxy,
+        onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_PEER_PROXY, it) },
+    )
+
+    ArrowPreference(
+        title = stringResource(R.string.settings_sync_show),
+        summary = stringResource(R.string.settings_sync_show_summary),
+        onClick = { showRaw = true },
+    )
+
+    SyncSetting.message?.let { said -> PlaceholderItems(said) }
+
+    field?.let { picking ->
+        SyncFieldDialog(
+            field = picking,
+            initial = syncInitial(picking, snapshot),
+            onDismissRequest = {
+                field = null
+                pendingSyncOn = false
+            },
+            onSave = { text ->
+                val problem = SyncSetting.setText(context, picking.field, text)
+                field = null
+                // "想开同步 → 先填地址"那一趟: 地址存下去了就把开关当场补上, 不用再点第二下
+                if (problem == null && pendingSyncOn && picking.field == SyncSetting.FIELD_SESSION_REMOTE) {
+                    pendingSyncOn = false
+                    SyncSetting.setSyncOn(context, true)
+                }
+            },
+        )
+    }
+
+    if (showRaw) {
+        OverlayDialog(
+            show = true,
+            title = stringResource(R.string.settings_sync_show),
+            summary = stringResource(R.string.settings_sync_show_dialog),
+            defaultWindowInsetsPadding = false,
+            onDismissRequest = { showRaw = false },
+        ) {
+            Column(modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                Text(text = SyncSetting.pretty(context), fontSize = 12.sp)
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.settings_sync_close),
+                    onClick = {
+                        haptic.confirm()
+                        showRaw = false
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+            }
+        }
+    }
+}
+
+/** 一个文本项的对话框 (与「注入密码」那一个同一个形制: 取 `rememberSaveable` 的初值 + 确认写回) */
+@Composable
+private fun SyncFieldDialog(
+    field: SyncField,
+    initial: String,
+    onDismissRequest: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    OverlayDialog(
+        show = true,
+        title = stringResource(field.title),
+        summary = stringResource(field.summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismissRequest,
+    ) {
+        var text by rememberSaveable(initial) { mutableStateOf(initial) }
+        SuperTextField(
+            modifier = Modifier.padding(bottom = if (field.note != 0) 8.dp else 16.dp),
+            value = text,
+            onValueChange = { text = it },
+            singleLine = true,
+            useLabelAsPlaceholder = true,
+            visualTransformation = if (field.secret) PasswordVisualTransformation() else VisualTransformation.None,
+            keyboardOptions = KeyboardOptions(
+                imeAction = ImeAction.Done,
+                keyboardType = if (field.uri) KeyboardType.Uri else KeyboardType.Text,
+            ),
+        )
+        // 「说清楚这一空该填什么」: 地址那两格底下补一句例子 (与「添加模型」那三个框同一个做法)
+        if (field.note != 0) {
+            Text(
+                text = stringResource(field.note),
+                color = colorScheme.onSurfaceVariantActions,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(bottom = 16.dp),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.SpaceBetween) {
+            TextButton(
+                text = stringResource(R.string.button_cancel),
+                onClick = {
+                    haptic.contextClick()
+                    onDismissRequest()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                text = stringResource(R.string.settings_sync_confirm),
+                onClick = {
+                    haptic.confirm()
+                    onSave(text)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LinuxItems() {
+    val haptic = LocalHapticFeedback.current
+    val state = LinuxSetting.state
+    // 只在这个进程里读过一次的状态: 每次进这一页读一次, 装/删完由 LinuxSetting 自己再读
+    LaunchedEffect(Unit) { LinuxSetting.refresh() }
+    var asking by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
+        Text(text = linuxStateSentence(state))
+        state?.let { current ->
+            if (current.installed && current.sizeKb != null) {
+                Text(
+                    text = stringResource(
+                        R.string.settings_linux_size,
+                        bytes(current.sizeKb * 1024),
+                    ),
+                    modifier = Modifier.padding(top = UiSpacing.Small),
+                )
+            }
+            Text(
+                text = if (current.channelConnected) {
+                    stringResource(R.string.settings_linux_running, current.running)
+                } else {
+                    stringResource(R.string.settings_linux_no_channel, current.error.orEmpty())
+                },
+                modifier = Modifier.padding(top = UiSpacing.Small),
+                color = colorScheme.onSurfaceVariantActions,
+            )
+        }
+    }
+
+    // 诚实那一条: 三个"弱"写在界面上, 免得"沙盒"这两个字给人一个它兑现不了的承诺
+    PlaceholderItems(stringResource(R.string.settings_linux_note))
+
+    ArrowPreference(
+        title = stringResource(if (state?.installed == true) R.string.settings_linux_reinstall else R.string.settings_linux_install),
+        summary = stringResource(R.string.settings_linux_install_summary),
+        onClick = {
+            // 通道不在线也放进 [LinuxSetting.install]: 那边会先试着接一次, 接不上才如实拒 ——
+            // 在这里静默 return 的话, 通道掉着时这颗按钮点了没反应, 用户不知道发生了什么
+            if (LinuxSetting.working) return@ArrowPreference
+            haptic.contextClick()
+            LinuxSetting.install()
+        },
+    )
+    if (state?.installed == true) {
+        ArrowPreference(
+            title = stringResource(R.string.settings_linux_remove),
+            summary = stringResource(R.string.settings_linux_remove_summary),
+            onClick = {
+                if (LinuxSetting.working) return@ArrowPreference
+                haptic.contextClick()
+                asking = true
+            },
+        )
+    }
+    LinuxSetting.message?.let { said -> PlaceholderItems(said) }
+
+    if (asking) {
+        LinuxRemoveDialog(
+            onDismiss = { asking = false },
+            onDelete = {
+                asking = false
+                LinuxSetting.remove()
+            },
+        )
+    }
+}
+
+/** 状态那一行的一句话 */
+@Composable
+private fun linuxStateSentence(state: LwLinux.State?): String = when {
+    state == null -> stringResource(R.string.settings_linux_reading)
+    !state.installed -> stringResource(R.string.settings_linux_absent)
+    state.version.isNullOrBlank() -> stringResource(R.string.settings_linux_installed_unknown)
+    else -> stringResource(R.string.settings_linux_installed, state.version)
+}
+
+/**
+ * 删掉整个沙盒之前那一问
+ *
+ * 与删技能那一问是同一件事的另一个名字: 这里没有回收站, 而"再装回来"能拿回来的只有随包那一份
+ * —— 沙盒里自己 `apk add` 装的全都没了
+ */
+@Composable
+private fun LinuxRemoveDialog(
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_linux_remove_dialog_title),
+        summary = stringResource(R.string.settings_linux_remove_dialog_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        TextButton(
+            text = stringResource(R.string.settings_linux_remove_dialog_ok),
+            onClick = {
+                haptic.confirm()
+                onDelete()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(
+            text = stringResource(R.string.button_cancel),
+            onClick = {
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
  * 「快捷指令」那一段 (2.5.0 批次 7)
  *
  * 列表与 `lw_quick op=list` 读的是同一份 ([LwQuick.entries]), 所以"界面上看得见而模型读不到"这种
@@ -1401,6 +1925,8 @@ private fun PluginItems() {
     // 从链接装那一档: 粘贴框开着没有 / 正在下
     var linking by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf(false) }
+    // 浏览插件仓库那一档 (2026-10-16): 官方索引的搜索/安装弹窗开着没有
+    var browsing by remember { mutableStateOf(false) }
     // 一次确认那一档 (2026-10-11): 包声明了能力就先摆出来问一次, 答完才装 —— 这是"输入地址,
     // 装完即可用"里唯一的一次问答 (零能力插件连这一次都没有)
     var confirming by remember { mutableStateOf<PendingInstall?>(null) }
@@ -1491,6 +2017,16 @@ private fun PluginItems() {
             linking = true
         },
     )
+    // 官方索引那一档 (2026-10-16): 读索引、在里头搜、点一下下下来装 —— 装走的是同一条链, 索引只多
+    // 做"装之前核整包 sha256 与大小"这一件
+    ArrowPreference(
+        title = stringResource(R.string.settings_plugin_browse),
+        summary = stringResource(R.string.settings_plugin_browse_summary),
+        onClick = {
+            haptic.contextClick()
+            browsing = true
+        },
+    )
     SwitchPreference(
         title = stringResource(R.string.settings_plugin_developer),
         summary = stringResource(R.string.settings_plugin_developer_summary),
@@ -1529,9 +2065,23 @@ private fun PluginItems() {
         )
     }
 
+    if (browsing) {
+        PluginIndexDialog(
+            installed = entries,
+            onDismiss = { browsing = false },
+            onMessage = { said ->
+                message = said
+                revision += 1
+            },
+            onAsk = { pending ->
+                confirming = pending
+                browsing = false
+            },
+        )
+    }
+
     // 装之前那一问 (2026-10-11): 只有这个包声明了能力才走到这里, 零能力插件一路直通
-    confirming?.let { asking ->
-        PluginCapabilityDialog(
+    confirming?.let { asking ->        PluginCapabilityDialog(
             manifest = asking.manifest,
             busy = confirmingBusy,
             onDismiss = {
@@ -1660,6 +2210,50 @@ private fun startLinkedInstall(context: Context, url: String): StartedInstall = 
     startInstall(context, PluginDownload.fetch(context, url))
 } catch (error: Throwable) {
     StartedInstall.Done("装不上: ${error.message ?: error.javaClass.simpleName}")
+}
+
+/**
+ * 从索引装一份 (2026-10-16): 比「从链接装入」多两道它才有资格做的闸, 其余同一条链
+ *
+ * - **装之前核整包**: 下下来的字节算 sha256, 与索引里那一个对上、大小也对上才往下走 —— 这是"索引被
+ *   替换成同名不同发布者的包"那一洞的封条 (协议第 14 节第 3 条)
+ * - **核发布者指纹**: 预览那份清单算出来的指纹要与索引里说的一致 (发布者换钥匙 = 换了一个人)
+ * - 之后再走 [startInstall]: 能力问答 / 伴侣 APK / 桌面槽 / 启用, 一个字都不省
+ */
+private fun startIndexInstall(context: Context, entry: PluginIndex.Entry): StartedInstall {
+    val file = try {
+        // 主址 + 镜像逐条试 (2026-10-15): 主址 cdn.jsdelivr.net 在有些网络里连不上, 而能通的
+        // 那几条都在索引的 mirrors 里 —— 只试主址就是"点安装装不上"
+        PluginDownload.fetchAny(context, entry.packageUrls())
+    } catch (error: Throwable) {
+        return StartedInstall.Done("装不上: ${error.message ?: error.javaClass.simpleName}")
+    }
+    val digest = PluginIndex.digestOf(file)
+    if (entry.sha256.isNotBlank() && digest != entry.sha256) {
+        file.delete()
+        return StartedInstall.Done("装不上: 这份包与索引对不上 (整包摘要 ${digest ?: "算不出来"} ≠ 索引里那一个)")
+    }
+    if (entry.size > 0 && file.length() != entry.size) {
+        file.delete()
+        return StartedInstall.Done("装不上: 这份包 ${file.length()} 字节, 索引里说的是 ${entry.size}")
+    }
+    val manifest = try {
+        PluginInstaller.preview(context, file)
+    } catch (error: Throwable) {
+        file.delete()
+        return StartedInstall.Done("装不上: ${error.message ?: error.javaClass.simpleName}")
+    }
+    if (manifest.signed && entry.publisher.fingerprint.isNotBlank()) {
+        val seen = PluginSignature.fingerprint(manifest.publisherKey)
+        if (seen != entry.publisher.fingerprint) {
+            file.delete()
+            return StartedInstall.Done(
+                "装不上: 这份包的发布者指纹 (${seen.take(20)}…) 与索引里说的 " +
+                    "(${entry.publisher.fingerprint.take(20)}…) 不是同一把钥匙",
+            )
+        }
+    }
+    return startInstall(context, file)
 }
 
 /**
@@ -1842,6 +2436,172 @@ private fun PluginLinkDialog(
                     if (!busy && text.isNotBlank()) {
                         haptic.confirm()
                         onInstall(text.trim())
+                    }
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+    }
+}
+
+/**
+ * 官方索引的搜索与安装 (2026-10-16): 读一份 `lw-plugin-index/1`, 在里头搜, 点一下下下来装
+ *
+ * - **平时只读缓存** ([PluginIndex.cached]), 只有那颗「刷新索引」才联网 —— 与技能目录那条路同一个
+ *   分工, 设置页不该被一次慢网卡住
+ * - 装之前核整包 sha256 与大小、核发布者指纹 (见 [startIndexInstall]), 其余走与「从链接装入」完全
+ *   同一条链 (能力问答 / 伴侣 APK / 桌面槽 / 启用)
+ * - 列表把三种"点了也不会装"的状态标在行上: 本机已装 / 需要 Luwi ≥ x / (敏感能力那条只标不拦, 装的
+ *   时候那道问答会再问一次)
+ */
+@Composable
+private fun PluginIndexDialog(
+    installed: List<PluginManager.Entry>,
+    onDismiss: () -> Unit,
+    onMessage: (String) -> Unit,
+    onAsk: (PendingInstall) -> Unit,
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    var index by remember { mutableStateOf<PluginIndex.Index?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
+    var installingId by remember { mutableStateOf<String?>(null) }
+    // 选中哪一条 (2026-10-15 主人: "点击插件没有反应...改成选择某插件后「完成」按钮变成「安装」"):
+    // 点行只做选中, 装不装由底部那颗按钮决定 —— 原来点行就直接开装, 而不可装的行只弹一句, 看着像坏了
+    var selected by remember { mutableStateOf<PluginIndex.Entry?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val luwi = remember { PluginIndex.luwiVersion(context) }
+
+    // 进来先读缓存 (一次文件读, 不联网); 只有那颗「刷新」才出网
+    LaunchedEffect(Unit) {
+        index = withContext(Dispatchers.IO) { PluginIndex.cached(context) }
+        loading = false
+    }
+    val refresh: () -> Unit = {
+        if (!refreshing) {
+            refreshing = true
+            scope.launch {
+                val said = withContext(Dispatchers.IO) { PluginIndex.refresh(context) }
+                index = withContext(Dispatchers.IO) { PluginIndex.cached(context) }
+                refreshing = false
+                onMessage(said)
+            }
+        }
+    }
+    val install: (PluginIndex.Entry) -> Unit = { entry ->
+        if (installingId == null) {
+            haptic.confirm()
+            installingId = entry.id
+            scope.launch {
+                val started = withContext(Dispatchers.IO) { startIndexInstall(context, entry) }
+                installingId = null
+                when (started) {
+                    is StartedInstall.Done -> onMessage(started.text)
+                    is StartedInstall.Ask -> onAsk(started.pending)
+                }
+            }
+        }
+    }
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_plugin_browse),
+        summary = stringResource(R.string.settings_plugin_browse_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        SuperTextField(
+            modifier = Modifier.padding(bottom = 12.dp),
+            value = query,
+            onValueChange = { query = it },
+            label = stringResource(R.string.settings_plugin_index_query),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        )
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.5f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            val candidates = remember(index, query) { index?.let { PluginIndex.search(it, query) } }
+            when {
+                loading -> PlaceholderItems(stringResource(R.string.settings_plugin_index_loading))
+                index == null -> PlaceholderItems(stringResource(R.string.settings_plugin_index_empty))
+                candidates.isNullOrEmpty() -> PlaceholderItems(stringResource(R.string.settings_plugin_index_none, query))
+            }
+            candidates.orEmpty().forEach { entry ->
+                val have = installed.firstOrNull { it.id == entry.id }?.version.orEmpty()
+                val sameOrNewer = have.isNotBlank() && PluginIndex.compareVersion(have, entry.version) >= 0
+                val tooNew = entry.minLw.isNotBlank() && luwi.isNotBlank() &&
+                    PluginIndex.compareVersion(luwi, entry.minLw) < 0
+                // 这些行要在 composable 作用域里先拼好 (onClick 不是 composable, stringResource 进不去)
+                val installedLine = stringResource(R.string.settings_plugin_index_installed, have)
+                val minLwLine = stringResource(R.string.settings_plugin_index_minlw, entry.minLw, luwi)
+                val meta = stringResource(
+                    R.string.settings_plugin_index_meta,
+                    entry.kind,
+                    entry.publisher.name.ifBlank { "?" },
+                    entry.requested.size + entry.dangerous.size,
+                ) + if (entry.dangerous.isNotEmpty()) {
+                    " · " + stringResource(R.string.settings_plugin_index_danger, entry.dangerous.size)
+                } else {
+                    ""
+                }
+                val summary = listOf(meta, entry.description, when {
+                    sameOrNewer -> installedLine
+                    tooNew -> minLwLine
+                    else -> ""
+                }).filter { it.isNotBlank() }.joinToString("\n")
+                val selectable = !sameOrNewer && !tooNew
+                // 选中态: 前面打一个勾 (Miuix 那一层没有"选中"这个参数, 而勾是最省事又看得见的说法)
+                val shown = if (selected?.id == entry.id) "\u2713 " else ""
+                ArrowPreference(
+                    title = shown + listOf(entry.name, entry.version)
+                        .filter { it.isNotBlank() }.joinToString(" "),
+                    summary = summary,
+                    onClick = {
+                        haptic.contextClick()
+                        // 点一下只是选中; 不能装的那两条当场把原因说出来, 别让人以为是没反应
+                        when {
+                            sameOrNewer -> onMessage(installedLine)
+                            tooNew -> onMessage(minLwLine)
+                            else -> {
+                                selected = entry
+                                onMessage("")
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.padding(top = 12.dp)) {
+            TextButton(
+                text = if (refreshing) {
+                    stringResource(R.string.settings_plugin_index_refreshing)
+                } else {
+                    stringResource(R.string.settings_plugin_index_refresh)
+                },
+                onClick = refresh,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(20.dp))
+            // 这一颗按选中项说话: 选了能装的 -> 「安装」, 否则 -> 「完成」(关掉)
+            val picked = selected
+            val busy = installingId != null
+            val action = when {
+                busy -> stringResource(R.string.settings_plugin_index_installing)
+                picked != null -> stringResource(R.string.settings_plugin_index_install)
+                else -> stringResource(R.string.settings_plugin_index_close)
+            }
+            TextButton(
+                text = action,
+                onClick = {
+                    haptic.contextClick()
+                    if (!busy) {
+                        if (picked != null) install(picked) else onDismiss()
                     }
                 },
                 modifier = Modifier.weight(1f),
@@ -2158,12 +2918,10 @@ private fun BallThemeDialog(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    val entries = remember(revision) { PluginManager.entries(context) }
     val current = remember(revision) { BallTheme.currentId(context) }
-    val candidates = entries.filter { entry ->
-        val directory = entry.directory ?: return@filter false
-        java.io.File(directory, "theme/ball.json").isFile
-    }
+    // 候选那一份口径住在 [BallTheme.choices] 里 (2026-10-16 起球菜单那行「换个形象」与这里是同一份):
+    // 第 0 位是内置画法, 它在下面有自己单独的一行, 所以这里丢掉它
+    val candidates = remember(revision) { BallTheme.choices(context).drop(1) }
     OverlayDialog(
         show = true,
         title = stringResource(R.string.settings_theme_row),
@@ -3344,6 +4102,278 @@ private fun ScreenshotItems() {
 }
 
 /**
+ * 「模式与模型」那一行 (3.0.2 需求 2)
+ *
+ * 只有一行: 视频模式用哪一个模型。点开是候选列表 (宿主写的 model-catalog.json, 与
+ * `lw.ps1 -Method model` 量到的是同一份), 目录取不到就退化为两个文本框 —— 不假装有列表
+ */
+@Composable
+private fun ModeItems() {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    var dialog by remember { mutableStateOf(false) }
+    var endpoint by remember { mutableStateOf(false) }
+    // 存完重画那一段 (与 SyncSetting.revision 同一个做法)
+    val snapshot = remember(ModeModel.revision) { ModeModel.snapshot(context) }
+    ArrowPreference(
+        title = stringResource(R.string.settings_mode_model),
+        // 配了自建端点时这一行说的是它 —— 那一档下"从目录里挑的那一对"不生效, 遮着不说才是骗人
+        summary = if (snapshot.endpointSet) {
+            stringResource(R.string.settings_mode_endpoint_using, snapshot.endpointModel)
+        } else {
+            stringResource(
+                R.string.settings_mode_model_summary,
+                if (snapshot.followsCurrent) {
+                    stringResource(R.string.settings_mode_model_follow)
+                } else {
+                    "${snapshot.videoProvider} / ${snapshot.videoModel}"
+                },
+            )
+        },
+        onClick = {
+            haptic.contextClick()
+            dialog = true
+        },
+    )
+    // 「添加模型」那一行 (2026-10-16 主人: "视频模式选择的 llm 的 url, api 等放到视频模式的设置里";
+    // 2026-10-16 主人后来把这一行的名字从「自建端点」改成「添加模型」)
+    ArrowPreference(
+        title = stringResource(R.string.settings_mode_endpoint),
+        summary = if (snapshot.endpointKeySet) {
+            stringResource(
+                R.string.settings_mode_endpoint_summary,
+                snapshot.endpointUrl.ifEmpty { "<unset>" },
+                snapshot.endpointModel.ifEmpty { "<unset>" },
+                ModeModel.maskedKey(snapshot.endpointSecret),
+            )
+        } else {
+            stringResource(R.string.settings_mode_endpoint_none)
+        },
+        onClick = {
+            haptic.contextClick()
+            endpoint = true
+        },
+    )
+    if (dialog) ModeModelDialog(onDismiss = { dialog = false })
+    if (endpoint) ModeEndpointDialog(onDismiss = { endpoint = false })
+}
+
+/**
+ * 「添加模型」的对话框: 接口地址 / API Key / 模型名 (三个文本框, 骨架照 [SpeakTextFieldDialog])
+ *
+ * **每个框上面那一行小字说清填什么** (主人 2026-10-16: "说清楚哪一空填什么信息"): 接口地址是
+ * http(s) 地址 (一般带 /v1), API Key 可以留空, 模型名是接口那边认的 id —— 三个框原来没有标题,
+ * 只靠对话框那一句说明去猜哪一行是哪一个
+ *
+ * 它写进 `lw/mode-model.json` 的 `endpoint` 段; 宿主那一侧把这一段**挂成 pi-ai 的一条真路由**
+ * (`luwi-video`, 见 3.0.3 施工单), 于是视频模式那一次请求就走这个端点。两条要说清的:
+ * 那条路由**也出现在 dsh 自己的模型选择器里** (名字带「Luwi 视频模式」), 以及 API Key 存在这一份
+ * 文件里 (0600, 与对端口令同一个存法) —— 界面只出打码形态
+ */
+@Composable
+private fun ModeEndpointDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val snapshot = remember(ModeModel.revision) { ModeModel.snapshot(context) }
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_mode_endpoint),
+        summary = stringResource(R.string.settings_mode_endpoint_note),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.5f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            var url by rememberSaveable(ModeModel.revision) { mutableStateOf(snapshot.endpointUrl) }
+            var secret by rememberSaveable(ModeModel.revision) { mutableStateOf(snapshot.endpointSecret) }
+            var model by rememberSaveable(ModeModel.revision) { mutableStateOf(snapshot.endpointModel) }
+            SuperTextField(
+                label = stringResource(R.string.settings_mode_endpoint_url_note),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                value = url,
+                onValueChange = { url = it },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+            )
+            SuperTextField(
+                label = stringResource(R.string.settings_mode_endpoint_key_note),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                value = secret,
+                onValueChange = { secret = it },
+                singleLine = true,
+                // 与「说话」那一段的 API Key 同一个做法: 界面上是圆点, 明文只在文件里
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            )
+            SuperTextField(
+                label = stringResource(R.string.settings_mode_endpoint_model_note),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                value = model,
+                onValueChange = { model = it },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            )
+            TextButton(
+                text = stringResource(R.string.button_confirm),
+                onClick = {
+                    haptic.confirm()
+                    val problem = ModeModel.setEndpoint(context, url, secret, model)
+                    if (problem != null) Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+            if (snapshot.endpointSet) {
+                ArrowPreference(
+                    title = stringResource(R.string.settings_mode_endpoint_off),
+                    summary = stringResource(R.string.settings_mode_endpoint_off_summary),
+                    onClick = {
+                        haptic.contextClick()
+                        ModeModel.clearEndpoint(context)
+                    },
+                )
+            }
+        }
+        TextButton(
+            text = stringResource(R.string.button_cancel),
+            onClick = {
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * 「视频模式使用的模型」的对话框 (骨架照 [WidgetSlotDialog]: 半屏上限 + 竖向滚动)
+ *
+ * 第一条永远是「跟随当前模型」, 其后是宿主目录里的候选; 打开那一下写一个"现在刷一次"的记号
+ * (与余额那条同一个形状), 宿主本来就有的那条 3 s 轮询看见就刷。目录取不到 (宿主没写过 /
+ * 还没刷出来 / items 为空) 就退化为两个文本框, **不假装有列表**
+ */
+@Composable
+private fun ModeModelDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    var catalog by remember { mutableStateOf<LwModel.Catalog?>(null) }
+    LaunchedEffect(Unit) {
+        catalog = withContext(Dispatchers.IO) {
+            LwModel.request(context)
+            // 记号要等宿主的一个轮询才变成新目录: 最多等 3 s, 每 500 ms 读一次
+            repeat(6) {
+                LwModel.snapshot(context)?.takeIf { it.ok && it.items.isNotEmpty() }
+                    ?.let { found -> return@withContext found }
+                delay(500)
+            }
+            LwModel.snapshot(context)
+        }
+    }
+    val snapshot = remember(ModeModel.revision) { ModeModel.snapshot(context) }
+    // 目录要么整份可用 (有候选), 要么整个退回手填 —— "半份目录"不拿来假装是列表
+    val listed = catalog?.takeIf { it.ok && it.items.isNotEmpty() }
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_mode_model),
+        summary = stringResource(R.string.settings_section_look_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.5f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            val follow = snapshot.followsCurrent
+            ArrowPreference(
+                title = stringResource(R.string.settings_mode_model_follow),
+                summary = if (follow) "现在就是它" else "退出视频模式后与平时用同一个模型",
+                onClick = {
+                    haptic.confirm()
+                    ModeModel.setVideo(context, "", "")
+                },
+            )
+            if (listed == null) {
+                ArrowPreference(
+                    title = stringResource(R.string.settings_mode_model_none),
+                    summary = if (catalog == null) "宿主还没写过目录" else "宿主这一次没取到目录",
+                )
+                // 两个文本框: 提供方与模型名, 与文件里那两个键一一对应
+                var provider by rememberSaveable(ModeModel.revision) { mutableStateOf(snapshot.videoProvider) }
+                var model by rememberSaveable(ModeModel.revision) { mutableStateOf(snapshot.videoModel) }
+                SuperTextField(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    value = provider,
+                    onValueChange = { provider = it },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                )
+                SuperTextField(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    value = model,
+                    onValueChange = { model = it },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                )
+                TextButton(
+                    text = stringResource(R.string.button_confirm),
+                    onClick = {
+                        haptic.confirm()
+                        val problem = ModeModel.setVideo(context, provider, model)
+                        if (problem != null) Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+            } else {
+                listed.items.forEach { item ->
+                    val chosen = !snapshot.followsCurrent &&
+                        snapshot.videoProvider == item.provider &&
+                        snapshot.videoModel == item.model
+                    ArrowPreference(
+                        title = item.label,
+                        summary = if (chosen) {
+                            "现在用它"
+                        } else {
+                            "${item.provider} / ${item.model}"
+                        },
+                        onClick = {
+                            haptic.confirm()
+                            ModeModel.setVideo(context, item.provider, item.model)
+                        },
+                    )
+                }
+            }
+        }
+        TextButton(
+            text = stringResource(R.string.button_cancel),
+            onClick = {
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
  * 朗读: 音色与语速
  *
  * 这两件事与"引擎是谁、要不要下语音包"是两半账: **引擎与语音包只能去系统的「文字转语音输出」那
@@ -3800,6 +4830,36 @@ private fun BallItems() {
             BallSpot.setFeel(context, picked)
         },
     )
+    // 球多大 (主人 2026-10-15: "在 luwi 浮标设置里, 增加 ball 尺寸大小")
+    //
+    // **两个来源取大的那个** (见 [BallSize.resolve]): 这一档是主人设的基准, 而外观插件可以声明
+    // 它自己至少要多大 (鲸鱼娘那份是 72 —— 全身立绘缩到 48 时五官糊成一团)。所以挑了插件之后
+    // 这一行会把插件那个数**一并说出来**, 免得"我明明设了 48, 它却是 72"看着像坏了
+    BallSizeSlider()
+    // 半透明 (2026-10-15 主人: "在浮标设置里加上半透明和半隐藏开关"): 开着时整颗球压到 70%
+    //
+    // **不必重启**: 那个 alpha 是 `OverlayService.waitNow()` 每一拍 (400 ms) 校正的, 改完当场看得见
+    var translucentNow by remember { mutableStateOf(BallSpot.translucent(context)) }
+    SwitchPreference(
+        title = stringResource(R.string.settings_ball_translucent),
+        summary = stringResource(R.string.settings_ball_translucent_summary),
+        checked = translucentNow,
+        onCheckedChange = { wanted ->
+            translucentNow = wanted
+            BallSpot.setTranslucent(context, wanted)
+        },
+    )
+    // 半隐藏: 闲置之后自动贴边收起来一半。**关掉不是"不能收边"**, 只是不再自动收 —— 碰一下照旧滑回来
+    var autoPeekNow by remember { mutableStateOf(BallSpot.autoPeek(context)) }
+    SwitchPreference(
+        title = stringResource(R.string.settings_ball_peek),
+        summary = stringResource(R.string.settings_ball_peek_summary),
+        checked = autoPeekNow,
+        onCheckedChange = { wanted ->
+            autoPeekNow = wanted
+            BallSpot.setAutoPeek(context, wanted)
+        },
+    )
     // 拖球那条经验 (主人 2026-10-06 让写在这儿): 球贴在屏幕最左/最右时, 直接往中间拖会先经过系统的
     // **返回手势区** (屏幕左右边缘那一条竖带) —— 那一下被系统吃掉, 表现是"球没挪动, 反而退出了当前
     // 应用"。先往上拖一点, 离开那条竖带再横着挪, 就不会撞上它
@@ -3812,6 +4872,53 @@ private fun BallItems() {
         color = colorScheme.onSurfaceVariantActions,
         fontSize = 12.sp,
         modifier = Modifier.padding(horizontal = UiSpacing.PageHorizontal),
+    )
+}
+
+/**
+ * 「球大小」那一档
+ *
+ * 球多大原来是个常量 (D16 定的 48 dp), 换人物立绘时又被写死成 72 dp —— 两件事都不对, 这个取舍
+ * 只有主人自己知道 (球小不挡屏, 球大人物五官看得清), 于是它成了一档设置。
+ *
+ * **换了当场生效**: 尺寸是球每次 `onMeasure` 现算的 (与手势灵敏度同一个做法), 不必重开服务 ——
+ * 服务那边收到尺寸变化会把贴边 / 半隐 / 回复框一起重摆 (见 `OverlayService.ballListener`)
+ *
+ * 摘要里那句"插件要多大"只在挑了带 `minDp` 的外观时才有意义, 所以两者都列出来
+ */
+@Composable
+private fun BallSizeSlider() {
+    val context = LocalContext.current
+    val stored = remember { BallSize.sizeDp(context) }
+    // 当前主题 (内部有缓存, 不是每次读盘)
+    val themeMin = remember { runCatching { BallTheme.active(context)?.spec?.minDp ?: 0 }.getOrDefault(0) }
+    val showing = remember { BallSize.resolve(context, themeMin) }
+    val summary =
+        if (themeMin > stored) {
+            stringResource(R.string.settings_ball_size_summary_theme, stored, themeMin, showing)
+        } else {
+            stringResource(R.string.settings_ball_size_summary, stored)
+        }
+    ArrowSlider(
+        title = stringResource(R.string.settings_ball_size),
+        summary = summary,
+        value = stored.toFloat(),
+        onValueChange = { BallSize.set(context, it.roundToInt()) },
+        valueRange = BallSize.range,
+        // 连续滑动: 吸附交给 keyPoints 与 magnetThreshold (设了 steps 反而滑不到中间那些值)
+        steps = 0,
+        showKeyPoints = true,
+        keyPoints = BallSize.keyPoints,
+        magnetThreshold = BallSize.MAGNET,
+        unit = "dp",
+        inputSummary = stringResource(
+            R.string.settings_ball_size_dialog,
+            BallSize.range.start.toInt(),
+            BallSize.range.endInclusive.toInt(),
+        ),
+        inputLabel = "dp",
+        // 打字按 dp 收, 范围与滑块同一份 —— 越界的值由 BallSize.set 自己夹回范围内
+        onInputConfirm = { raw -> raw.toIntOrNull()?.let { BallSize.set(context, it) } },
     )
 }
 

@@ -532,6 +532,32 @@ execFileSync(process.execPath, [
 ], { cwd: out, stdio: 'inherit' })
 
 /**
+ * 会话同步插件 (G1): Luwi 二开的 vendored 拷贝 (host-plugins/luwi-dsh-sync, 2026-10-14 改名,
+ * 之前叫 dsh-session-sync), 与 luwi-channel 同一条路 —— 拷进 node_modules, 由 PluginOverlay
+ * 的 overlay 行挂载
+ *
+ * 装完 import 一次, 理由与上面那两步一样: 少一个依赖时 npm 不会说话, 而它要到**加载时**才抛
+ * —— 设备上的表现会是"同步整块不见了"。import 按这棵树自己的 node_modules 解析
+ * (@deepseek-ai/cordis 等都在), 于是这一步同时验了它声明的外部依赖在这棵树里齐
+ *
+ * **裁掉测试与杂物**: test / scripts / tsconfig 是给上游 CI 用的, 非中文 README 是给人看的
+ * —— 都不进 APK (本仓保留它们作对照, 见 host-plugins/luwi-dsh-sync/UPSTREAM.md)
+ */
+const sessionSync = fileURLToPath(new URL('../host-plugins/luwi-dsh-sync', import.meta.url))
+const sessionSyncInstalled = join(out, 'node_modules', 'luwi-dsh-sync')
+cpSync(sessionSync, sessionSyncInstalled, { recursive: true })
+for (const name of ['test', 'scripts', 'tsconfig.check.json', 'tsconfig.check.ci.json', 'README-es.md', 'README-pt.md', 'README-hi.md']) {
+  rmSync(join(sessionSyncInstalled, name), { recursive: true, force: true })
+}
+console.log(`pack-host: installed luwi-dsh-sync from ${sessionSync}`)
+execFileSync(process.execPath, [
+  '--input-type=module',
+  '-e',
+  `await import(${JSON.stringify(pathToFileURL(join(sessionSyncInstalled, 'index.mjs')).href)})`,
+], { cwd: out, stdio: 'inherit' })
+console.log('pack-host: luwi-dsh-sync imports cleanly')
+
+/**
  * 内置的 dsh-custom-mode: 让新机开箱就有那个 `custom` 预设 (2026-10-09 主人报的那条)
  *
  * 与 luwi-channel 同一条路 —— 拷进 node_modules; 而"它是不是这一棵树的一个 bundle"由

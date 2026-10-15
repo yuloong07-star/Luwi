@@ -12,7 +12,9 @@ import io.github.yuloong07star.luwi.tool.LwEvents
 import io.github.yuloong07star.luwi.tool.LwFiles
 import io.github.yuloong07star.luwi.tool.LwGallery
 import io.github.yuloong07star.luwi.tool.LwKeepAwake
+import io.github.yuloong07star.luwi.tool.LwLinux
 import io.github.yuloong07star.luwi.tool.LwMedia
+import io.github.yuloong07star.luwi.tool.LwModel
 import io.github.yuloong07star.luwi.tool.LwNotifications
 import io.github.yuloong07star.luwi.tool.LwNotify
 import io.github.yuloong07star.luwi.tool.LwOverlay
@@ -20,6 +22,7 @@ import io.github.yuloong07star.luwi.tool.LwPhoto
 import io.github.yuloong07star.luwi.tool.LwPlugin
 import io.github.yuloong07star.luwi.tool.LwPower
 import io.github.yuloong07star.luwi.tool.LwQuick
+import io.github.yuloong07star.luwi.tool.LwSync
 import io.github.yuloong07star.luwi.tool.LwSpeech
 import io.github.yuloong07star.luwi.tool.LwSpeak
 import io.github.yuloong07star.luwi.tool.LwSystem
@@ -951,6 +954,9 @@ object PrivilegedBridge {
         "keepAwake" -> LwKeepAwake.dispatch(request)
         // 模式: 只换那个助手的提示词文件 (手机模式 / 视频模式), 不动预设也不动工具表
         "mode" -> appContext { LwModes.dispatch(it, request) }
+        // 需求 2 (3.0.2): 视频模式用哪一个模型的目录 (`op=catalog`) —— 应用读宿主写的
+        // model-catalog.json, 设置页与这里的量具 (`lw.ps1 -Method model`) 看到的是同一份
+        "model" -> appContext { LwModel.dispatch(it, request) }
         "camera" -> appContext { LwCamera.dispatch(it, request) }
         // 1.0.3 批次 4: 工作区里那几个文件与手机那一侧的读数、让媒体库看见、拍一张照
         "files" -> appContext { LwFiles.dispatch(it, request) }
@@ -966,6 +972,10 @@ object PrivilegedBridge {
                 "quick" -> appContext { LwQuick.dispatch(it, request) }
                 // 自动指令 (2.5.0 批次 8): 规则 / 设置 / 历史 / 现在能不能用, 都在这一条上
         "automation" -> appContext { LwAutomation.dispatch(it, request) }
+        // 会话同步那份配置 (2026-10-14): 模型够不到 `$DSH_HOME` (它的 fs 工具关在工作区, lw_linux 的
+        // proot 也只 bind 工作区), 而设置页第一排写着"让 agent 帮你配置" —— 这一条就是那句话的落地。
+        // 语义走 SyncSetting 的纯文件那一半, 这里只有一行转发
+        "sync" -> appContext { LwSync.dispatch(it, request) }
 
         // LW 插件 (批次 9): 装 / 启用 / 停用 / 卸 / 授权 / 审计, 以及宿主每几秒拉一次的那份快照
         // (它按 revision 决定要不要重注册工具)。与别的工具同一个形状: 应用这一侧写答案
@@ -985,6 +995,9 @@ object PrivilegedBridge {
         "overlay" -> appContext { LwOverlay.dispatch(it, request) }
         "wakeword" -> appContext { LwWakeWord.dispatch(it, request) }
         "syscmd" -> LwSystemCommand.dispatch(request)
+        // Linux 沙盒 (装 / 跑 / 问 / 删): 命令形状写死在特权那一侧 (见 LwLinuxSandbox), 这一侧只
+        // 负责把随包的 base 抄出自己的 data 目录、把 work 过一道形状, 以及通道不在线时也能答的那半个状态
+        "linux" -> LwLinux.dispatch(request)
 
         // 等一个控件出现: 在无障碍树里轮询, 找到就立刻回话, 不找到就回到超时为止。上限压在与桥那条
         // 120 秒读超时之下, 超时说的是"这段时间里没出现", 不挂住模型

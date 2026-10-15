@@ -3,6 +3,7 @@ package io.github.yuloong07star.luwi.plugin.theme
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import io.github.yuloong07star.luwi.plugin.PluginManager
 import io.github.yuloong07star.luwi.plugin.PluginPaths
 import io.github.yuloong07star.luwi.plugin.PluginStore
 import kotlinx.serialization.Serializable
@@ -30,8 +31,17 @@ internal object BallTheme {
 
     private const val CHOICE = ".theme.json"
 
-    /** 一帧序列的上限: 球比桌面那一格小得多, 再多也看不出来, 只是白占内存 */
-    private const val MAX_FRAMES = 32
+    /**
+     * 一帧序列的上限
+     *
+     * 2026-10-15 由 32 一路提到 **128**: 主人报"帧率有点低" —— 32 帧盖一个动作周期只有 4 fps,
+     * 确实卡。现在这一档配 12 fps 用 (覆盖 10.67 s, 原片 10 s, 动作速度几乎不变)。
+     *
+     * 卡这个数的**不是包体而是内存**: 解码后的帧同时只留当前那一个状态
+     * ([BallView.faceFrames] 换状态就整批换掉), 128 帧按球上那个解码尺寸约 16 MB; 再往上翻
+     * 就得先想清楚低端机那点堆
+     */
+    private const val MAX_FRAMES = 128
     private const val MAX_FPS = 30
 
     @Serializable
@@ -46,19 +56,52 @@ internal object BallTheme {
         fun frameNames(): List<String> = (0 until count).map { frameName(it) }
     }
 
-    /** `theme/ball.json` 那一份 (老协议 10.1 的字段, 原样收) */
+    /**
+     * 素材怎么装进球里
+     *
+     * [CONTAIN] 是给"人物代替球"那一档的: 素材是全身立绘, 而球体那一层带着圆裁剪
+     * ([BallView] 的 `clipToOutline`) —— 裁圆会掉头和脚, 所以这一档要不裁圆、按比例装进方窗。
+     * 缺省仍是 [COVER] (有插件之前一直就是这个行为, 不能因为加了字段就变样)
+     */
+    enum class Fit {
+        COVER,
+        CONTAIN,
+    }
+
+    /** `theme/ball.json` 那一份 (老协议 10.1 的字段, 原样收; `ring` 是 2026-10-16 收的那一档) */
     data class BallSpec(
         val name: String,
         val hideBuiltinText: Boolean,
         val states: Map<String, String>,
         val frames: Map<String, Frames>,
+        /** 每个状态一个环色 (已解析成 ARGB), 缺哪个状态就回内置那一套 */
+        val rings: Map<String, Int>,
+        /** 素材怎么装 (见 [Fit]), 缺省 [Fit.COVER] */
+        val fit: Fit = Fit.COVER,
+        /**
+         * 这份外观**至少要多大**才画得下 (dp), 缺省 0 = 没要求
+         *
+         * 它不是"抢主人的设置"而是"它自己画不下": 鲸鱼娘那份是全身立绘, 缩到 48 dp 时五官糊成一团,
+         * 所以声明 72。球最终多大由 `BallSize.resolve` 取**设置值与这个数里大的那个** ——
+         * 主人拉到 80 就用 80, 留在 48 时插件球仍是 72 (2026-10-15 主人:
+         * "ball 改为原来的尺寸, 鲸鱼娘 ball 也保持当前尺寸 72")
+         */
+        val minDp: Int = 0,
     )
+
+    /**
+     * "挑一个外观"的候选
+     *
+     * @property id 插件 id, 空串 = 内置画法
+     * @property name 显示用 (取 `theme/ball.json` 的 `name`, 读不出来就退插件 id)
+     */
+    data class Pick(val id: String, val name: String)
 
     /** 现在生效的那一份 */
     data class Active(val id: String, val directory: File, val spec: BallSpec)
 
     /** 某个状态那一张脸: 一张图, 或者一串帧 */
-    data class Face(val file: File, val frames: Frames?, val hideBuiltinText: Boolean)
+    data class Face(val file: File, val frames: Frames?, val hideBuiltinText: Boolean, val fit: Fit)
 
     private val json = Json { prettyPrint = false; ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -96,7 +139,7 @@ internal object BallTheme {
             PluginPaths.resolve(active.directory, path, "theme/ball.json 的 states.$state")
         }.getOrNull() ?: return null
         if (!file.isFile) return null
-        return Face(file, active.spec.frames[state], active.spec.hideBuiltinText)
+        return Face(file, active.spec.frames[state], active.spec.hideBuiltinText, active.spec.fit)
     }
 
     /** 一帧序列里每一张的位置 (同样每张再解一次路径) */
@@ -171,6 +214,76 @@ internal object BallTheme {
         if (states.isEmpty() && frames.isEmpty()) {
             throw IllegalArgumentException("theme/ball.json 里 states 与 frames 至少要有一段")
         }
-        return BallSpec(name, hide, states, frames)
+        val rings = (root["ring"] as? JsonObject).orEmpty().mapValues { (state, value) ->
+            parseColor((value as? JsonPrimitive)?.takeIf { it.isString }?.content)
+                ?: throw IllegalArgumentException("theme/ball.json 的 ring.$state 要是一个 #RRGGBB 或 #AARRGGBB 的颜色")
+        }
+        // fit 缺省是 cover (加这个字段之前一直就是这个行为, 不能让老插件因为没写它而变样)
+        val fitText = (root["fit"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val fit = when (fitText?.lowercase()) {
+            null, "cover" -> Fit.COVER
+            "contain" -> Fit.CONTAIN
+            else -> throw IllegalArgumentException("theme/ball.json 的 fit 只认 cover 或 contain")
+        }
+        // minDp: 这份外观至少要多大 (缺省 0 = 不要求); 上界 200 是防手滑写成一个天文数字
+        val minDp = (root["minDp"] as? JsonPrimitive)?.longOrNull?.toInt() ?: 0
+        if (minDp !in 0..200) {
+            throw IllegalArgumentException("theme/ball.json 的 minDp 要在 0..200 之间")
+        }
+        return BallSpec(name, hide, states, frames, rings, fit, minDp)
     }
+
+    /**
+     * 解一个 `#RRGGBB` / `#AARRGGBB` 的颜色
+     *
+     * 纯算术 (不走 `android.graphics.Color.parseColor`), 所以它能在单元测试里钉住 —— 主题里写错一个
+     * 颜色不该让球退回内置, 只该那一档用不上
+     */
+    fun parseColor(text: String?): Int? {
+        val raw = text?.trim().orEmpty()
+        if (!raw.startsWith("#")) return null
+        val digits = raw.substring(1)
+        val value = digits.toLongOrNull(16) ?: return null
+        return when (digits.length) {
+            6 -> (0xFF000000L or value).toInt()
+            8 -> value.toInt()
+            else -> null
+        }
+    }
+
+    /**
+     * 现在能挑的候选: **内置画法永远在第 0 位**, 后面是装了带 `theme/ball.json` 的那些插件
+     *
+     * 与设置页那份对话框 (SettingsScreen 的 `BallThemeDialog`) 用**同一个口径** —— 名字取插件的
+     * manifest, 不取 ball.json (那一个是素材自己的说法, 主人在界面上看到的是插件名)
+     */
+    fun choices(context: Context): List<Pick> = buildList {
+        add(Pick("", ""))  // 名字由调用方用内置那一条字符串给 (这里不碰 android 资源)
+        PluginManager.entries(context).forEach { entry ->
+            val directory = entry.directory ?: return@forEach
+            if (File(directory, "theme/ball.json").isFile) add(Pick(entry.id, entry.name))
+        }
+    }
+
+    /**
+     * 换下一个: 轮换表就是 [choices] 的顺序 (内置 → 各插件), 只有一项时保持不动
+     *
+     * @return 换完之后的 id (调用方拿它刷新球)
+     */
+    fun rotate(context: Context): String {
+        val picks = choices(context)
+        if (picks.size <= 1) return currentId(context)
+        val at = picks.indexOfFirst { it.id == currentId(context) }.let { if (it < 0) 0 else it }
+        val next = picks[(at + 1) % picks.size]
+        choose(context, next.id)
+        return next.id
+    }
+
+    /** 现在生效那一套的显示名 (内置时是空串, 由调用方用 `ball_theme_builtin` 那一条给) */
+    fun nameOf(context: Context, id: String): String =
+        choices(context).firstOrNull { it.id == id }?.name.orEmpty()
+
+    /** 这一套给"某一个状态"的环色 (没有这一档 / 没挑主题 / 没写这个状态, 都是 null = 回内置) */
+    fun ring(context: Context, state: String): Int? =
+        active(context)?.spec?.rings?.get(state)
 }

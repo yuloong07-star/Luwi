@@ -20,13 +20,13 @@
 | 脚本 | 干什么 |
 | :-- | :-- |
 | `check-host-plugin.mjs` | 装进 host 树之前先问一句: 这个插件到底能注册出几个工具 (schema 在模块求值时编译, 一张不合规的就整包一起死) |
-| `check-overlay-yaml.mjs` | 把 app 会写出来的那份 overlay YAML 解析一遍 (拼错了的代价是整台 host 起不来) |
+| `check-overlay-yaml.mjs` | 把 app 会写出来的那两份 YAML (命令行覆盖层 + profile patch 里 `PluginRows` 补的那一行) 解析一遍 (拼错了的代价是整台 host 起不来, 而 profile patch 里那一行的 `name:` 写成裸路径的代价是**设置面板永远存不进去**) |
 | `check-read-aloud.mjs` | 念之前那次清洗: 直接拿 `host-plugin/index.mjs` 里的源码跑, 不复制一份出来 |
 | `check-voice-commands.mjs` | 命令句词表的**两份实现不许漂开** (宿主插件那张表 vs `voice/VoiceCommands.kt`) |
 | `check-auto-shot.mjs` | 自动识屏那一张图的判据表: 词表 (正例 / 反例) + 视频模式与设置那两道闸 + 图要进用户消息 |
 | `check-lock-steps.mjs` | 锁屏那一条的判据表: 坐标一律比例 / 密码与图案不落明文也不进日志 / 失败三次停 / 点亮三条路都在 / 插件与应用的 op 名单一致 / **脚本动词表与 `docs/lock-script.md` 不许漂** |
 | `check-quick-commands.mjs` | 快捷指令与技能那一条的判据表: `lw_calendar` / `lw_quick` 的 op 名单两侧一致 (删除只在桥上有) / 四份技能与两条样例都在 / 技能 frontmatter 合规 / `build.gradle.kts` 那张随包表与仓库里的文件对得上 |
-| `check-image-edit.mjs` | p 图那一条的判据表: `lw_image` 的两个 op 与 `.mjs` / 桥两侧对得上 (ref 那条链与 `edit_image` 的 `source_image` 同一份形状) / 生图插件与 `photo-edit` 技能都在随包表里 / 那两处清单与 `PluginOverlay` 那一行三边一致 |
+| `check-image-edit.mjs` | p 图那一条的判据表: `lw_image` 的两个 op 与 `.mjs` / 桥两侧对得上 (ref 那条链与 `edit_image` 的 `source_image` 同一份形状) / 生图插件与 `photo-edit` 技能都在随包表里 / 那两处清单与 `PluginOverlay` 那一行三边一致 / 面板要能改的那一行不在覆盖层两张表里, 而且盘上写的是 `file://` 形态 |
 | `check-automations.mjs` | 自动指令那一条的判据表: `lw_automation` 的 op 名单两侧一致 (删除只在桥上有) / 六个 `when.kind` 与两种 `then.kind` 在插件说明里逐个念到 / 冷却与上限那两个默认值两侧一致 / 两个来源记号 (`automation` 与 `automation-setup`) 都在且插件对前一个有那两处特别处理 / 设置页引用的字符串键两份 `strings.xml` 都有而且顺序一致 |
 | `check-wake-words.mjs` | 唤醒词表算法的两份实现不许漂开 (`WakeWordWords.kt` vs 插件里的 `wakeWordLine`) |
 | `check-voice-inbox.mjs` | 投递队列那三条真值: 第一次跑不倒历史 / 投递成功才前移 / 断线要留话 |

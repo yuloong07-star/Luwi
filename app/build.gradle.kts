@@ -119,6 +119,9 @@ val packHostTree = tasks.register<Exec>("packHostTree") {
     inputs.file(rootProject.file("tools/pack-host.mjs"))
     // The plugin is copied into the tree rather than built, so its sources are an input too
     inputs.dir(rootProject.file("host-plugin"))
+    // Luwi 加 (G1-2): 随包的第三方 host 插件也在 `host-plugins/` 里被拷进树 (luwi-dsh-sync 那一份),
+    // 少了这一行改插件的源码不会让这个任务失效 —— 出包时会拿到上游那一份
+    inputs.dir(rootProject.file("host-plugins"))
     // The image backend is copied over sharp the same way, so it is one as well
     inputs.dir(rootProject.file("image-backend"))
     // 三份预设声明与内置的 dsh-custom-mode 也从仓库拷进树 (见 tools/pack-host.mjs 那两段),
@@ -215,8 +218,10 @@ android {
         // 2.7.4: LW 插件第二批 (伴侣 APK 那一层 —— 鲸鱼娘桌面小组件、从链接装入) 与设置页新加的
         // 「技能」那一段 (按已装应用把技能装进 dsh 家), 以及全仓图标换成 Luwi 自己的标记
         // (球上那圈标记 0.378 → 0.65)。这一批在 git 里的开发者标签是 v2.7.0…v2.7.3, 收口时定名 2.7.4
-        versionCode = 14
-        versionName = "2.7.6"
+        // 2.7.7: 浮标外观能放人物立绘了 —— `theme/ball.json` 收 `fit` (cover/contain), contain 那一档
+        // 不裁圆; 球尺寸 48 → 72 dp; 涟漪窗跟着 96 → 132 dp; peeked/失败/完成 三档都能配素材
+        versionCode = 15
+        versionName = "2.7.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

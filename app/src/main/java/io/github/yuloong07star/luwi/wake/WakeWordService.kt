@@ -175,9 +175,10 @@ internal object WakeWordState {
  *
  * 两条判据是三条展开的 `if`, 所以它抽成一个纯函数 (`forward`) —— 没有设备也能量, 见 [HalfDuplexTest]
  *
- * **喂进来的那个"在说话没有"是两个来源的并集** (2026-10-09 修的): `VoiceState.speaking` 是这道闸
- * 自己的标记, 而三条 TTS 引擎各自还在不在放由 `LwSpeak.speakingNow` 说 —— 在线那两条 (Edge / API)
- * 过去不写前者, 于是它念回答时麦克风开着, 自己的声音被录回去 ([WakeWordService.voiceSink])
+ * **喂进来的那个"在说话没有"是两个来源的并集** (2026-10-09 修的, 2026-10-16 收口): 谁在放由
+ * `LwSpeak.talking` 说 (三条引擎各自准的那一条, 不再看系统媒体流), 而 `VoiceState.speaking` 带的是它
+ * 管不到的那一件事 —— 开门那一声「嘀」。在线那两条 (Edge / API) 过去不写任何标记, 于是它念回答时
+ * 麦克风开着, 自己的声音被录回去 ([WakeWordService.voiceSink])
  */
 internal object HalfDuplex {
 
@@ -1046,14 +1047,12 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
      * 判据 (闭闸时作废 / 闭闸时唤醒词跟着哑 / 开闸时两个消费者都喂) 是真的要一条条量的
      */
     private val voiceSink = AudioCapture.Sink { samples ->
-        // **闸的判据是两个来源的并集** (2026-10-09): [VoiceState.speaking] 是半双工那道标记, 而三条
-        // 引擎各自还在放没有 (在线那两条过去不写那个标记) 由 [LwSpeak.speakingNow] 说。只看前者时,
-        // 在线引擎念回答那几秒麦克风是开着的 —— 她自己的回答被录回去、当成一句话投进会话 (真机上
-        // 实测到的那条)。两个一起看, 谁在放都不吃音频
-        // **判据是 [LwSpeak.talking]**: 引擎报"说完"之后喇叭往往还在响 (系统那条尤其如此), 那一段
-        // 也得当作"在说" —— 只认 `VoiceState.speaking` 时她自己的回答被录回去投成过一句话
-        // (2026-10-10 主人: "正在听时还是有可以录入正在说")
-        when (HalfDuplex.forward(LwSpeak.talking(this))) {
+        // **闸的判据是两个来源的并集**: [LwSpeak.talking] 说"我们的喇叭还在响" —— 三条引擎各自那条准的
+        // 判据 (2026-10-16 起不看系统媒体流了: 别人的音乐不再把这道闸合上, 原来那一条会把麦克风白关
+        // 十几秒), 而 [VoiceState.speaking] 还带一件它管不到的事: 开门那一声「嘀」
+        // ([openForOneSentence]) 只置那个标记。只看后者时, 在线引擎念回答那几秒麦克风是开着的 ——
+        // 她自己的回答被录回去、当成一句话投进会话 (真机上实测到的那条)
+        when (HalfDuplex.forward(LwSpeak.talking(this) || VoiceState.speaking)) {
             // 在采集线程上: 这一句与 keywordSink / vad 那两个消费者是同一个线程, 所以与它们不冲突
             HalfDuplex.ABANDON -> vad?.abandon()
             HalfDuplex.ACCEPT -> {
@@ -1540,7 +1539,10 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
         }, "lw-voice-notify").apply { start() }
     }
 
-    /** 现在有没有在念: 三条引擎各自的播放状态 (见 `LwSpeak.speakingNow`), **不含那一声提示音** */
+    /**
+     * 现在有没有在放: [LwSpeak.talking] (三条引擎各自那条准的判据, 2026-10-16 起不看系统媒体流),
+     * **不含那一声提示音** —— 提示音走 [VoiceState.speaking], 拿它当判据会把刚张开的窗口当场掐掉
+     */
     private fun ttsPlaying(): Boolean = LwSpeak.talking(this)
 
     private fun stopSpeakingWatch() {

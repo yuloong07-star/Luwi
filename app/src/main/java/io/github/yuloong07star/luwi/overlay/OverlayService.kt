@@ -599,6 +599,15 @@ class OverlayService : Service() {
                 lastHostUp = up
                 runCatching { readBallPhase() }
             }
+            // **再兜一眼那份文件的 mtime** (2026-10-15 真机: 这台机器上 inotify 一次都没叫醒过我们,
+            // 于是球上「正在想」从来没亮过 —— 而这份文件只有三处会读: 服务起来 / 宿主翻成在跑 /
+            // inotify)。一次 stat 而已 (不是读文件、更不是解析), 变了才真读 —— 于是 inotify 那条
+            // 仍然是最快的, 它坏了最多晚一拍 (400 ms)
+            val stamp = runCatching { BallPhaseFile.file(this@OverlayService).lastModified() }.getOrDefault(0L)
+            if (stamp != phaseStamp) {
+                phaseStamp = stamp
+                runCatching { readBallPhase() }
+            }
             handler.postDelayed(this, TICK_MS)
         }
     }
@@ -606,8 +615,32 @@ class OverlayService : Service() {
     /** 那份"哪几场在跑"的文件: inotify 盯着它 (见 [BallPhaseFile]) */
     private var phaseWatch: BallPhaseFile.Watch? = null
 
+    /**
+     * 上一次读那份文件时它的 mtime
+     *
+     * 它是 [tick] 那一拍的兜底判据 (见那里): inotify 万一没叫醒我们, 每 400 ms 的一次 stat 也能发现
+     * 文件变过 —— 2026-10-15 真机上 inotify 就是死的, 靠的就是这一条
+     */
+    private var phaseStamp = 0L
+
+    /** 那份余额文件: 同一个盯法 (见 [BalanceFile], 2026-10-16) */
+    private var balanceWatch: BalanceFile.Watch? = null
+
+    /**
+     * 上一次「看余额」是主人什么时候要的
+     *
+     * 只有失败那一条认它: 宿主平时自己也会刷余额, 那些失败不该在主人没看的时候往框里塞一句 ⚠
+     */
+    private var balanceAskedAt: Long = 0L
+
     /** 上一拍画的那个环色: 会话换了而字没换时也得重画一次 (见 [refresh]) */
     private var lastRing: Int? = null
+
+    /** 余额那份文件多新才算"直接给" (过了这个数就先写「正在取」再让宿主刷) */
+    private val BALANCE_FRESH_MS = 60_000L
+
+    /** 「看余额」之后多久之内的失败才算"主人正等着" (只有这一段里失败才值得往框里塞一句 ⚠) */
+    private val BALANCE_ASK_WINDOW_MS = 30_000L
 
     /**
      * 上一拍浮标外观挑的是哪一个 (协议 10.1 / 方案 3.2)
@@ -755,7 +788,10 @@ class OverlayService : Service() {
      */
     private fun currentAct(): BallAct = BallTouch.act(
         phase = phase,
-        speaking = LwSpeak.speakingNow || VoiceState.speaking,
+        // 与球上那几个字**同一个判据** (2026-10-16): 原来这里读的是 `speakingNow`, 于是尾巴窗口里球上
+        // 写着「正在说」、点一下却不掐播报 (显示与动作两套判据)。现在两边都是 [LwSpeak.talking], 再加
+        // 上半双工那个标记管着的开门一声「嘀」
+        speaking = LwSpeak.talking(this) || VoiceState.speaking,
         channelOpen = boxView != null,
         listening = VoiceState.capturing,
         // 常驻语音那一档: 显示上与「正在听」一模一样, 只有那一下多做一件事 (见 [BallAct.LEAVE_VIDEO])
@@ -800,6 +836,8 @@ class OverlayService : Service() {
         // 先按现有那一份对一次账, 再盯住它 —— 三处读取之一 (另两处: inotify 事件、宿主翻成在跑)
         runCatching { readBallPhase() }
         startPhaseWatch()
+        // 余额那份文件同一个盯法 (2026-10-16): 宿主一刷, 框里那条「正在取」就地换成真数
+        startBalanceWatch()
     }
 
     /**
@@ -813,6 +851,8 @@ class OverlayService : Service() {
      */
     private fun readBallPhase() {
         val snapshot = BallPhaseFile.snapshot(this)
+        // 顺手把 mtime 记下来: [tick] 那一拍就是拿它判"文件变过没有" (见那里的兜底)
+        phaseStamp = runCatching { BallPhaseFile.file(this).lastModified() }.getOrDefault(phaseStamp)
         // **整份清单**留着给两笔自动收口用 (见 [turns]): 球上那个字只要最近那一场, 而"同一场起了
         // 新轮"要能把那一场在这里面找出来
         turns = snapshot.running
@@ -840,9 +880,22 @@ class OverlayService : Service() {
         val watch = BallPhaseFile.Watch {
             handler.post { runCatching { readBallPhase() } }
         }
+        // **盯不上不会有读数** (`startWatching()` 是 void, 2026-10-15 真机上它就是这么死的): 所以
+        // 这条路不靠它 —— [tick] 那一拍顺手看一眼 mtime, inotify 坏掉最多晚 400 ms
         runCatching { watch.start(this) }
             .onFailure { problem -> OverlayState.phaseNote = "盯不住 ball-phase.json: ${problem.message}" }
         phaseWatch = watch
+    }
+
+    /** 余额那份文件同一个盯法 ([BalanceFile.Watch]): 宿主一刷就叫醒, 当场改掉框里那一行 */
+    private fun startBalanceWatch() {
+        if (balanceWatch != null) return
+        val watch = BalanceFile.Watch {
+            handler.post { runCatching { readBalance() } }
+        }
+        runCatching { watch.start(this) }
+            .onFailure { problem -> note("盯不住 balance.json: ${problem.message}") }
+        balanceWatch = watch
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -902,6 +955,8 @@ class OverlayService : Service() {
         // 服务走了, 那个目录就没人盯了: inotify 的描述符也要跟着放掉 (下次 onCreate 再盯回去)
         phaseWatch?.stop()
         phaseWatch = null
+        balanceWatch?.stop()
+        balanceWatch = null
         snap?.cancel()
         snap = null
         closeMenu()
@@ -1034,7 +1089,7 @@ class OverlayService : Service() {
         window = manager
         if (ballView == null) {
             val metrics = resources.displayMetrics
-            val ball = dp(BallView.BALL_SIZE_DP)
+            val ball = ballSizePx()
             val spot = BallSpot.read(this)
             val edge = spot?.first ?: BallGeometry.EDGE_RIGHT
             val restY = BallGeometry.clampY(spot?.second ?: (metrics.heightPixels * 2 / 3), metrics.heightPixels, ball)
@@ -1251,7 +1306,7 @@ class OverlayService : Service() {
 
         override fun onDragTo(dx: Float, dy: Float) {
             val metrics = resources.displayMetrics
-            val ball = dp(BallView.BALL_SIZE_DP)
+            val ball = ballSizePx()
             // 位移是相对"按下那一点"的, 所以基准只在第一帧取一次 —— 每帧用当前 x 当基准的话,
             // 拖动会随帧率加速 (位置既是结果又是基准)
             if (!ballDragging) {
@@ -1272,7 +1327,41 @@ class OverlayService : Service() {
             noteActivity()
             snapToEdge()
         }
+
+        /**
+         * 球换了一档尺寸 (挑过 / 退了外观插件, 或主人在设置里改了那一档)
+         *
+         * 窗口是照 view 的测量尺寸开的, 所以换档之后**这一拍不能立刻摆位**: view 的新尺寸要等下一趟
+         * 测量 ([BallView.onMeasure]) 才生效, 那时算出来的才是对的 —— 于是 `requestLayout` + `post`
+         * 走一趟, 让贴边 / 半隐 / 回复框那几条算式都按新的尺寸重算
+         */
+        override fun onBallSizeChanged() {
+            ballView?.requestLayout()
+            ballView?.post {
+                if (ballView == null) return@post
+                val metrics = resources.displayMetrics
+                val ball = ballSizePx()
+                // 停靠点本身也要按新尺寸夹一次: 球变大之后原来那个 x 可能已经出屏
+                ballRestX = BallGeometry.xForEdge(
+                    BallGeometry.edgeFor(ballRestX, metrics.widthPixels, ball),
+                    metrics.widthPixels,
+                    ball,
+                )
+                ballBaseY = BallGeometry.clampY(ballBaseY, metrics.heightPixels, ball)
+                applyBallPosition()
+                layoutChannel()
+                note("the ball is now ${ball}px: rest=$ballRestX,$ballBaseY peeked=$peeked")
+            }
+        }
     }
+
+    /**
+     * 球现在的窗口边长 (px)
+     *
+     * **定位那几条算式一律问这个**, 不要自己拿 `BallView.BALL_SIZE_DP` 乘 —— 尺寸有两个来源
+     * (主人设的那一档 + 外观插件要求的下限, 见 [BallSize.resolve]), 而且它会在运行中变
+     */
+    private fun ballSizePx(): Int = ballView?.sizePx() ?: dp(BallView.BALL_SIZE_DP)
 
     /**
      * 这一档该用哪个环色: 只有「正在想」有自己那个 (按会话固定, 见 [BallPhaseFile]); 别的交给
@@ -1430,7 +1519,7 @@ class OverlayService : Service() {
      */
     private fun snapToEdge() {
         val metrics = resources.displayMetrics
-        val ball = dp(BallView.BALL_SIZE_DP)
+        val ball = ballSizePx()
         val target = BallGeometry.snapX(ballRestX, metrics.widthPixels, ball)
         val from = ballParams?.x ?: ballRestX
         ballRestX = target
@@ -1468,13 +1557,14 @@ class OverlayService : Service() {
             OverlayState.peekBlocked = "no window yet"
             return false
         }
-        val ball = dp(BallView.BALL_SIZE_DP)
+        val ball = ballSizePx()
         val edge = BallGeometry.edgeFor(ballRestX, resources.displayMetrics.widthPixels, ball)
         peeked = true
         OverlayState.peekBlocked = ""
         OverlayState.peekCalls += 1
         moveX(layout.x, BallGeometry.peekX(ballRestX, edge, ball))
-        ballView?.animate()?.alpha(PEEK_ALPHA)?.setDuration(BallMinutes.EDGE_SNAP_MS)?.start()
+        ballView?.animate()?.alpha(baseAlpha() * PEEK_ALPHA)
+            ?.setDuration(BallMinutes.EDGE_SNAP_MS)?.start()
         return true
     }
 
@@ -1492,12 +1582,12 @@ class OverlayService : Service() {
         if (!peeked && layout.x == want && snap?.isRunning != true) return
         peeked = false
         moveX(layout.x, want)
-        ballView?.animate()?.alpha(1f)?.setDuration(BallMinutes.EDGE_SNAP_MS)?.start()
+        ballView?.animate()?.alpha(baseAlpha())?.setDuration(BallMinutes.EDGE_SNAP_MS)?.start()
     }
 
     /** 窗该在的 x: [wanted] 为真 (或 [peeked] 为真) 时是半隐位, 否则是停靠位 */
     private fun ballXFor(peeked: Boolean = this.peeked): Int {
-        val ball = dp(BallView.BALL_SIZE_DP)
+        val ball = ballSizePx()
         val edge = BallGeometry.edgeFor(ballRestX, resources.displayMetrics.widthPixels, ball)
         return if (peeked) BallGeometry.peekX(ballRestX, edge, ball) else ballRestX
     }
@@ -1552,7 +1642,7 @@ class OverlayService : Service() {
     private fun applyBallPosition() {
         val layout = ballParams ?: return
         val metrics = resources.displayMetrics
-        val ball = dp(BallView.BALL_SIZE_DP)
+        val ball = ballSizePx()
         val edge = BallGeometry.edgeFor(ballRestX, metrics.widthPixels, ball)
         layout.x = if (peeked) BallGeometry.peekX(ballRestX, edge, ball) else ballRestX
         layout.y = BallGeometry.clampAboveIme(ballBaseY, imeBottom, metrics.heightPixels, ball)
@@ -1626,12 +1716,21 @@ class OverlayService : Service() {
             listening = VoiceState.capturing,
             keyboard = overlayKeyboard,
             channelOpen = boxOnScreen,
-            idleDue = BallMinutes.idleDue(System.currentTimeMillis(), lastActiveAt),
+            // 「闲置后半隐藏」关着时, 那一条闸永远不成立 —— 于是纯函数 [BallRest.wait] 与它的单测
+            // 一个字都不用改 (2026-10-15 主人要的是开关, 不是改判据)
+            idleDue = BallMinutes.idleDue(System.currentTimeMillis(), lastActiveAt) &&
+                BallSpot.autoPeek(this),
         )
         OverlayState.ballWait = wait.reason
         traceIdle(wait)
         if (wait.peek) hideNow()
+        // 「半透明」那一档可能在设置里刚被改过: 没在收边、也没有滑行动画时校正一次 (改完当场看得见)
+        if (!peeked && snap?.isRunning != true) ballView?.alpha = baseAlpha()
     }
+
+    /** 球的基础不透明度: 开着「半透明」压到 [TRANSLUCENT_ALPHA], 否则全不透明 */
+    private fun baseAlpha(): Float =
+        if (BallSpot.translucent(this)) TRANSLUCENT_ALPHA else 1f
 
     /* ── 输入条 ───────────────────────────────────────────────────────────── */
 
@@ -1928,7 +2027,7 @@ class OverlayService : Service() {
         }
         val width = dp(MENU_WIDTH_DP)
         val height = dp(MENU_HEIGHT_DP)
-        val size = dp(BallView.BALL_SIZE_DP)
+        val size = ballSizePx()
         val layout = WindowManager.LayoutParams(
             width,
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1994,12 +2093,155 @@ class OverlayService : Service() {
      */
     private fun menuEntries(): List<Pair<String, () -> Unit>> = buildList {
         add(getString(R.string.ball_menu_return) to { closeMenu(); returnToApp() })
+        // 「换个形象」(2026-10-16): 当场在已装外观之间轮换一圈, 不用进设置页。装了几个就转几个,
+        // 只有一项 (只有内置画法) 时那一下什么都不换 —— 菜单行还在, 但它不该装作换过了
+        add(
+            getString(
+                R.string.ball_menu_theme,
+                BallTheme.nameOf(this@OverlayService, runCatching { BallTheme.currentId(this@OverlayService) }.getOrDefault(""))
+                    .ifBlank { getString(R.string.ball_theme_builtin) },
+            ) to { closeMenu(); rotateTheme() },
+        )
+        // 「看余额」(2026-10-16): 写进通道那块文本框 (主人定的显示位置), 不弹窗也不上球面
+        add(getString(R.string.ball_menu_balance) to { closeMenu(); showBalance() })
         // 相机占用表那一行 (批次 3): **只在真的有人占着时出现** —— 平时它什么都不做, 而一个永远在那儿
         // 的空行只会把菜单撑长。它是表卡住时手上最快的那条出口 (另一条在设置页「视频识别」段里)
         if (CameraOwner.read(this@OverlayService) != null) {
             add(getString(R.string.ball_menu_release_camera) to { closeMenu(); releaseCameraOwner() })
         }
         add(getString(R.string.ball_menu_close) to { closeMenu(); hideBall("menu") })
+    }
+
+    /**
+     * 「换个形象」那一拍: 轮换到下一个, 然后当场重画 (不等那 400 ms 的一拍)
+     *
+     * [BallTheme.rotate] 只有一项 (没装任何外观插件) 时原样返回, 那就不值得重画 —— 但读数里那一下
+     * 还是要记的 (主人点了它而球没变, 回执要能看出"为什么没变")
+     */
+    private fun rotateTheme() {
+        val now = runCatching { BallTheme.rotate(this) }.getOrDefault("")
+        note("theme rotated to ${now.ifBlank { "builtin" }}")
+        if (now.isBlank()) return
+        val current = ballView?.word
+        ballView?.show(current, ring = ringOf(current), peeked = peeked)
+    }
+
+    /**
+     * 「看余额」那一拍: **查的是当前模型那一边** (宿主先认模型再认余额源) —— 新鲜的直接给, 已经有
+     * 答案的失败也直接给, 否则先「正在取」再给宿主递一个请求记号
+     *
+     * 数到真身之后 [readBalance] 会把那一行**就地改写** ([BoxView.replaceInfo]), 屏上不会留两行
+     *
+     * 余额源那一侧 2026-10-17 从"只有 DeepSeek 官方"扩到主流厂商 (宿主那张表里现在有 DeepSeek /
+     * 月之暗面 / OpenRouter / 阶跃 / Novita / PPIO 与智谱 / MiniMax 的额度), 应用这一侧只多认一个
+     * [BalanceFile.KIND_QUOTA] 与一个厂商名, 取数一个字节都不管
+     */
+    private fun showBalance() {
+        val snapshot = BalanceFile.snapshot(this)
+        if (snapshot != null && System.currentTimeMillis() - snapshot.at <= BALANCE_FRESH_MS) {
+            if (snapshot.ok) {
+                showLocalInfo(balanceLine(snapshot))
+            } else {
+                // 已经有答案的失败就地给: 「不支持」是稳定事实, 不该每次都「正在取」再绕一圈
+                showLocalNote(balanceFailure(snapshot))
+            }
+            return
+        }
+        showLocalInfo(getString(R.string.ball_balance_pending))
+        balanceAskedAt = System.currentTimeMillis()
+        BalanceFile.request(this)
+    }
+
+    /** 失败那一句话: 当前模型没有余额源说「不支持」, 其余把宿主那句原话递上去 */
+    private fun balanceFailure(snapshot: BalanceFile.Snapshot): String =
+        if (snapshot.unsupported) {
+            getString(R.string.ball_balance_unsupported)
+        } else {
+            getString(R.string.ball_balance_failed, snapshot.reason.ifBlank { "unknown" })
+        }
+
+    /** 宿主把余额那份文件刷新了 (或者请求记号被写出来): 就地把那一行改掉 / 把失败如实递上去 */
+    private fun readBalance() {
+        val snapshot = BalanceFile.snapshot(this) ?: return
+        if (snapshot.ok) {
+            // 只有"框在屏上"才值得写: 主人关掉框之后余额到账, 那一行不该凭空把框弹回来
+            if (boxOnScreen) runCatching { boxView?.replaceInfo(balanceLine(snapshot)) }
+            return
+        }
+        // 失败: 只在"主人刚要过"那一段里报 (他正等着呢); 走 ⚠ 那一条, 那是"系统在说哪里不对"的位置
+        if (boxOnScreen && balanceAskedAt > 0 && System.currentTimeMillis() - balanceAskedAt <= BALANCE_ASK_WINDOW_MS) {
+            runCatching { boxView?.appendNote(balanceFailure(snapshot)) }
+        }
+    }
+
+    /**
+     * 那一行文本: 谁家的钱 + 金额 (含赠金) 或剩余额度 + 数据多旧
+     *
+     * 名字那一截来自宿主 (只有它知道这一份是问哪一家要来的): 订阅制那几家给的是"还剩百分之多少",
+     * 不是金额, 所以它单独一句话。旧宿主写的那一份没有名字 —— 那种照从前只写金额, 不拿一个空名字去
+     * 凑一句「 余额」
+     */
+    private fun balanceLine(snapshot: BalanceFile.Snapshot): String {
+        val name = snapshot.label.takeIf { it.isNotBlank() }
+        val age = balanceAge(snapshot.at)
+        if (snapshot.kind == BalanceFile.KIND_QUOTA) {
+            val percent = snapshot.percent.coerceIn(0, 100)
+            return if (name == null) {
+                getString(R.string.ball_balance_quota_line, percent, age)
+            } else {
+                getString(R.string.ball_balance_quota_line_by, name, percent, age)
+            }
+        }
+        val symbol = if (snapshot.currency == "USD") "$" else "¥"
+        val bonus = snapshot.bonus.takeIf { it.isNotBlank() }
+            ?.let { " (${getString(R.string.ball_balance_bonus, "$symbol$it")})" }
+            .orEmpty()
+        val amount = "$symbol${snapshot.value}$bonus"
+        return if (name == null) {
+            getString(R.string.ball_balance_line, amount, age)
+        } else {
+            getString(R.string.ball_balance_line_by, name, amount, age)
+        }
+    }
+
+    /** "数据多旧": 一分钟内说"刚刚", 其余按分钟 (宿主那侧每轮结束才刷一次, 别指望它实时) */
+    private fun balanceAge(at: Long): String {
+        val minutes = ((System.currentTimeMillis() - at) / 60_000L).coerceAtLeast(0)
+        return if (minutes < 1) {
+            getString(R.string.ball_balance_just_now)
+        } else {
+            getString(R.string.ball_balance_minutes, minutes.toInt())
+        }
+    }
+
+    /**
+     * 一条**本地**的信息写进通道那块框 ([BoxView.appendInfo]): 形状照 `deliverNote` —— 框在屏上就写
+     * 进去, 不在就张出来, **不抢焦点、不弹键盘**
+     *
+     * 它不走 [appendReply] 那条: 那一条会记"这条是谁说的" (三笔会话账, 双击回复框与「返回应用」都认),
+     * 而余额跟哪一场对话都没关系
+     */
+    private fun showLocalInfo(text: String) {
+        if (boxOnScreen) {
+            boxView?.appendInfo(text)
+            return
+        }
+        openChannel(focus = false)
+        // 张框那一步是同步挂窗的, 所以这里再补一次 (挂失败时 boxView 为 null, 什么都不做)
+        boxView?.appendInfo(text)
+    }
+
+    /**
+     * 一条**本地**的 ⚠ 写进通道那块框: 形状与 [showLocalInfo] 一模一样 (框在就写, 不在就张, 不抢焦点
+     * 不弹键盘), 只是画在提示那一档 —— "当前模型不支持查询余额"这一类回答走它 (那不是金额, 不该带 ¥)
+     */
+    private fun showLocalNote(text: String) {
+        if (boxOnScreen) {
+            boxView?.appendNote(text)
+            return
+        }
+        openChannel(focus = false)
+        boxView?.appendNote(text)
     }
 
     /**
@@ -2092,8 +2334,8 @@ class OverlayService : Service() {
             val root = ChannelRoot(this).apply { addView(box) }
             root.onOutside = { runCatching { noteBlankTap() } }
             val layout = boxLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                x = BoxSpot.x(currentBallX, dp(BallView.BALL_SIZE_DP), width, metrics.widthPixels)
-                y = BoxSpot.y(ballBaseY, dp(BallView.BALL_SIZE_DP), 0, metrics.heightPixels, imeBottom)
+                x = BoxSpot.x(currentBallX, ballSizePx(), width, metrics.widthPixels)
+                y = BoxSpot.y(ballBaseY, ballSizePx(), 0, metrics.heightPixels, imeBottom)
             }
             try {
                 manager.addView(root, layout)
@@ -2194,7 +2436,7 @@ class OverlayService : Service() {
         val root = boxRoot ?: return
         val layout = boxParams ?: return
         val metrics = resources.displayMetrics
-        val ball = dp(BallView.BALL_SIZE_DP)
+        val ball = ballSizePx()
         // **宽也在这里重算** (2026-10-08): 窄屏那一档要收窄 ([BallBox.widthFor]), 而收窄之后 x 的钳制
         // 必须用同一个数 —— 两处各算一次的话, 框会一半压在球上或者一半留在屏外
         layout.width = BallBox.widthFor(metrics.widthPixels)
@@ -2504,7 +2746,9 @@ class OverlayService : Service() {
         val rethemed = themeNow != lastThemeId
         lastThemeId = themeNow
         if (force || changed || ring != lastRing || rethemed) {
-            ballView?.show(word, ring = ring)
+            // **半隐也要跟着进**: BallPet 那一类外观给"贴边半藏"单独画了一张 (`peeked`), 半隐/回弹
+            // 那一拍就得多喂这一个入参 (内置画法没有这一档, 照旧按 idle 画)
+            ballView?.show(word, ring = ring, peeked = peeked)
             OverlayState.word = word?.label(this)
             stripTitle?.text = title(word)
             lastRing = ring
@@ -2690,7 +2934,7 @@ class OverlayService : Service() {
         val manager = window ?: return null
         val ball = ballParams ?: return null
         val span = dp(BallPulse.SPAN_DP)
-        val ballSize = dp(BallView.BALL_SIZE_DP)
+        val ballSize = ballSizePx()
         val view = RippleView(this)
         val layout = WindowManager.LayoutParams(
             span,
@@ -2727,7 +2971,7 @@ class OverlayService : Service() {
         val view = rippleView ?: return
         val ball = ballParams ?: return
         val layout = rippleParams ?: return
-        val ballSize = dp(BallView.BALL_SIZE_DP)
+        val ballSize = ballSizePx()
         val span = dp(BallPulse.SPAN_DP)
         val wantX = ball.x + (ballSize - span) / 2
         val wantY = ball.y + (ballSize - span) / 2
@@ -2769,7 +3013,7 @@ class OverlayService : Service() {
 
     private fun replace() {
         val metrics = resources.displayMetrics
-        val ball = dp(BallView.BALL_SIZE_DP)
+        val ball = ballSizePx()
         val edge = BallSpot.read(this)?.first ?: BallGeometry.edgeFor(ballRestX, metrics.widthPixels, ball)
         ballRestX = BallGeometry.xForEdge(edge, metrics.widthPixels, ball)
         ballBaseY = BallGeometry.clampY(ballBaseY, metrics.heightPixels, ball)
@@ -3216,6 +3460,14 @@ class OverlayService : Service() {
 
         /** 半隐时那点透明度 (参考那套闲置那一档是 0.29, 这里留得亮一些好认) */
         private const val PEEK_ALPHA = 0.5f
+
+        /**
+         * 「半透明」那一档开着时, 整颗球的不透明度
+         *
+         * 与 [PEEK_ALPHA] 是**相乘**的关系: 又半透明又半隐时是 0.35。0.7 这个数是"看得清但不抢眼",
+         * 再低就认不出那是颗球了
+         */
+        private const val TRANSLUCENT_ALPHA = 0.7f
 
         /** 与唤醒词服务那个观察者同一个节奏: 400 ms 一次, 只在变了的时候重画 */
         private const val TICK_MS = 400L

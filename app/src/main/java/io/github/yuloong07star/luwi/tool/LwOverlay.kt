@@ -7,11 +7,13 @@ import androidx.core.content.ContextCompat
 import io.github.yuloong07star.luwi.channel.LwModes
 import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
+import io.github.yuloong07star.luwi.overlay.BalanceFile
 import io.github.yuloong07star.luwi.overlay.BallBox
 import io.github.yuloong07star.luwi.overlay.BallMinutes
 import io.github.yuloong07star.luwi.overlay.BallSpot
 import io.github.yuloong07star.luwi.overlay.OverlayService
 import io.github.yuloong07star.luwi.overlay.OverlayState
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -338,6 +340,10 @@ internal object LwOverlay {
             put("failedAt", OverlayState.failedAt)
             put("failedAckAt", OverlayState.failedAckAt)
             put("failedWhy", OverlayState.failedWhy)
+            // 外观 (2026-10-16): 现在生效的是哪一套 (空串 = 内置), 「换个形象」那一拍的对账读数
+            put("theme", runCatching { BallTheme.currentId(context) }.getOrDefault(""))
+            // 余额那份文件多旧 (ms): 「看余额」那一档的对账读数 (宿主一直没刷时它就是一直变大)
+            put("balanceAgeMs", BalanceFile.snapshot(context)?.let { System.currentTimeMillis() - it.at } ?: -1L)
             put("mode", LwModes.active(context))
             put("url", OverlayState.url ?: "")
             put("page", OverlayState.lastError ?: "")

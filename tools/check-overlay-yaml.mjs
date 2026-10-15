@@ -1,11 +1,15 @@
 /**
- * 发之前先把 app 会写出来的那份 overlay 解析一遍
+ * 发之前先把 app 会写出来的那两份 YAML 解析一遍
  *
- * 为什么值得单独一步: 那份 YAML 是 Kotlin 用字符串拼的, 而**拼错了的代价是整台 host 起不来**
+ * 为什么值得单独一步: 那两份都是 Kotlin 用字符串拼的, 而**拼错了的代价是整台 host 起不来**
  * —— 2026-10-05 就是这样: `name:` 的值没加引号, 而 `@` 开头在 YAML 里是保留字符, 于是
  * "bad indentation of a mapping entry", 真机上 host 直接起不来。这一步不需要设备, 只要 js-yaml
  *
- * 判据: 两种形态 (官方 bundle 开着 / 关着) 都要能被 js-yaml 解析, 且解析出来的结构与预期一致
+ * 两份分别是:
+ * - `files/lw/tool-plugin.yml` (命令行覆盖层, [PluginOverlay]) —— 两种形态各一份
+ * - `profiles/web/cordis.patch.yml` 里 [PluginRows] 补出来的那一段 (能被设置面板改的那几行)
+ *
+ * 判据: 每一份都要能被 js-yaml 解析, 且解析出来的结构与预期一致
  *
  * 用法: node tools/check-overlay-yaml.mjs
  */
@@ -43,15 +47,15 @@ if (yaml === null) {
 
 const parse = (text) => (typeof yaml.load === 'function' ? yaml.load(text) : yaml.parse(text))
 
-/** 与 PluginOverlay.write 拼出来的东西逐字对应: 两种形态各一份 */
+/** 与 PluginOverlay.write 拼出来的东西逐字对应: 两种形态各一份 (生图那一行不在这里, 见 profileRows) */
 const bundleOff = `# Written by Luwi on every host start, edits are overwritten
 - insert:
     - id: luwi-channel
       name: '/data/user/0/pkg/files/host/node_modules/luwi-channel/index.mjs'
     - id: dsh-web-mobile
       name: '/data/user/0/pkg/files/host/node_modules/dsh-web-mobile/lib/index.js'
-    - id: imagegen
-      name: '/data/user/0/pkg/files/host/node_modules/@dickpy/dsh-imagegen/lib/index.js'
+    - id: luwi-dsh-sync
+      name: '/data/user/0/pkg/files/host/node_modules/luwi-dsh-sync/index.mjs'
     - id: speech-to-text
       name: '/data/user/0/pkg/files/host/node_modules/@deepseek-ai/dsh-experimental-speech-to-text/lib/index.js'
       config:
@@ -76,8 +80,22 @@ const bundleOn = `# Written by Luwi on every host start, edits are overwritten
       name: '/data/user/0/pkg/files/host/node_modules/luwi-channel/index.mjs'
     - id: dsh-web-mobile
       name: '/data/user/0/pkg/files/host/node_modules/dsh-web-mobile/lib/index.js'
+    - id: luwi-dsh-sync
+      name: '/data/user/0/pkg/files/host/node_modules/luwi-dsh-sync/index.mjs'
+`
+
+/** PluginRows.withRow 往 profile patch 里补的那一段 (空数组模板那一档)
+ *
+ * `name:` 是 `file://` 形态而不是裸路径: dsh 读 patch 时会把裸绝对路径锚成这个形态, 而设置面板存配置
+ * 时写的 config 行抄的是**锚过之后**那个名字 —— 盘上留裸路径的话, 那一行会被按 "name mismatch" 丢掉,
+ * 面板永远回 "overridden by a home patch or command-line overlay" (2026-10-16 在设备上用真代码量到的)
+ */
+const profileRows = `# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; \`!!js\` expressions allowed).
+- insert:
     - id: imagegen
-      name: '/data/user/0/pkg/files/host/node_modules/@dickpy/dsh-imagegen/lib/index.js'
+      name: 'file:///data/user/0/pkg/files/host/node_modules/@dickpy/dsh-imagegen/lib/index.js'
 `
 
 /** 曾经发出去过的那一版: 少了一对引号, 就是它把真机的 host 弄挂的 —— 这一条必须被判为坏 */
@@ -89,9 +107,10 @@ function check(name, condition, detail = '') {
   console.log(`${condition ? 'ok  ' : 'FAIL'} ${name}${condition ? '' : `  ${detail}`}`)
 }
 
-for (const [name, text, wantRows, wantOverride] of [
-  ['bundle 关着: 六行 insert', bundleOff, 6, false],
-  ['bundle 开着: 一条覆盖 + 三行 insert', bundleOn, 3, true],
+for (const [name, text, wantRows, wantOverride, wantNative] of [
+  ['bundle 关着: 六行 insert', bundleOff, 6, false, true],
+  ['bundle 开着: 一条覆盖 + 三行 insert', bundleOn, 3, true, true],
+  ['profile patch: 生图那一行', profileRows, 1, false, false],
 ]) {
   let doc = null
   try {
@@ -104,9 +123,21 @@ for (const [name, text, wantRows, wantOverride] of [
   const inserted = doc.flatMap((entry) => entry.insert ?? [])
   check(name, inserted.length === wantRows && override.length === (wantOverride ? 1 : 0),
     `insert 行 ${inserted.length} 条 (想要 ${wantRows}), 覆盖行 ${override.length} 条`)
-  check(`${name} · lw-native 指向没丢`,
-    JSON.stringify(doc).includes('lw-native'),
-    '解析结果里找不到 defaultProvider: lw-native')
+  if (wantNative) {
+    check(`${name} · lw-native 指向没丢`,
+      JSON.stringify(doc).includes('lw-native'),
+      '解析结果里找不到 defaultProvider: lw-native')
+  } else {
+    check(`${name} · 生图那一行的入口在里面`,
+      JSON.stringify(doc).includes('@dickpy/dsh-imagegen'),
+      '解析结果里找不到那一行的 name')
+    // **这一条是面板能不能存进去的全部**: 盘上必须是与 Loader 眼里那个 (anchoring 之后的) 形态逐字
+    // 一致的 `file://` URL, 裸路径会让面板追加的 config 行对不上名字而被丢掉
+    const insertedName = inserted[0]?.name
+    check(`${name} · 那一行的 name 是 file:// 形态`,
+      typeof insertedName === 'string' && insertedName.startsWith('file:///data/'),
+      `实际是 ${String(insertedName)}`)
+  }
 }
 
 let brokenRejected = false
@@ -117,5 +148,5 @@ try {
 }
 check('少了引号的那一版会被判为坏 (这就是它当初的代价)', brokenRejected)
 
-console.log(failures === 0 ? '\n两种形态都能解析, 且坏形态确实被拒' : `\n${failures} 条判据不过`)
+console.log(failures === 0 ? '\n每一份都能解析, 且坏形态确实被拒' : `\n${failures} 条判据不过`)
 process.exit(failures === 0 ? 0 : 1)

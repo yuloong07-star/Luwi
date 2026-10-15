@@ -199,6 +199,11 @@ internal data class PluginManifest(
                 if (!claimedDangerous && known.level == PluginCapabilities.Level.NORMAL && declared in dangerous) {
                     throw IllegalArgumentException("\"$declared\" 是普通档, 写在 capabilities.requested 就行")
                 }
+                // G3 能力沙盒 (2026-10-12): 两条带参数的能力, 冒号后面那一截也得是个能用的形状
+                when {
+                    declared.startsWith("files.read:") -> PluginFilesReadBoundary.validateDeclaration(declared)
+                    declared.startsWith("net.http:") -> PluginNetBoundary.validateDeclaration(declared)
+                }
             }
 
             val tools = (root["tools"] as? JsonArray).orEmpty().map { element ->

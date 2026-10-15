@@ -147,6 +147,17 @@ object LwServiceProtocol {
      */
     const val TOUCH_RECORD = IBinder.FIRST_CALL_TRANSACTION + 25
 
+    /**
+     * Linux 沙盒的四件事: 装 / 跑 / 问 / 删
+     *
+     * 单独一条事务而不是挤进 [SYSTEM_COMMAND] 那张白名单表, 是因为它的参数形状不一样: 那一张表
+     * 每个参数最多 512 个字符, 而"交给沙盒里 /bin/sh -lc 的那一段"可以是一整段脚本 —— 在这里被
+     * 悄悄截断是最坏的一种错. **命令形状仍然写死在特权那一侧** (见 `LwLinuxSandbox`), 这条事务送
+     * 过去的只有操作名、一段命令文本、一个 work 目录与一个超时, 其余 (proot 路径 / binds / 根 / 环境)
+     * 全在那边拼
+     */
+    const val LINUX = IBinder.FIRST_CALL_TRANSACTION + 26
+
     /** The three moments [INPUT_TOUCH] can report */
     const val TOUCH_DOWN = 0
     const val TOUCH_MOVE = 1
@@ -319,6 +330,36 @@ class LwServiceProxy(private val remote: IBinder) {
             writeInt(userId)
             writeStringList(arguments)
             writeLong(timeoutMs)
+        },
+        read = { SystemOutput(readInt(), readString().orEmpty()) },
+    )
+
+    /**
+     * Linux 沙盒的一问一答
+     *
+     * @param operation install / run / status / reset
+     * @param command op=run 时交给沙盒里 `/bin/sh -lc` 的那一段, 别的操作是空串
+     * @param work op=run 时绑到 guest `/work` 的宿主目录, 别的操作是空串
+     * @param timeoutMs op=run 那条命令自己最多跑多久
+     * @param source op=install 时那一份 `.tar.gz` 的路径 (应用那一侧的外部媒体目录里)
+     * @param version op=install 时写进戳里的版本串
+     */
+    fun linux(
+        operation: String,
+        command: String,
+        work: String,
+        timeoutMs: Long,
+        source: String,
+        version: String,
+    ): SystemOutput = transact(
+        code = LwServiceProtocol.LINUX,
+        write = {
+            writeString(operation)
+            writeString(command)
+            writeString(work)
+            writeLong(timeoutMs)
+            writeString(source)
+            writeString(version)
         },
         read = { SystemOutput(readInt(), readString().orEmpty()) },
     )

@@ -8,16 +8,17 @@ import java.io.File
  *
  * The tools ship inside the host tree the APK carries, but nothing in that tree mentions them:
  * a profile composes its plugins from the profile directory plus whatever patch overlays the
- * command line names, and this app is what composes that command line. Writing the overlay here
- * rather than into the profile keeps the profile the user's own
+ * command line names, and this app is what composes that command line
  *
- * Three plugins are named, and they got into the tree in three different ways - this app's own
- * channel plugin is copied in by the packaging step, `dsh-web-mobile` is an ordinary dependency of
- * that tree, and `@dickpy/dsh-imagegen` (the AI image plugin, which is what the p 图 skill drives)
- * is fetched from the registry by `tools/pack-host.mjs` at packaging time. Either way the row has
- * to be written here, because a package that is merely installed is not part of any composition,
- * and `write()` drops any row whose file is not in the tree, so a tree packed before a plugin
- * joined the roster still boots
+ * The rows that a user edits from the dsh settings panel do NOT live here: they are written into the
+ * profile's own patch by [PluginRows]. This file is a **command-line overlay**, and the highest
+ * patch layer there is - `applyEntryPatches` only lets a later patch target a row an earlier layer
+ * inserted, so a config write landing in the profile patch can never reach a row this overlay
+ * inserted, and `dsh-config-editor` answers it with "overridden by a home patch or command-line
+ * overlay". What is left here are the rows whose own config the panel never writes
+ *
+ * 三份包由三条不同的路进树 (本应用自己那条通道插件由打包拷进来, `dsh-web-mobile` 是那棵树的普通
+ * 依赖, 语音那三个同理), 而"装了不等于挂了" —— 所以行还是得写在这儿
  */
 object PluginOverlay {
 
@@ -42,11 +43,17 @@ object PluginOverlay {
      * SenseVoice provider, 而那个 provider 靠 `sherpa-onnx-node` 的原生 addon, 安卓上没有
      * (npm 上也没有 `sherpa-onnx-android-arm64`)。本机那份转写走 app 进程, 由
      * `luwi-channel` 注册成 `lw-native`
+     *
+     * **`imagegen` 不在这张表里**: 它的渠道与密钥要在 dsh 的设置面板里改, 所以那一行归 [PluginRows]
+     * (写 profile patch), 见文件头那一段
      */
     private val PLUGINS = listOf(
         Row("luwi-channel", "node_modules/luwi-channel/index.mjs"),
         Row("dsh-web-mobile", "node_modules/dsh-web-mobile/lib/index.js"),
-        Row("imagegen", "node_modules/@dickpy/dsh-imagegen/lib/index.js"),
+        // G1 会话同步 (2026-10-13): 上游 dsh-session-sync 的 vendored 拷贝, Luwi 改名 luwi-dsh-sync
+        // (host-plugins/luwi-dsh-sync, 2026-10-14)。手机侧 git 经 Linux 沙盒执行, 电脑侧同一份包
+        // 走 ctx.subprocess —— 见 docs/DSH-LW-3.0.0-G1-施工单.md 与 docs/Luwi-dsh-sync-设计.md
+        Row("luwi-dsh-sync", "node_modules/luwi-dsh-sync/index.mjs"),
         Row(
             "speech-to-text",
             "node_modules/@deepseek-ai/dsh-experimental-speech-to-text/lib/index.js",
@@ -64,15 +71,15 @@ object PluginOverlay {
      * 所以 bundle 开着的时候**只留自己这几个包, 再用"按 id 改配置"把 provider 指到本机那份**:
      * `speech-to-text` 这个 id 两边一样, 于是是一次配置覆盖而不是第二次挂载
      *
-     * **这张表与 [PLUGINS] 是并列的两份, 加插件时两边都要加** (2026-10-08 真机上踩的):
-     * `imagegen` 只加进 [PLUGINS] 时, 在这台开着官方语音 bundle 的手机上它根本不会挂 —— 现象是
-     * `lw_image` 在、`edit_image` 不在 (生图那一整块没了), 而模拟器上 bundle 关着, 一点异常都看不见。
-     * `tools/check-image-edit.mjs` 现在会数这张表里那一行在不在
+     * **这张表与 [PLUGINS] 是并列的两份, 加插件时两边都要加** (2026-10-08 真机上踩的): 只加进
+     * [PLUGINS] 的那一份, 在这台开着官方语音 bundle 的手机上根本不会挂, 而模拟器上 bundle 关着,
+     * 一点异常都看不见。`tools/check-image-edit.mjs` 会数这两张表里的行与 [PluginRows] 那份名单
+     * (生图那一条现在归后者, 所以它不在下面这两张表里)
      */
     private val OWN_PLUGINS = listOf(
         Row("luwi-channel", "node_modules/luwi-channel/index.mjs"),
         Row("dsh-web-mobile", "node_modules/dsh-web-mobile/lib/index.js"),
-        Row("imagegen", "node_modules/@dickpy/dsh-imagegen/lib/index.js"),
+        Row("luwi-dsh-sync", "node_modules/luwi-dsh-sync/index.mjs"),
     )
 
     /** 官方 bundle 的名字: 它在 profile 的 package.json 里出现就说明被打开了 */

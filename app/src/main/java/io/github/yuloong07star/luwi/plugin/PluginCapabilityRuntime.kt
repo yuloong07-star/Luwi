@@ -101,7 +101,12 @@ internal object PluginCapabilityRuntime {
                     }
                 }
             }
-            else -> LwPluginResults.fail("\"$capability\" 这一版还没接通")
+            // G3 能力沙盒 (2026-10-12): 两条带参数的能力, 边界就是声明里那一截
+            else -> when {
+                capability.startsWith("files.read:") -> PluginCapabilitySandbox.filesRead(context, capability, args)
+                capability.startsWith("net.http:") -> PluginCapabilitySandbox.netHttp(capability, args)
+                else -> LwPluginResults.fail("\"$capability\" 这一版还没接通")
+            }
         }
 
     /** 只读自己那个插件目录: 路径不许跑出去, 单次读取有上限 */

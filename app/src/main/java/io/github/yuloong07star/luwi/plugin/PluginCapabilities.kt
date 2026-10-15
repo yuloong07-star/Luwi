@@ -18,7 +18,7 @@ internal object PluginCapabilities {
         val name: String,
         val level: Level,
         val summary: String,
-        /** P0/P1 真接通的为 true, 其余只可声明 */
+        /** 真接通的为 true (2026-10-12 起 11 条), 其余只可声明 */
         val wired: Boolean,
     )
 
@@ -37,8 +37,8 @@ internal object PluginCapabilities {
         Capability("clipboard", Level.NORMAL, "剪贴板读 / 写", true),
         Capability("files.own", Level.NORMAL, "只读自己那个插件目录", true),
         Capability("location.read", Level.NORMAL, "位置 (粗 / 精由用户在设置里另给)", false),
-        Capability("files.read:", Level.NORMAL, "读指定范围 (例如 /sdcard/DSH)", false),
-        Capability("net.http:", Level.NORMAL, "只允许访问列出的域名", false),
+        Capability("files.read:", Level.NORMAL, "读指定范围 (例如 /sdcard/DSH)", true),
+        Capability("net.http:", Level.NORMAL, "只允许访问列出的域名 (只走 https)", true),
         Capability("ui.theme", Level.NORMAL, "提供浮标外观", true),
         Capability("ui.panel", Level.NORMAL, "提供一页声明式面板", false),
         Capability("ui.widget", Level.NORMAL, "往宿主槽里推桌面组件的内容", true),

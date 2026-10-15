@@ -9,9 +9,9 @@
  *      (这里印错了) 差着一层
  *   2. **两个 op 两侧一致**: 工具那侧 (`enum: ['ref','album']`) 与应用那侧 (`LwGallery` 只接
  *      `album` 走的那条 `gallery` 桥) 是两份实现 —— 漂开的样子是"工具说明里有一个 op 其实没实现"
- *   3. **随包的那两样都在**: 生图插件在 `tools/pack-host.mjs` 里被取进树, 而 `PluginOverlay`
- *      要按同一个包名把那一行写上; `photo-edit` 技能要在 `build.gradle.kts` 的随包表与
- *      `LwSeed` 的名单里各出现一次
+ *   3. **随包的那两样都在**: 生图插件在 `tools/pack-host.mjs` 里被取进树, 而 `PluginRows` 要把那一行
+ *      写进 **profile 自己的 patch** (不是命令行覆盖层 —— 写在那一层上面, dsh 的设置面板就改不了它);
+ *      `photo-edit` 技能要在 `build.gradle.kts` 的随包表与 `LwSeed` 的名单里各出现一次
  *   4. **相册目录只有一份口径**: 技能正文里写的那个目录名要与 `LwGallery.ALBUM` 一样
  *
  * 不需要设备, 也不需要 host: 全是拿真源码对着核 (与 `check-quick-commands.mjs` 同一个办法)。
@@ -152,19 +152,59 @@ check(
   [true, true, true],
 )
 
-/** 包名与 overlay 那一行必须指同一个地方: 前者决定"树里有没有", 后者决定"挂不挂" */
-const row = /Row\("imagegen", "node_modules\/(@dickpy\/dsh-imagegen)\/lib\/index\.js"\)/.exec(overlay)
+/** 包名与挂它的那一行必须指同一个地方: 前者决定"树里有没有", 后者决定"挂不挂" */
+const rows = await read('app/src/main/java/io/github/yuloong07star/luwi/host/PluginRows.kt')
+const owned = /"imagegen" to "([^"]+)"/.exec(rows)
 check(
-  'overlay 按同一个包名挂了这一行 (id imagegen)',
-  row?.[1],
-  '@dickpy/dsh-imagegen',
+  'PluginRows 按同一个入口挂了这一行 (id imagegen)',
+  owned?.[1],
+  'node_modules/@dickpy/dsh-imagegen/lib/index.js',
 )
-// **两张表都要有** (2026-10-08 真机上踩的): 官方语音 bundle 开着时走的是 OWN_PLUGINS, 只加进 PLUGINS
-// 的那一份在那种机器上根本不挂 —— 现象是 `lw_image` 在而 `edit_image` 不在, 模拟器上却看不出来
+// **这一行不许回到 overlay 那两张表里** (2026-10-16 主人报的"生图保存失败"): 命令行的 patch 是最上面
+// 那一层, 挂在它上面时 dsh 的设置面板存什么都命中不了那一行, config-editor 会回一句
+// "overridden by a home patch or command-line overlay"。面板要能改的行必须由 profile patch 自己插入
 check(
-  '那一行在 PLUGINS 与 OWN_PLUGINS 两张表里各有一份',
-  (overlay.match(/Row\("imagegen", "node_modules\/@dickpy\/dsh-imagegen\/lib\/index\.js"\)/g) ?? []).length,
-  2,
+  '那一行不在覆盖层那两张表里 (只在 PluginRows 里)',
+  (overlay.match(/Row\("imagegen"/g) ?? []).length,
+  0,
+)
+// **第二件同样能把它压死的事**: 盘上那一行的形态要对上 Loader 眼里那个 —— dsh 读 patch 时会把裸绝对
+// 路径锚成 `file://` URL, 而设置面板追加的 config 行抄的是锚过之后那个名字, 且它落盘前的自检不
+// anchoring; 盘上留裸路径, 那条 config 行就会被按 "patch: name mismatch" 丢掉, 面板照样回同一句错
+// (2026-10-16 在设备上拿真代码复现到的)
+check(
+  'profile patch 那一段写的是 file:// 形态 (即 Loader 眼里那个名字)',
+  [
+    rows.includes('fun fileUrlOf('),
+    rows.includes('append("file://")'),
+    rows.includes('ensuredRow(patch, id, target.absolutePath)'),
+    rows.includes('fileUrlOf(entryPath)'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '旧安装里那个裸路径每启一次 host 会被对成 file:// 形态 (只改 name 那一行)',
+  [
+    rows.includes('fun namedRow(patch: String, rowId: String, name: String)'),
+    rows.includes('if (hasInsertRow(patch, rowId)) namedRow(patch, rowId, name) else withRow(patch, rowId, name)'),
+  ],
+  [true, true],
+)
+check(
+  'profile patch 那一段的形状对得上 (insert 子行 + 加引号的 file:// 名字)',
+  [
+    rows.includes('"- insert:"'),
+    rows.includes('"    - id: $rowId"'),
+    rows.includes('"      name: \'$name\'"'),
+  ],
+  [true, true, true],
+)
+
+/** 那一行只由 PluginRows 那一段写出来: id 行 + 名字行 */
+check(
+  'rowBlock 就是那两行 (id 与它自己那个入口)',
+  [rows.includes('- insert:'), rows.includes("name: '$name'")],
+  [true, true],
 )
 
 check(

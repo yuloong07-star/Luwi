@@ -481,17 +481,60 @@ internal class BoxView(context: Context, private val listener: Listener) : Frame
         if (line.isEmpty()) return
         kept.add(line)
         while (kept.size > MAX_REPLIES) kept.removeAt(0)
+        render(line)
+    }
+
+    /**
+     * 一条**本地的信息** (不是回答, 也不是报错): 现在唯一的来源是球菜单那一行「看余额」
+     *
+     * 它以 [INFO_MARK] 开头, 与回答分得开, 与那几条 `⚠` 提示也分得开。**三条会话账一个都不动**
+     * (`replySession` / `inputSession` / `boxSession`) —— 双击回复框与「返回应用」的去向不因为看了一眼
+     * 余额就变, 这是它与 [appendReply] 最大的差别
+     *
+     * [replaceInfo] 是它的"就地改写": 「正在取…」被真数顶掉时用的就是它, 屏上不会留下两行
+     */
+    fun appendInfo(text: String) {
+        val line = text.trim()
+        if (line.isEmpty()) return
+        val marked = "$INFO_MARK $line"
+        kept.add(marked)
+        while (kept.size > MAX_REPLIES) kept.removeAt(0)
+        render(marked)
+    }
+
+    /** 改写最后一条信息行; 最后一条不是信息行时就当作新增 (那一次「正在取」已经被收掉了) */
+    fun replaceInfo(text: String) {
+        val line = text.trim()
+        if (line.isEmpty()) return
+        val marked = "$INFO_MARK $line"
+        val last = kept.lastOrNull()
+        if (last != null && last.startsWith(INFO_MARK)) {
+            kept[kept.size - 1] = marked
+        } else {
+            kept.add(marked)
+            while (kept.size > MAX_REPLIES) kept.removeAt(0)
+        }
+        render(marked)
+    }
+
+    /** 把 [kept] 画到只读那一块里, 并把最新那一条顶到框口 ([BallBox.newestStart] 那条口径) */
+    private fun render(newest: String) {
         val joined = kept.joinToString("\n\n")
-        val start = BallBox.newestStart(joined, line)
+        val start = BallBox.newestStart(joined, newest)
         replies.setText(joined)
-        replies.setSelection(start)
+        // **光标只能落在真的存下来的那段字里**: 这块是只读的 EditText, `setText` 之后拿到的长度未必
+        // 等于 `joined.length` —— 2026-10-14 真机上量到一次 5546 字的回复落进去只剩 5000, 而
+        // `setSelection(5546)` 当场抛 `IndexOutOfBoundsException: setSpan (5546 ... 5546) ends beyond
+        // length 5000` 把整个应用打死 (每 100 秒一次)。夹一下之后, 长了就停在末尾, 不会再崩
+        val caret = start.coerceIn(0, replies.text?.length ?: 0)
+        replies.setSelection(caret)
         replies.visibility = VISIBLE
         divider.visibility = VISIBLE
         // `setText` 之后的行是异步排的, 那一刻拿 layout 可能还是旧的: 等一拍再把这行顶到框口
         // (拿不到 layout 就什么都不做 —— 上面的 setSelection 已经把这一行带进视野了)
         replies.post {
             val layout = replies.layout ?: return@post
-            val lineIndex = layout.getLineForOffset(start.coerceAtMost(replies.text?.length ?: 0))
+            val lineIndex = layout.getLineForOffset(caret)
             runCatching { replies.scrollTo(0, layout.getLineTop(lineIndex)) }
         }
     }
@@ -528,6 +571,9 @@ internal class BoxView(context: Context, private val listener: Listener) : Frame
 
         /** 提示那一行的记号: 与回答同一块只读区, 一眼分得开 ([appendNote]) */
         const val NOTE_MARK = "⚠"
+
+        /** 信息那一行的记号 (现在是「看余额」那一档, [appendInfo]): 金额开头, 与回答和 ⚠ 都分得开 */
+        const val INFO_MARK = "¥"
 
         val BACKGROUND = 0xF21B1B1F.toInt()
         val TEXT = 0xFFEDEDED.toInt()

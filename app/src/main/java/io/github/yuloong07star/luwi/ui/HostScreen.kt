@@ -85,6 +85,7 @@ import io.github.yuloong07star.luwi.host.BallReturn
 import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
 import io.github.yuloong07star.luwi.overlay.OverlayState
+import io.github.yuloong07star.luwi.sync.SyncSetting
 import io.github.yuloong07star.luwi.tool.LwSpeak
 import io.github.yuloong07star.luwi.tool.LwWakeWord
 import androidx.core.content.ContextCompat
@@ -533,14 +534,24 @@ private fun mainMenu(
     val screens = VirtualScreen.screens
     // 「停止朗读」那一条要知道现在有没有在念: `LwSpeak` 那个标记不是 Compose 状态, 而菜单是随手打开
     // 的, 所以这里半秒看一眼 (两次 volatile 读, 可以忽略), 一次都没念过时也就多几次空转
+    //
+    // 判据与球上、与半双工那道闸**同一个** (`talking`): 只认 `speakingNow` 时, 尾巴窗口里写着「正在说」
+    // 而这一条却说自己没东西可停 (2026-10-16 一起对齐)
     var voiceSpeaking by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         while (true) {
-            voiceSpeaking = LwSpeak.speakingNow
+            voiceSpeaking = LwSpeak.talking(context)
             delay(500)
         }
     }
     val idleHint = stringResource(R.string.menu_stop_speaking_idle)
+    // 「同步」那一行 (2026-10-14 主人: 加在"进设置之前的那个菜单按钮"里): 它与设置页那一段是**同一件事**
+    // —— `session-sync.json` 里的远端地址配没配。插件是**挂载时**读配置的, 所以这一个动作要顺带重启
+    // host, 否则这一行等于没点。`SyncSetting.revision` 是它在文件被改过之后重读的记号 (菜单自己改的
+    // 那一次也走同一条路 —— setSyncOn 会把它 +1)
+    val syncSnapshot = remember(SyncSetting.revision) { SyncSetting.snapshot(context) }
+    val syncOnToast = stringResource(R.string.menu_sync_switched_on)
+    val syncOffToast = stringResource(R.string.menu_sync_switched_off)
     // 先算好: 下面那个下拉栏是 buildList 里拼的, 而那不是 composable 作用域, stringResource 进不去
     val windowToggle = stringResource(
         if (windowHidden) R.string.screen_window_show else R.string.screen_window_hide,
@@ -621,6 +632,29 @@ private fun mainMenu(
                             LwSpeak.stop()
                         } else {
                             Toast.makeText(context, idleHint, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ),
+                // 「同步」: 与设置页那一段同一个开关 (默认关)。关→开需要先有仓库地址, 没有就把人送到
+                // 设置页那一段去填; 改完必须重启 host 才生效, 所以这一下顺手重启 (主人点的那一下)
+                DropdownItem(
+                    text = stringResource(R.string.menu_sync),
+                    summary = when {
+                        syncSnapshot.syncOn -> stringResource(R.string.menu_sync_on)
+                        syncSnapshot.resumableRemote.isNotBlank() -> stringResource(R.string.menu_sync_off)
+                        else -> stringResource(R.string.menu_sync_need_remote)
+                    },
+                    selected = syncSnapshot.syncOn,
+                    onClick = {
+                        val wanted = !syncSnapshot.syncOn
+                        val problem = SyncSetting.setSyncOn(context, wanted)
+                        if (problem == null) {
+                            Toast.makeText(context, if (wanted) syncOnToast else syncOffToast, Toast.LENGTH_LONG).show()
+                            DshHost.restart(context)
+                        } else {
+                            // 没有地址可填: 把原因说清并把人送到设置页那一段 (那一行就在那儿)
+                            Toast.makeText(context, problem, Toast.LENGTH_LONG).show()
+                            onSettings()
                         }
                     },
                 ),

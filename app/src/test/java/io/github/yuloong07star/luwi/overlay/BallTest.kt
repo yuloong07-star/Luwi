@@ -276,13 +276,23 @@ class BallTest {
     /**
      * 拖动放大那一下不许被窗口裁掉
      *
-     * 窗口开的是 view 的测量尺寸 (48 dp), 球体画在里面; 放大 1.06 倍之后必须仍在窗口里 —— 这正是
-     * 主人 2026-10-05 报的"球形四边会超出边框, 四边被削掉一部分"
+     * 窗口开的是 view 的测量尺寸 (内置 48 dp / 挑了外观插件 72 dp), 球体画在里面; 放大 1.06 倍之后
+     * 必须仍在窗口里 —— 这正是主人 2026-10-05 报的"球形四边会超出边框, 四边被削掉一部分"。
+     *
+     * 尺寸 2026-10-15 起是可调的 (`BallSize.range` 48~80), 所以这条要对**范围内每一档**都成立:
+     * 球体那个比例是 [BallView.drawDp] 按窗口尺寸算的, 与档位无关
      */
     @Test
     fun `放大之后球还在窗口里`() {
-        assertEquals(true, BallView.BALL_DRAW_DP < BallView.BALL_SIZE_DP)
-        assertEquals(true, BallView.BALL_DRAW_DP * 1.06f <= BallView.BALL_SIZE_DP)
+        for (size in BallSize.range.start.toInt()..BallSize.range.endInclusive.toInt()) {
+            val draw = BallView.drawDp(size)
+            assertEquals("$size dp: 球体不该画满窗口", true, draw < size)
+            assertEquals("$size dp: 放大 1.06 倍之后仍在窗口里", true, draw * 1.06f <= size)
+        }
+        // 内置那一档仍是原来那个 45 (D16 定的)
+        assertEquals(45, BallView.drawDp(BallView.BALL_SIZE_DP))
+        // 插件那一档是 67 (72 的 94%)
+        assertEquals(67, BallView.drawDp(BallView.BALL_THEME_DP))
     }
 
     /* ── 拖动: 允许暂时越界 (rebound) ───────────────────────────────────────── */
@@ -1496,6 +1506,10 @@ class BallTest {
         assertEquals(0.1f, at06[1], 0.001f)
         // 一圈的节拍与描边那口呼吸是同一个 (两件事看起来才像一件事)
         assertEquals(1200L, BallPulse.RING_MS)
-        assertEquals(96, BallPulse.SPAN_DP)
+        // 涟漪窗要装得下最大的那颗球 (72 dp 那一档), 否则环会缩在球里看不见
+        assertEquals(132, BallPulse.SPAN_DP)
+        assertEquals(true, BallPulse.SPAN_DP > BallView.BALL_THEME_DP)
+        // 起点是内置球的外缘 (半个球): 球调大之后环从那颗球内部往外扩, 露出一段正好在球外
+        assertEquals(BallView.BALL_SIZE_DP * 0.94f / 2f, BallPulse.FROM_DP)
     }
 }

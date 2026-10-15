@@ -236,6 +236,42 @@ class LwPrivilegedService(private val context: Context?) : Binder() {
                 writeInt(seen)
             }
 
+            // Linux 沙盒: 装 / 跑 / 问 / 删 (见 LwLinuxSandbox 的文件头)
+            LwServiceProtocol.LINUX -> answering(data, reply) {
+                val operation = data.readString().orEmpty()
+                val command = data.readString().orEmpty()
+                val work = data.readString().orEmpty()
+                val timeoutMs = data.readLong()
+                val source = data.readString().orEmpty()
+                val version = data.readString().orEmpty()
+                val result = when (operation) {
+                    "install" -> LwLinuxSandbox.install(context, source, version)
+                    "run" -> LwLinuxSandbox.run(context, command, work, timeoutMs)
+                    "reset" -> LwLinuxSandbox.reset()
+                    "status" -> {
+                        val status = LwLinuxSandbox.status()
+                        // 一行一个键的文本: 这条协议的回执本来就是"给模型看的话", 而状态这几个数
+                        // 应用那侧要拿它画设置页, 所以格式是稳的 (谁都不许随手改, 改了要一起改)
+                        val text = buildString {
+                            append("installed=").append(status.installed).append('\n')
+                            append("version=").append(status.version ?: "").append('\n')
+                            // 读不出来就写空, 不写 0: "0 B" 与"问不出来"是两件事, 应用那一侧
+                            // 把空当成未知 (2026-10-12 真机逮到: 沙盒在跑时 du 的计数行被前面的
+                            // Permission denied 顶掉, 这里曾把 null 说成 0)
+                            append("sizeKb=").append(status.sizeKb ?: "").append('\n')
+                            append("running=").append(status.running)
+                        }
+                        LwLinuxSandbox.Outcome(0, text)
+                    }
+                    else -> LwLinuxSandbox.Outcome(
+                        2,
+                        "op has to be one of install, run, status, reset, not \"$operation\"",
+                    )
+                }
+                writeInt(result.code)
+                writeString(result.output)
+            }
+
             else -> super.onTransact(code, data, reply, flags)
         }
 
@@ -282,7 +318,7 @@ class LwPrivilegedService(private val context: Context?) : Binder() {
         const val TAG = "LwService"
 
         /** Bumped whenever the protocol changes in a way the app has to know about */
-        const val VERSION = "13"
+        const val VERSION = "14"
 
         /** Long enough for the reply to leave the process, short enough to look immediate */
         const val EXIT_DELAY_MS = 100L

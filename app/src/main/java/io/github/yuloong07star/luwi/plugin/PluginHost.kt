@@ -251,7 +251,7 @@ internal class LwPluginContextBinder(
             return refuse(capability, args, "\"$capability\" 还没被允许 (在设置页的插件那一段里勾它)")
         }
         if (!PluginCapabilities.isWired(capability)) {
-            return refuse(capability, args, "\"$capability\" 这一版还没接通, 它要等 2.5.1 之后的 P2 / P3")
+            return refuse(capability, args, "\"$capability\" 这一版还没接通")
         }
         val outcome = runCatching { PluginCapabilityRuntime.call(context, manifest, capability, args ?: Bundle()) }
         val result = outcome.getOrElse { error ->

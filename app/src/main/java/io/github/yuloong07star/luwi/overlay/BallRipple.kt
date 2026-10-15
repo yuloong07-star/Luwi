@@ -81,8 +81,13 @@ internal object BallPulse {
         return (0 until RINGS).map { one -> (start + one * STAGGER) % 1f }
     }
 
-    /** 涟漪窗多大: 球 45 dp 加两边各 25.5 dp 的余量, 最外那一圈正好落在 46 dp 半径上 */
-    const val SPAN_DP = 96
+    /**
+     * 涟漪窗多大: 球 67 dp 加两边各 32.5 dp 的余量, 最外那一圈正好落在 66 dp 半径上
+     *
+     * 这个数跟着 [BallView.BALL_DRAW_DP] 走 —— 球从 45 dp 放大到 67 dp (换人物立绘那一档) 时,
+     * 窗不改就会让环缩在球里看不见
+     */
+    const val SPAN_DP = 132
 
     /** 一圈走完用多久: 与描边那口呼吸 ([BallView] 的 `BREATH_MS`) 同一个节拍 */
     const val RING_MS = 1200L
@@ -100,11 +105,12 @@ internal object BallPulse {
     const val STROKE_DP = 2f
 
     /**
-     * 起点半径: **球的外缘** (球体画的是 [BallView.BALL_DRAW_DP] = 45 dp)
+     * 起点半径: **内置那个球的半径** (48 dp 的球画在 45 dp 上, 见 `BallView.drawDp`)
      *
-     * 从球心算, 所以是半个球 —— 涟漪与球之间不留缝, 也不咬进球里
+     * 从球心算, 所以是半个球 —— 涟漪与球之间不留缝。球尺寸是可调的 (48~80 dp), 而环从一个固定的
+     * 半径起步: 调大之后环从球内部往外扩, 那一段被球自己盖住, 于是看起来仍是"从球边散出去"
      */
-    const val FROM_DP = BallView.BALL_DRAW_DP / 2f
+    const val FROM_DP = BallView.BALL_SIZE_DP * 0.94f / 2f
 
     /**
      * 那块窗的标题: 显式写一个

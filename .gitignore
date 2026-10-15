@@ -22,6 +22,8 @@ local.properties
 .cxx
 *.log
 logcat.log
+# Kotlin 增量编译的会话戳 (每一次构建都换一个名字), 不是源码
+.kotlin/
 .vscode/
 
 # The Node runtime and the shared libraries it needs, already patched to

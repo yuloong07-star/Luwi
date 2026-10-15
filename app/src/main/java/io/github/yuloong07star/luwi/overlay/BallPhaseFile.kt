@@ -175,6 +175,13 @@ internal object BallPhaseFile {
 
         private var observer: FileObserver? = null
 
+        /**
+         * 开始盯这个目录
+         *
+         * **`startWatching()` 是 `void`, 盯没盯上问不到** —— 2026-10-15 真机上它就是死的 (球上
+         * 「正在想」一直不亮, 而这里没有任何读数), 所以兜底不放在这儿: `OverlayService` 那一拍
+         * 顺手看一眼文件的 mtime (见它 `tick` 里那一段)
+         */
         fun start(context: Context) {
             if (observer != null) return
             val directory = directory(context)

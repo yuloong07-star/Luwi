@@ -240,6 +240,9 @@ object DshHost {
         // 有一个真的会成的落点。两个函数都是幂等的
         CustomPresets.ensure(application)
         CustomPresets.ensureProfile(application)
+        // 能被 dsh 设置面板改的那几行 (现在只有生图) 走 profile 自己的 patch 而不是下面那份覆盖层
+        // —— 覆盖层是最上面那一层, 面板的写入命中不了它, 见 PluginRows 的文件头
+        PluginRows.ensure(application)
         val overlay = PluginOverlay.write(application)
         log.add(if (overlay != null) "tools overlay ${overlay.absolutePath}" else "tools overlay is missing from the host tree")
 

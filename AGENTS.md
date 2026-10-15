@@ -4,6 +4,25 @@
 
 **原来的八步计划与界面那一轮都已落地并在真机上验过**, 仓库公开在 `Miuzarte/LittleWhale` (`main` 是压缩后的单个提交, 开发历史在本地 `dev` 上)
 
+## 当前版本 (发布记录)
+
+**Luwi 2.7.7 (2026-10-15)**: `versionCode 15 / versionName "2.7.7"`。干净构建 (`:app:clean` +
+全量 `assembleDebug`, host 树重打, 5m46s) **232,288,517 字节 (221.5 MiB)**, sha256
+`06b1e871a76a19416fb7be5fa43583d0064ab175706368dd93975d8b005d7bfb`; `tools/apk-bytes.py` 量出
+**最大无归属区间 4,097 字节 / 总计 4,121 字节** (与 2.6.0 / 2.6.5 / 2.7.4 / 2.7.6 那几份干净包同一个量级);
+host 树 330 个 tarball / 32,814 个文件 / 324.8 MiB, `host.zip` 94.3 MB。发在 `yuloong07-star/Luwi`
+的 `v2.7.7` (Release 正文在工作区 `docs\Luwi-2.7.7-release-notes.md`)。
+
+这一版进的东西: **手机与电脑的 dsh 连成一套** (luwi-dsh-sync: 会话镜像 + 工作区镜面 + 互为远端名片 +
+投影会话与归属方那条闸 + 默认关的两处开关)、**手机里的 Linux 沙盒** (Alpine minirootfs + proot,
+`lw_linux` 四个动词)、**能力沙盒两条接通** (`files.read:<前缀>` / `net.http:<域名>`, 能力表 9→11)、
+**插件那一层住进 profile patch** (面板存得进设置, 顺带修掉应用内"生图保存"必失败)、
+**视频模式能指定另一个模型** (跟随当前模型 / 退出即还原)、**浮标能放人物立绘与球尺寸滑条** (48→72 dp)、
+余额查询扩到 11 家与设置页刷新, 以及球上「正在想」不亮、生图保存、退出视频模式后模型不还原三处修复。
+
+**公告口径 (2026-10-15 主人定)**: 对外的公告与封面**一律叫 `Luwi`**, 不写 DSH / LW;
+未上过真机的项**不进公告** (例如 3.0.3 的「添加模型」这一版只进包、不进片)。
+
 ## 文档地图
 
 | 文档 | 放什么 |
@@ -104,9 +123,12 @@ dsh 这个 fork 的定位也是**部署在远程服务器上, 从任意浏览器
 - **三处图标是同一份标记, 由一张品牌图出** (2026-10-10 主人: "图标全部改用这个, 包括 ball, 注意图案占比要和现在的一样"): `drawable/ic_launcher_foreground.xml` (一圈水花里一只鲸尾, `#01B4FF`) 同时是**自适应图标的前景与单色层**与**球上那个染白的标记** (`overlay/Ball.kt`), `drawable/ic_notification.png` 是通知栏那份白模, 而 `mipmap-*dpi/*.webp` 是密度位图那条回退 —— 它们**全部**从 `tools/brand/luwi-mark.png` (主人给的那张白底单色水彩画) 出: 矢量走 `tools/trace-mark.py` (等值线 -> 多边形 -> `evenOdd`) 再 `tools/vector-ink.py --write --ink-width 0.46` 定尺寸, 位图与白模走 `tools/make-icons.py`。**两份脚本都不进构建, 产物提交进仓库**, 换标记就是换那张品牌图再把这两条跑一遍。**墨迹宽度 0.46 是"占画布多少"那件事唯一的数** (那几张密度位图也按 0.46 摆, 与自适应图标长得一样), 主人点名过"要和现在的一样", 别顺手改它。**只有球那一处比它大** (`BallView.GLYPH_INK_RATIO` = 0.65 个球体直径, 照抄图标那份是 0.378): 同一份矢量, 只是承载它的那块 view 比球大一圈、多出来的透明边被圆裁掉 —— 主人 2026-10-10 看到球之后点名"ball 的图案占比小, 放大一点", 先给 0.55, 看过实机截图之后要的是 0.65
 - **设置页右上角有一个 ⋮**: "不用常驻一页"的事全收在那一个菜单里 —— 2026-10-08 起是**检测更新 / 捐赠 / 关于 / 重启 DSH host** 四条, 以后加选项就是往那个 `items` 里再加一条; 它们三个对话框由 `ui/AboutDialogs.kt` 画, 同一刻只开一个 (设置页拿着一个 `AboutPage?`); 注意 **material3 不是本项目的依赖** (只有 `material3-window-size-class`), 没有 `androidx.compose.material3.DropdownMenu` 可用
 - **设置页是两层分组 + 逐段可折叠** (2026-10-08): 一级是 `GroupTitle` (常用 / 能力), 二级是 `SectionTitle` (段名 + 一句摘要, 那一行整行可点 = 收起/展开, 折角是 `MiuixIcons.ChevronForward` 转 90 度 —— `ExpandLess` / `ExpandMore` 那两颗在模拟器上量出来是"两个断开的角", 认不出是一颗箭头); 每一段由 `LazyListScope.settingsSection(...)` 生成, **收起来的段存在页面那一层的 `collapsed` 集合里** (`rememberSaveable` + `listSaver`, 转屏不丢), 缺省全展开。**省电那一段排在第一个** (它原来是「唤醒词」里的三行): 省电模式 / 省电时段 / 省电时停自动指令都属于"现在别听我说话"这一笔账, 与"许可不允许唤醒"分开
+- **「Luwi-dsh-sync」那一段 (G1-2, 2026-10-15) 排在 `linux` 与 `permissions` 之间**: 它写的是 `$DSH_HOME/lw/session-sync.json` —— **手机侧唯一的配置面** (插件的 overlay 行不带 config, 所以文件里的每个键都生效; 改完要重启 host, 段首那句 `settings_sync_note` 就为它)。读改写全在 `sync/SyncSetting.kt`: **保留未知键** (整棵树照抄, 只动自己那个键), 键名与插件那一侧由 `tools/check-sync-setting.mjs` 逐个对齐, 令牌只出 `maskedToken()` 的打码形态 («看当前配置»那一页也打码)。纯文件那一半 (`snapshotOf` / `setTextIn` / `setFlagIn` / `setPullIntervalIn` / `prettyOf`) 只吃一个 `File`, 于是能在临时目录上单测。**影工作区里的会话一律以电脑为准** (G1-3, 2026-10-14): 手机 GUI 里那个 `xxx（PC）` 分组是个真工作区, 在里面点「新对话」开的会话 `cwd` 落在影子根底下 (`$DSH_HOME/lw/peer-workspaces/…`) —— 归属方那条闸的**第 ④ 条判据**认它, 把这一句送到电脑**那边新开一场** (`kind:'new'`, 不复用最近那一场) 并把回执里的会话 id 绑成本机这一场的投影, 于是电脑的回答折回来落在主人正看着的那一场里; **本机模型一个字都不跑**, 送不出去只落一条「这一句没有送到 PC」的本地通知。面板那张对端卡的发消息框走的也是这条路 (工作区下拉 + `kind:'new'`; 它原来写死 `{kind:'session', id:''}`, 是一条从来没成功过的死路)。**「同步」默认关, 开关有两处** (G1-4, 2026-10-14): 新装没有仓库地址 = 关, 后台一圈都不跑; 打开它的地方是设置页「同步」那一段的开关, 与**进设置之前那个顶栏菜单**(`HostScreen.mainMenu()` 里「设置」正上方那一行, 与设置页读的是同一份状态)。数据面在 `SyncSetting.setSyncOnIn`: **关 = 把 `remote` 挪进 `lw.savedRemote` 存着, 同时把 `autoPullOnStart` / `autoPushOnTurnEnd` / `pullIntervalMinutes` 存进 `lw` 段再归零 —— 三件事缺一不可** (插件的引擎是无条件建的, 只清远端的话周期拉取照旧按点起来, 而那一轮要经 Linux 沙箱起 proot+git, 实测一条最轻的 `git --version` 就 2.1 s, 白烧电); 开 = 全部填回去。`lw` 段是**应用自己那一层**, 插件不读 (所以 PC 侧一点不受影响), 键名由 `tools/check-sync-setting.mjs` 单独钉。改完必须重启 host, 菜单那一行顺手重启。仓库地址/分支的对话框会补一句填写示例 (`settings_sync_remote_hint`), 段内按「① 仓库 → ② 节奏 → ③ 工作区」分步, 关着时只留一句引导; 对端通道与同步无关, **关着同步也能用**
+- **「视频模式」那一段 (3.0.2 需求 2 + 3.0.3, 2026-10-16) 落在「常用」组里**: 段名从「视频识别」改成**视频模式**, 而视频模式那几件事都住这一段 —— 最上面是**用哪一个模型说话** (缺省「跟随当前模型」; 它原来是单独一段「模式与模型」, 归并过来是因为"视频模式用哪个模型"就是这一段的事), 下面才是那台相机的参数 (抓几张 / 隔多久 / 多大 / 要不要拼网格)。模型那一行写的是 `$DSH_HOME/lw/mode-model.json` (`sync/ModeModel.kt`, 照 `SyncSetting.kt` 的形状: 保留未知键 / 纯文件那一半只吃 `File` / `revision` 记号), 宿主插件读它: `lw_mode` 切换那一路 (exec 里有会话 id, 切进视频前**现取**一次部署默认记成 `lastDefault`, **不信任旧值**) 与 `turn/start` 钩子 (只根会话, 兜住 GUI 自己开的会话; 投影里 pending 已经等于目标就一个 RPC 都不发)。判定抽成纯函数 `resolveModeModel(activeMode, config, sessionModel, restoreModel)` (宿主 `host-plugin/index.mjs` 里, `tools/check-mode-model.mjs` 把它抽出来跑那张真值表), 三档结论: `null` 什么都不做 / 切到配置那一对 / 带 `restore:true` 还回去。**`sessionController.selectModel` 会顺手把部署默认写成被选中的那一个 (`commands.ts` 里那个 `saveSelection`), 所以每一次切换之后都要立刻 `saveSelection` 把默认还回去 —— 这一条是必须的, 不是锦上添花**, 少它一次切换就把 GUI 里那个「当前模型」改掉了; 会话日志因此会多一条 `model/selection` 与一条 "model changed" 用户消息 (一次切换一条, 无法避免)。**还原不靠"下一轮兜底"**: 退出那一刻就按记下来的那几场当场还 (`modeModelState.sessions`, 三个触发点 = `lw_mode` 退出 / 语音命令退出 / 3 s 轮询看见"已经不是视频模式"——球单击与设备脚本走最后这一条), 只还 `agentAvailable === true` 的会话 (**判据不是 `running`**: 退出那一刻视频那一轮已经结束, 按 running 判过一次, 一场都没还, 于是退出后的第一句仍用视频模型回 —— 2026-10-16 真机上量到的); `turn/start` 那一条留着兜宿主重启后 `lastDefault` 没了的那一档。**工具那一层的 `execute(args, exec)` 里没有 `ctx`, 要用模块级的 `hostCtx`** (写成 `ctx.get(...)` 会在运行期抛 "ctx is not defined", 而它被 catch 住、回执上只少一行 —— 同一天真机上踩的)。读数两处: `lw_mode op=status` 的 `model:{...}` 行, 以及落成文件的 `$DSH_HOME/lw/mode-model-state.json` (`configured` / `active` / `switches` / `restored` / `sessions` / `endpoint`, 配置改了而没发 RPC 时轮询也会补写) —— **要量"发了几个 RPC"看这份文件, 别去解那份 zstd 多帧拼接的会话日志**。目录那一半反过来走: 宿主写 `$DSH_HOME/lw/model-catalog.json` (`sessionController.modelCatalog()`, 与 GUI 那个模型选择器同源; 原子写; **插件挂在命令行覆盖层上, `apply()` 可能早于 web bundle 注册 `sessionController` → 起来按 3/10/30 s 重试三次, 取不到就把 reason 写清**), 应用 `tool/LwModel.kt` 读它 —— 设置页候选列表与桥上的 `model op=catalog` 是**同一份** (`lw.ps1 -Method model` 从外面量到的就是应用里看见的), `ok:false` / items 为空时那一行**退化为两个文本框, 不假装有列表**; 应用打开对话框时写一个 `model-catalog-request.json` 记号, 宿主那条 3 s 轮询看见就刷。键名、文件名、上限与 strings 两侧由 `tools/check-mode-model.mjs` 逐个钉 (45 条)
+- **「添加模型」: 视频模式可以走自己那一条 LLM 路由 (3.0.3, 2026-10-16)**: 那一段设置里有 接口地址 / API Key / 模型名 三个框 (对话框里, API Key 是密码框, **三个框各自的标题挂在 `SuperTextField` 的 `label` 上** —— 主人 2026-10-16 点名的"说清楚哪一空填什么信息": 地址要给 http(s) 带 `/v1` 的例子, key 那句说清留空也行, 模型名那句给一个真 id 当例子; 三条文案的键是 `settings_mode_endpoint_url_note` / `_key_note` / `_model_note`), 写进 `mode-model.json` 的 `endpoint` 段 (`url` + `model` **都非空**才算配好; 清掉地址走 `clearEndpoint` 而 **key 留着**)。**界面上的名字是「添加模型」不是「自建端点」** (同一批主人的要求; 摘要那两句跟着改成"还没添加模型" / "走添加的模型: %1$s", 数据面与那句 `luwi-video` 一个字没动)。宿主 `ensureVideoRoute()` (三处触发: 起来 / 3 s 轮询 / `lw_mode` 切换那一路) 把它**挂成 pi-ai 的一条真路由** `luwi-video`: `ctx.settings.update('<pi-ai 的段>', {providers:{'luwi-video':{api:'openai-completions',baseURL,models:[{id}],apiKeyEnv:'LUWI_VIDEO_API_KEY'}}})` + `ctx.credentials.set('LUWI_VIDEO_API_KEY', key)`。三条要记住的: **段名与那一层路径从 `ctx.llm.listConfigurableProviders()` 里读** (部署换过行 id 也对得上), **写入即校验、下一轮请求生效不用重启** (providers 是 volatile 字段), **key 只进凭据缝不进设置文件** (端点不要 key 时 profile 里干脆不写 `apiKeyEnv`, 写了而取不到是 `MISSING_CREDENTIAL` 而不是悄悄退化)。副作用照实说: 那条路由**也会出现在 dsh 自己的模型选择器里** (展示名「Luwi 视频模式」)。清掉端点**不动设置** (那条路由留着不再被选) —— 理由与那五档风险写在 `docs/DSH-LW-3.0.3-视频模式自建端点-施工单.md`
 - **捐赠那一页是随包的** (`ui/DonateScreen` + `app/src/main/assets/donate.html`): ⋮ 与「关于」里那一行都走 `navigator.push(Screen.Donate)`, 在应用内用 WebView 渲染 (`file:///android_asset/`), **不联网也不跳浏览器**; 那一页零 `<script>`, 所以那个 WebView **不开 JS**; 仓库里原来那份 `docs/donate.html` 2026-10-08 已删 (提交 `4f21025`), 页面内容只此一份。**捐赠地址没有任何"可填"的入口** (主人 2026-10-08: "不要让别人填地址, 这是我自己的捐赠项目") —— 要改那一页就换 `assets/donate.html` 并重新出包
 - **系统返回键由 `AppNav` 那个 `BackHandler` 自己弹一层** (2026-10-08 修): `BackHandler` 是**后登记的先赢** (LIFO), 而它写在 `NavDisplay` 后面, 于是库里"还有上一页就 pop"那一个永远轮不到 —— 现象是**设置页与捐赠页上按返回什么都不发生**。现在那一行是 `if (backStack.size > 1) navigator.pop() else onBack()`, 主页上仍走「再按一次退出」(把任务放到后台, 不是退出)
-- **「正在想」是一份文件说了算, 不是推送** (2026-10-08 主人定的口径): `$DSH_HOME/lw/ball-phase.json` (`{"v":1,"at":…,"turns":[{"id":…,"startedAt":…}]}`, 宿主**原子写** —— `.tmp` + rename, 只在 `turn/start` / `turn/end` 真的改了那本账时写, 另外起来先写一次空表) 由 `app/src/main/java/…/overlay/BallPhaseFile.kt` 读: **`FileObserver` 盯那个目录 (inotify), 一改就重读并当场重画**, 另有"服务起来读一次"与"宿主翻成在跑读一次"两处。两侧都是事件驱动、**零轮询**, 也没有"推送丢了没人补"这回事 —— 那个 20 秒的看门狗 (它对不住主人的体感延迟) 连同 `overlay op=phase` 一起删了。球上取 `startedAt` **最大**的那一场, 它的**环色按会话固定**: 5 个色 (`BallPhaseFile.palette`) 轮转发给见过的会话并记在偏好里, 于是多个会话同时在想时一眼看得出"这是不是我先前那一场"
+- **「正在想」是一份文件说了算, 不是推送** (2026-10-08 主人定的口径): `$DSH_HOME/lw/ball-phase.json` (`{"v":1,"at":…,"turns":[{"id":…,"startedAt":…}]}`, 宿主**原子写** —— `.tmp` + rename, 只在 `turn/start` / `turn/end` 真的改了那本账时写, 另外起来先写一次空表) 由 `app/src/main/java/…/overlay/BallPhaseFile.kt` 读: **`FileObserver` 盯那个目录 (inotify), 一改就重读并当场重画**, 另有"服务起来读一次"与"宿主翻成在跑读一次"两处。两侧都是事件驱动、**零轮询**, 也没有"推送丢了没人补"这回事 —— 那个 20 秒的看门狗 (它对不住主人的体感延迟) 连同 `overlay op=phase` 一起删了。球上取 `startedAt` **最大**的那一场, 它的**环色按会话固定**: 5 个色 (`BallPhaseFile.palette`) 轮转发给见过的会话并记在偏好里, 于是多个会话同时在想时一眼看得出"这是不是我先前那一场"。**那五条会话钩子一律走 `onSessionEvent(ctx, …)`** (2026-10-15): 会话事件是**带载体**派发的 (`entry.carrier` 当 `this`), 载体的 `Context.filter` 只放行它作用域里的监听器, 而插件挂在 profile 上 —— 所以订阅必须带 `{ global: true }` (`vendor/cordis/src/events.ts` 的 `hook.global || !filter || …`, 见 `core/scope` 的 `scopeTarget`)。同一批还修掉一个把五条钩子一起弄死的东西: `isPeerProjection` 用了 `sep` 而 `node:path` 里没导入它 → 每次事件都在开头抛 `ReferenceError`, 而 dsh 把监听器异常 contained 掉、只写 `ctx.logger`, **app 抓的 node stdout 里一个字都没有** —— 现象就只是"球上什么都不动, 日志干净得像没事"。同一处还修了投影判据的前缀: 影子会话的 `cwd` 写 `/data/data/<包名>/…` 而 `DSH_HOME` 是 `/data/user/0/<包名>/…`, 两边都要过 `realpath` 才比得中 (漏了它, 电脑那一轮的投影会被当成"本机在跑")
 - **在想时点一下球就是开语音, 但排在双击窗口之后** (2026-10-08 主人: "点击一次进入语音输入…进入语音输入要比第二次点击慢一点"): 那一下要等 `BallFeel.thinkingTapMs()` (标准档 430 ms, 比双击的 300 ms 与防连击的 350 ms 都晚) 才开麦, 而**双击打断会把那个待办当场取消** (同一档上两个手势靠时间分开, 见 `OverlayService.onTap`)。**状态词的优先级 2026-10-09 改成「在念 > 在想 / 在听 (谁最近变成真的谁上) > 失败」** (`BallStatus.wordFor`, 主人两轮定下来的: "正在想状态的显示不能遮挡正在说, 以方便打断说话" + "在想着点一下球, 球显示听") —— 于是 **"在想+在念"写「正在说」**(单点那一下就是"别念了")、**"在想+在听"看两个人谁刚变成真的**(点一下球开麦那一下写「正在听」, 开麦之后新一轮又起来就写回「正在想」, 同一拍一起变时给想)。两个"最近变成真的"的时刻由 `OverlayService.refresh` 那 400 ms 一拍记, 所以那个字最多晚一拍。**动作那一边仍是"念 > 想 > 听"**(显示写着在想而喇叭也在念时, 单点那一下仍是"别念了"), 两件事分开写在 `BallTouch.act` 上; **手势一个字节都没改** —— 双击只在球上写着「正在想」时打断那一轮, 显示怎么切都不取消任何任务
 - **念与听那两档球会呼吸, 外面还有一圈圈涟漪** (2026-10-09 主人: "说话时加个边框闪烁, 要像 vivo 蓝心小v那样" + "给正在听加个与正在说相反的收回来特效"): 描边以当前环色在 0.45~1.0 的透明度之间 1.2 s 一个来回 (`BallView.breathe`, **字色不跟着闪** —— 12 sp 那三个字要一直读得清), 球外**往外扩**(念) / **往回收**(听)的同心环由 `overlay/BallRipple.kt` 画 (纯算式 `BallPulse` + `RippleView`)。那一圈比球大 (96 dp 对 48 dp), **画在球那块窗里会被裁**, 所以它住在自己那块 `TYPE_APPLICATION_OVERLAY` 的窗里, 而那块窗唯一的硬条件是 **`FLAG_NOT_TOUCHABLE`** —— 球"只吃自己那 48 dp"那条性质靠它保住。窗只在说/听两档挂着、落下就摘, 圆心在 `applyBallPosition` 与 `moveX` 每帧跟着球心; 它显式 `setTitle` 了一个名字, 因为**认球窗那几份脚本是拿 `dumpsys window windows` 认的**, 多一块同包的 `NOT_FOCUSABLE` 窗会让它们量到 96 dp 的假帧 (那四份脚本现在一起认类名 `BallView`)。读数在 `lw_overlay op=state` 的 `pulse` (`out` / `in` / 空)
 - **两笔自动收口挂在"起了一轮新的"那个边沿上** (2026-10-09 主人: "同一场起了新的一轮就掐播报" + "正在听也一并收掉"): 判据是那份 `ball-phase.json` 里**最新的 `startedAt` 比上一次读到的更新** (第一次读只当基线, 不把"已经有轮在跑"当成"刚刚起了一轮"), 于是 `BallPhaseFile.Snapshot` 现在带回**整份**在跑的清单, 不只是最近那一场。**说**: 念开始那一刻把 `OverlayState.replySession` 抄进 `readingSession` (宿主推回复那一条带着会话 id), 那一场再出现在清单里就 `LwSpeak.stop()` —— 一次念只掐一次, 而**那一笔账是空的时候一个字节都不掐**(手动 `lw_speak` 念的一句不猜)。**听**: 同一个边沿上只要 `VoiceState.capturing` 就 `LwWakeWord.hushWindow()`。两条都**只动播报与麦克风, 一个轮次都不取消**。两条**故意不对称**: 说只掐「同一场」的新轮 (别的会话跑起来不碰这一句), 而听是**任何一轮出现都收** —— 后者与 2.6.5 那条"人还在说就继续听、不会被从中间收掉"有冲突面: 人说到一半时被新一轮收掉, 那下半句就丢了 (主人 2026-10-09 选了这一档)
@@ -417,7 +439,7 @@ ctx.on('approval/request', (_request, _next) => Promise.resolve('allowed-once'),
 
 **先写 dsh 原生工具, 不要先写 MCP**: dsh 仓库里只有 `packages/mcp/mcp-client` —— 它是 MCP **客户端**, 自己写 server 等于新造一套协议再设法接进来; 而原生工具直接就有审批 / UI 呈现 / PTC 模式
 
-**加载路径是 `--patch` 覆盖层**: 插件源在 `host-plugin/index.mjs` (纯 ESM, 用 `@deepseek-ai/dsh-tools` 的 `defineTool`), 由 `tools/pack-host.mjs` 装进 host 树的 `node_modules/luwi-channel`, app 每次启动 host 时写一份 overlay 指过去 (`host/PluginOverlay.kt`) —— profile 目录因此仍是用户自己的
+**加载路径是一条 `--patch` 覆盖层** (2026-10-16 起生图那一行改走 profile patch, 见下面「生图」那一段的第六条): 插件源在 `host-plugin/index.mjs` (纯 ESM, 用 `@deepseek-ai/dsh-tools` 的 `defineTool`), 由 `tools/pack-host.mjs` 装进 host 树的 `node_modules/luwi-channel`, app 每次启动 host 时写一份 overlay 指过去 (`host/PluginOverlay.kt`); **而"要能被 dsh 设置面板改"的那几行由 `host/PluginRows.kt` 写进 profile 自己的 `cordis.patch.yml`** —— 覆盖层是最上面那一层, 面板的写入命中不了它
 
 一个插件就是一个 ESM 模块, 导出 `name` / `inject` / `apply`:
 
@@ -543,9 +565,11 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   库的离线快照, 运行时真读) / `lib/*.map`**, 剩约 7 MB。registry 走 `LW_NPM_REGISTRY`, 缺省
   `registry.npmmirror.com` (这台开发机上 `registry.npmjs.org` 不通)。装完当场 import 一次: 少一个依赖
   时 npm 不会说话, 而它要到加载时才抛
-- **装了不等于挂了**: `host/PluginOverlay.kt` 那一行才是把它挂进 web profile 的东西 (`id imagegen`, 指向
+- **装了不等于挂了**: `host/PluginRows.kt` 那一行才是把它挂进 web profile 的东西 (`id imagegen`, 指向
   包里的 `lib/index.js`); 它客户端那一半 (`lib/client.js`) 由 dsh 的 client-modules 按 `dsh.client` 扫
-  出来, 与 `dsh-web-mobile` 同一条路。`write()` 会丢掉树里没有的那些行, 所以更早打出来的树照旧起得来
+  出来, 与 `dsh-web-mobile` 同一条路。那一行**写在 profile 自己的 patch 里而不是 `--patch` 覆盖层里**,
+  而且 `name:` 要写成 `file://` 形态 (**两条都是"面板能不能存进去"的条件**, 见下面那条); 树里没有这个
+  文件时那一行会被摘掉, 所以更早打出来的树照旧起得来
 - **它挂不上也不会把 host 弄挂**: dsh 那份"必须起来"的名单 (`requiredStartupEntryIds`) 只有
   `agent-loop` / `webserver` / `modules` / `connection` / `headless-runner` / `acp` /
   `sdk-jsonrpc-server` 七个, 我们这一行是 best-effort —— 它失败时打一行
@@ -556,8 +580,8 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   那两处是对的 (它们走 `imageDataRoot()`), 所以只是那三处。`tools/pack-host.mjs` 在装完之后按它自己
   `image-storage-path.ts` 那句换掉, **并且数一数换了几处: 不是 3 处就让构建失败** —— 上游换个写法时
   悄悄不换的后果, 是主人的工作区里又多一个没人会去查的 `.dsh`
-- 判据表在 `tools/check-image-edit.mjs` (17 条): 那五个字段的名字 / 两个 op 两侧一致 / 相册目录只有一份
-  口径 / 三个清单 (pack-host 的包名、overlay 的行、技能的随包表) 对得上 / 那三处 `~/.dsh` 的换法还在
+- 判据表在 `tools/check-image-edit.mjs` (20 条): 那五个字段的名字 / 两个 op 两侧一致 / 相册目录只有一份
+  口径 / 三个清单 (pack-host 的包名、`PluginRows` 的行、技能的随包表) 对得上 / 那三处 `~/.dsh` 的换法还在
 - **验过的 (2026-10-08, 模拟器 `emulator-5554`)**: 出包装机后 host 起来 (`dsh web: http://…`)、
   GUI 渲染 (`rootChildren: 1`)、**两半都挂上了** (宿主那一半把模板快照写进了
   `$DSH_HOME/dsh-imagegen/templates/`; 客户端那一半的名字出现在首页那份模块表里:
@@ -574,9 +598,28 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   225,777,526 字节 (215.3 MiB), `tools/apk-bytes.py` 量出最大无归属区间 4,098 字节; 发在
   `yuloong07-star/Luwi` 的 `v2.5.0` (Release 正文在 `docs/DSH-LW-2.5.0-release-notes.md`)
 - **挂插件要往两张表里各加一行** (2026-10-08 在真机上踩的): `PluginOverlay` 里 `PLUGINS` 与
-  `OWN_PLUGINS` 是并列的两张表 —— 官方语音 bundle 关着走前者, 开着走后者。`imagegen` 只加进前者时,
-  在这台**开着 bundle 的手机**上它根本不挂 (`lw_image` 在、`edit_image` 不在), 而模拟器上 bundle 关着,
-  一点异常都看不见。`tools/check-image-edit.mjs` 现在数那一行在两处各出现一次
+  `OWN_PLUGINS` 是并列的两张表 —— 官方语音 bundle 关着走前者, 开着走后者, 两张都要有那一条
+  (`tools/check-image-edit.mjs` 数着)
+- **能被 dsh 设置面板改的那几行不许挂在 `--patch` 覆盖层上, 而且盘上的 `name:` 必须写成 `file://` 形态**
+  (2026-10-16 主人报的"生图保存失败, 点保存必失败"; 两件事各自都能单独把面板压死, 只修第一件时仍然是
+  同一句错 —— 事后在真机上拿设备自己那棵树里的 dsh 代码复现出来的):
+  - **层**: patch 层序是 `bundle → profile 自己的 cordis.patch.yml → $DSH_HOME/cordis.patch.yml →
+    命令行 --patch`, 而 `applyEntryPatches` 只让**后面的** patch 命中**前面 insert 出来的行** —— 面板的
+    写入 (config-editor 追加在 profile patch 末尾) 永远命中不了覆盖层那一行
+  - **名字形态**: dsh 读 patch 时会把 insert 子行里裸绝对路径的 `name` 锚成 `file://` URL
+    (`anchorInsertedPluginNames`), 于是 Loader 里那一行的 `options.name` 是 `file:///data/...`; 而面板存
+    配置时 config-editor 追加上去的 config 行抄的是**锚过之后**那个名字, 它落盘前的自检用的却是裸
+    `yaml.load` (不 anchoring) —— 名字对不上, 那一行被按 `patch: name mismatch for "imagegen"` 丢掉,
+    自检看到"生效值还是继承来的那一份", 抛出 `Configuration for "imagegen" is overridden by a home patch
+    or command-line overlay` (**没有覆盖层也报"被覆盖层覆盖"**, 就是这么来的)。所以盘上直接写
+    `file:///data/...` (`PluginRows.fileUrlOf`): 那不是新造一个形态, 它逐字就是 anchoring 之后喂给 Loader
+    的那一份
+  - 归 `host/PluginRows.kt`: 它每启一次 host 对一次账 (树里有包就补一行到 profile patch 的**开头**, 已有
+    的那一行是裸路径就只把 `name:` 那一行改成 `file://` 形态 (旧安装靠这一步自愈), 树里没有就摘掉,
+    主人写给它的 `config:` 一个字节都不动), 面板追加的 config 行排在同一个文件里它后面 —— 顺序天然对得上
+  - 判据: `tools/check-overlay-yaml.mjs` (两份 YAML 都要能解析 + 那一行必须是 `file://` 形态) /
+    `tools/check-image-edit.mjs` (那一行不在覆盖层两张表里 + `fileUrlOf`/`namedRow` 还在) /
+    `app/src/test/.../PluginRowsTest.kt` (补 / 自愈 / 摘 / 保住 config 行四档)
 
 ## LW 插件 (2026-10-08, 批次 9 的 P0 / P1 → 2.5.1)
 
@@ -606,8 +649,11 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   接口只有一处定义 (`:lwplugin-api` 的 `ILwPlugin` / `ILwPluginContext`, 描述符与 transaction code
   都写在那里), app 与伴侣引的是**同一个模块**; 对外那个 `lwplugin-api-1.jar` 就是它 AAR 里的
   `classes.jar`
-- **能力表 23 条, 现接通 8 条**: `device.read` / `sensor.read` / `notify.post` / `speech.speak` /
-  `clipboard` / `files.own` / `session.post` + `ui.widget` (2026-10-11 加的, 往宿主槽推桌面内容)。
+- **能力表 23 条, 现接通 11 条**: `device.read` / `sensor.read` / `notify.post` / `speech.speak` /
+  `clipboard` / `files.own` / `session.post` + `ui.widget` (2026-10-11 加) + `ui.theme` +
+  `files.read:<前缀>` / `net.http:<域名>` (2026-10-12 加, G3 能力沙盒: 边界就是声明里那一截 ——
+  前缀按 canonical 判、Luwi 私有目录整棵不在范围里; 域名逐字匹配、只走 https、重定向每一跳重查;
+  装包时两条参数都过语法闸, 见 `docs/LW-能力沙盒-回执.md`)。
   其余可声明可勾, 调用时回一句点名的"这一版还没接通", 不假装成功。**检查只有一处**
   (`LwPluginContextBinder.call`): 逐次对照声明与授权、核调用方 uid、每一次都进审计 (被拒的也进)
 - **`session.post` 就是投一句话** (走 `voice/inbox.jsonl`, `source` 记 `plugin:<id>`), 它是敏感档,
@@ -842,6 +888,29 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 - 安卓 11+ `/sdcard/Android/data/<pkg>/` 别的 app 与 adb 都访问不到 —— 所以我们用 `/sdcard/DSH/` 这种顶层目录
 
 `$DSH_HOME` 在 `filesDir` 里是**真 ext4/f2fs**, 所以配置那部分完全不受这些限制, `credentials` 的文件监听照常工作
+
+### Linux 沙盒 (2026-10-12)
+
+`lw_linux` 那条工具背后是这个: 随包的 Alpine minirootfs (`app/src/main/assets/lwlinux/base.tgz`) 解到
+`/data/local/tmp/lwlinux/rootfs` (同目录的 `stamp` 是"装好了"的戳, 照 `HostInstaller` 的形制),
+由特权通道以 **shell uid** 起 proot 在里面对话 —— 命令形状全在 `channel/LwLinuxSandbox.kt` 里写死
+(proot / loader 从 nativeLibraryDir 来, rootfs 的路径不许搬家: `--link2symlink` 的链子写死了构建时
+的宿主绝对路径), 动词只有 install / run / status / reset 四个
+
+- **它不是安全沙盒**: proot 那层路径视野只是视野, 唯一的边界是 uid 那条 (沙盒读不到
+  `filesDir/dsh-home` 是因为它是 0700 的 app uid); 反过来说 shell uid 能读的东西沙盒也能,
+  **网络是通的且关不掉**, 能外发的就是 `/work` 看得见的东西
+- **数据是这个 uid 的**: `/data/local/tmp/lwlinux` 属主 shell (uid 2000), 与别的 app 数据之间靠
+  目录权限分隔, 不是容器; 组长 pid 记账住在 `/data/local/tmp/lwlinux-run` (故意不在被 reset 删的树里)
+- **清理口径**: 通道断开时这个目录连删除按钮都够不着 (删它要特权), 要清就是重装 Luwi 或 adb 手动删
+  (`rm -rf /data/local/tmp/lwlinux /data/local/tmp/lwlinux-run`)
+- **`/work` 是 noexec**: 编译出来要执行的二进制别留在 /work 里跑 (`/sdcard` 是 noexec, `./hello` 会
+  Permission denied), 把产物落进 rootfs 里再跑 (`cc -o /tmp/hello ...`); 脚本类不受影响
+  (python3 / sh 由解释器读文件)
+- **数字**: 单条命令额外延迟 ≈ +50 ms (proot 那层), 首装 ≈1.5 s, `apk add` 是网络主导 (整个工具链
+  ≈300 MB, 装之前看一眼 /data 余量); 完整一轮见 `docs/LW-Linux沙盒-P5回执.md`
+- 设置页「Linux 沙盒」那一段与 `lw_linux` 工具是它的两个入口, 对用户的边界说明写在
+  `settings_linux_note` 与 `assets/modes/phone.md` 第十一节
 
 ## 构建与验证
 

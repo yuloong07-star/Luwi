@@ -45,6 +45,15 @@ internal object PluginDownload {
     private const val CONNECT_MS = 15_000
     private const val READ_MS = 30_000
 
+    /**
+     * **一条地址的总时长上限** (2026-10-15 主人报"安装太慢"时加的)
+     *
+     * 原来这里是 `0` = 不限: 只要数据还在慢慢滴, 它就一直等 —— 一个 13 MB 的包在 50 KB/s 的地址上
+     * 能耗四分半钟, 而界面上只写着"正在安装…"。90 s 意味着至少要 ~150 KB/s 才配把这条路走完,
+     * 低于它的地址会被掐掉换下一条 (顺序由索引的 url + mirrors 决定, 见 `PluginIndex.Entry.packageUrls`)
+     */
+    private const val CALL_MS = 90_000
+
     private const val USER_AGENT = "Luwi-plugin-install"
 
     /**
@@ -58,7 +67,7 @@ internal object PluginDownload {
             .followSslRedirects(false)
             .connectTimeout(CONNECT_MS.toLong(), TimeUnit.MILLISECONDS)
             .readTimeout(READ_MS.toLong(), TimeUnit.MILLISECONDS)
-            .callTimeout(0L, TimeUnit.MILLISECONDS)
+            .callTimeout(CALL_MS.toLong(), TimeUnit.MILLISECONDS)
             .build()
     }
 
@@ -90,6 +99,27 @@ internal object PluginDownload {
             target.delete()
             throw problem
         }
+    }
+
+    /**
+     * 逐条试这一串地址 (主址 + 镜像), 谁通就用谁
+     *
+     * 一份包在索引里有好几个等价地址 (同一份字节, 不同 CDN 域), 而各个域在不同网络下的可达性不一样:
+     * 只试主址的话, 主址不通就等于这个包装不上。全失败时把**每一条**的原因都拼出来 —— 只有一句
+     * "下不下来"分不清是网络的事还是包的事
+     */
+    fun fetchAny(context: Context, urls: List<String>): File {
+        if (urls.isEmpty()) throw IllegalArgumentException("这份包没有可用的下载地址")
+        val failures = mutableListOf<String>()
+        urls.forEach { one ->
+            try {
+                return fetch(context, one)
+            } catch (problem: Throwable) {
+                val host = runCatching { java.net.URI(one).host }.getOrNull() ?: one
+                failures += "$host: ${problem.message ?: problem.javaClass.simpleName}"
+            }
+        }
+        throw IllegalArgumentException("每一条地址都没下下来 —— " + failures.joinToString("; "))
     }
 
     /** 落到哪一条地址上 (跳完最后那一条), 只给"不是一份 .lwp"那句错话用 */

@@ -19,8 +19,8 @@
 | **地基** | [LittleWhale](https://github.com/Miuzarte/LittleWhale)。把 dsh 移植到安卓的架构、特权通道、自建虚拟屏、原生工具、无障碍读屏与端侧 OCR 都是它的工作；Luwi 是在它之上做的应用发行版 |
 | **灵感与参考** | [DSHA](https://github.com/DSH-APP/DSHA)（MIT）。部分功能与特点取自它 |
 | **系统要求** | **Android 13（API 33）及以上**（`minSdk = 33`）；Android 12 及以下装不上 |
-| **权限** | Luwi 可以获取手机几乎所有权限，没有沙盒限制 |
-| **不联网** | Luwi 自身不收集、不上传任何数据。会联网的只有三处：① dsh 调用你自己配置的模型 API；② 你亲手触发的模型下载（语音识别、唤醒词）；③ 你自愿启用的 Edge-TTS / API-TTS |
+| **权限** | Luwi 可以获取手机几乎所有权限，没有沙盒限制；自带的 Linux 沙盒是能力通道，不是安全边界 |
+| **不联网** | Luwi 自身不收集、不上传任何数据。会联网的只有四处：① dsh 调用你自己配置的模型 API；② 你亲手触发的模型下载（语音识别、唤醒词）；③ 你自愿启用的 Edge-TTS / API-TTS；④ 你在「插件 → 浏览插件仓库」里**亲手点的「刷新索引」与「装它」**（取官方索引 JSON 与你选中的那份插件包，其余时候只读缓存） |
 | **安全** | 安全性由用户自行判断（见文末「开源 / 安全声明」） |
 
 > [!WARNING]
@@ -137,7 +137,9 @@
   dex 那份 [`samples/inline-timer/`](samples/inline-timer/)、伴侣那份 [`samples/companion/`](samples/companion/)；
   签包工具是 `tools/lw-plugin-sign.mjs`，判据是 `tools/check-plugins.mjs`
 - **这一版接通的能力**（设备读数 / 传感器 / 通知 / 朗读 / 剪贴板 / 读自己的目录 / 往会话投一句话 /
-  往宿主槽推桌面内容 / 提供浮标外观）；其余能力可以声明，调用时会如实回一句"这一版还没接通"，不会假装成功
+  往宿主槽推桌面内容 / 提供浮标外观 / 读指定前缀的文件 / 访问声明的域名）；带参数的那两条边界就是声明里
+  那一截（`files.read:/sdcard/DSH`、`net.http:api.example.com`，只走 https 且重定向每一跳重查），
+  其余能力可以声明，调用时会如实回一句"这一版还没接通"，不会假装成功
 
 ## 应用架构
 
@@ -157,7 +159,7 @@ app 进程 —— Kotlin / Compose
 
 - **dsh 与它的 Web GUI 一起进 APK**：Node 24 随包发，前台服务常驻，关掉界面也活着。
 - **特权通道**：模型 → dsh 工具 → Node host → app 的 loopback 桥 → binder → 特权进程（uid 0 / 2000）。Shizuku 免 root，root 那条更直接。
-- **工作区在你自己的存储里**：`/sdcard/DSH/`，文件管理器翻得到；dsh 自己的配置与凭据留在应用沙盒（`filesDir/dsh-home`）。没有虚拟机、没有 proot，手机存储不受沙盒限制。
+- **工作区在你自己的存储里**：`/sdcard/DSH/`，文件管理器翻得到；dsh 自己的配置与凭据留在应用沙盒（`filesDir/dsh-home`），**自带的 Linux 沙盒也读不到它**（沙盒以 shell uid 跑，凭据那条边界是内核的）。另有一个**内置的轻量级 Linux 兼容层**（Alpine minirootfs + proot，随包发一份 base，装在 `/data/local/tmp/lwlinux`）：可以 `apk add` 装 python、编译脚本 —— **它不是虚拟机，也不是安全沙盒**，沙盒里只看得到工作区、网络是通的（见 `AGENTS.md` 的「Linux 沙盒」）。
 - **两个模式的人设与技能**随应用发布（手机 / 视频两个模式的提示词，加上技能库），模型按模式的人设作业。
 - **可选局域网访问**：打开后别的设备用浏览器就能连；手机一套小字体、PC 一套大字体，各存浏览器本地。
 
@@ -166,6 +168,8 @@ app 进程 —— Kotlin / Compose
 Luwi 完全开源，允许开发者自由开发。
 
 Luwi 完全暴露在手机环境，**没有沙盒限制**，安全性由用户自行判断；**不建议安装在主力机 / 有重要数据的手机中**。
+
+内置的 Linux 沙盒只是"手机里多了一个 Linux 命令行"，它换来的是 **shell 一档的能力**（不是更严的一档）；**不要把它当安全边界用**。
 
 ## 和 LittleWhale 的关系
 

@@ -56,12 +56,46 @@ internal object LwSpeak {
     @Volatile
     private var spoken: Int = 0
 
+    /**
+     * 上一次念的是不是**系统那条**引擎
+     *
+     * 只有它需要"预算窗 + 专属属性"那一条 (播放器在引擎进程里, 看不到); 自带与在线那两条的播放器就在
+     * 本进程, 它们说停就是停 —— 拿系统那条的判据往它们身上套, 只会白留一段"可能还在响"的窗
+     */
+    @Volatile
+    private var lastWasSystem: Boolean = false
+
     fun dispatch(context: Context, request: JsonObject): JsonObject = when (val op = request.string("op")) {
         "status" -> status(context)
         "speak" -> speak(context, request)
         "stop" -> stop()
         "release" -> release()
-        else -> throw IllegalArgumentException("op has to be status, speak, stop or release, not \"$op\"")
+        // 只读探针: 系统引擎到底把声音放在哪种属性上 (判据换不换得成, 靠它一句话定), 见 [probe]
+        "probe" -> probe(context)
+        else -> throw IllegalArgumentException("op has to be status, speak, stop, release or probe, not \"$op\"")
+    }
+
+    /**
+     * 系统引擎"我还在不在出声"这条判据的现场读数 (T0 探针, **不说话、不碰麦克风**)
+     *
+     * 量法: 另开一条连接叫一次 `op=speak`, 念的整段里反复叫这一条 —— `matched` 一直是 0 就说明这台 ROM
+     * 的引擎不吃我们给的属性 (那时判据退化成"只按预算", 见 [talking]), 全过程 ≥1 才是换对了
+     */
+    private fun probe(context: Context): JsonObject = buildJsonObject {
+        val tts = runCatching { engine(context) }.getOrNull()
+        put("ours", SystemSpeech.describe())
+        put("matched", SystemSpeech.matches(context))
+        put("active", SystemSpeech.snapshot(context).joinToString(" | "))
+        // 老判据那一条也报出来: 一眼看得出"别人的音乐"与"我们的那一份"在这一刻各是什么
+        val audio = context.getSystemService(AudioManager::class.java)
+        put("musicActive", runCatching { audio?.isMusicActive == true }.getOrDefault(false))
+        // 平台只给了 `setAudioAttributes`, 没有公开的读回口子 (2026-10-16 编译期量出来的, 上一批
+        // 这里想读 `tts.audioAttributes` 编不过): 照实报"读不到", 引擎吃没吃我们那一份还是靠
+        // matched 那一个数 (活跃播放里 ours() 命中几条) 判
+        put("engineAttributes", "not readable: the platform exposes no getter for engine audio attributes")
+        put("lastWasSystem", lastWasSystem)
+        put("tailUntil", VoiceState.spokeUntil)
+        put("speakingNow", speakingNow)
     }
 
     /** 引擎现在什么样: 有没有引擎、默认是哪一个、中文音色能不能用、以及这一侧选了什么 */
@@ -129,8 +163,16 @@ internal object LwSpeak {
                     else -> "unknown ($chinese)"
                 },
             )
-            put("speaking", current != null || LwEdgeTts.speaking || LwApiTts.speaking)
+            // 三条引擎的播放标记**都要算上** (2026-10-16 修: 这一条原来漏了自带那条 `LwTts.speaking`,
+            // 与 [speakingNow] 报的不是同一件事 —— 用自带音色念时 status 会答"没在说")
+            put("speaking", speakingNow)
             put("utterances", spoken)
+            // 「还在出声吗」这条判据自己的读数 (2026-10-16): 尾巴预算什么时候到点、上一次念的是不是系统
+            // 那条、以及**活跃播放里有几条带的是我们给引擎那份属性** (0 = 判据退化成"只按预算")
+            put("tailUntil", VoiceState.spokeUntil)
+            put("lastWasSystem", lastWasSystem)
+            put("systemMatches", SystemSpeech.matches(context))
+            put("systemOurs", SystemSpeech.describe())
         }
     }
 
@@ -218,7 +260,9 @@ internal object LwSpeak {
             val volume = wantedVolume.coerceIn(SpeakSettings.volumeRange.start, SpeakSettings.volumeRange.endInclusive)
             val answer = LwTts.speak(context, voice, text, speed, volume / SpeakSettings.VOLUME_UNITY)
             val failed = !answer.startsWith("said ")
-            // 自带那条念完也留一份预算: 它的"放完"是准的, 但音轨排空那一下仍在出声 (见 [talking])
+            // 自带那条的播放器就在本进程, 它说停就是停 —— [talking] 认它的播放标记, 不认这段预算
+            // (这一笔只是给 `status`/`probe` 看的现场)
+            lastWasSystem = false
             if (!failed) VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
             return buildJsonObject {
                 put("spoken", !failed)
@@ -244,7 +288,8 @@ internal object LwSpeak {
                 LwApiTts.speak(context, text, speed)
             }
             val failed = !answer.startsWith("said ")
-            // 在线那两条也留一份"可能还在响"的预算 (它们的播放器在服务那一侧, 报"说完"同样可能早)
+            // 在线那两条的播放器 (LwVoiceClip 里那个 MediaPlayer) 也在本进程: 同上, 判据只认播放标记
+            lastWasSystem = false
             if (!failed) VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
             return buildJsonObject {
                 put("spoken", !failed)
@@ -316,8 +361,10 @@ internal object LwSpeak {
         }
         val reported = failure
         current = null
-        // **"说完了"之后那一段** (见 [talking]): 引擎报的结束常常早于喇叭真的不响, 按这一句的长度留一份
-        // 预算, 那一段里由媒体流说了算
+        // 系统那条: **只有它**要靠"预算窗 + 专属属性"那一条 (播放器在引擎进程里)
+        lastWasSystem = true
+        // **"说完了"之后那一段**: 引擎报的结束常常早于喇叭真的不响, 按这一句的长度留一份上限, 那一段里
+        // 由"带我们那份属性的活跃播放"说了算 (见 [talking] 与 `SystemSpeech`)
         VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
         return buildJsonObject {
             put("spoken", finished && reported == null)
@@ -379,33 +426,41 @@ internal object LwSpeak {
     /**
      * **她此刻还在出声吗** —— 半双工那道闸与"说的时候关麦"都认这一条, 不认 [speakingNow]
      *
-     * 差别只在**尾巴**: 系统那条引擎的 `onDone` 常常在"合成完了"就报, 而喇叭里还在放 (2026-10-10
-     * 主人: "视频模式下正在听时还是有可以录入正在说" —— 日志里她整句回答被录回去当成了主人那一句)。
-     * 所以引擎说完了之后还有一段 [VoiceState.spokeUntil] 的预算, 那一段里只要**媒体流还在放**就继续
-     * 当"在说"。预算按这一句的字数估 (见 [tailBudgetMs]) 封顶, 别的应用放音乐/视频不会把麦克风一直
-     * 摁住 —— 到点就放行
+     * 三条引擎各自有说得准的答案 ([SpeechTail]):
+     *
+     * | 引擎 | 判据 |
+     * | :-- | :-- |
+     * | 自带 (`LwTts`) / 在线 (Edge / API) | 播放器就在本进程, `LwTts.speaking` / `LwVoiceClip.speaking` 就是精确答案, **一个字节都不问系统** |
+     * | 系统 (`TextToSpeech`, 默认那一条) | 还挂着一条 utterance, 或者在那段预算窗里、而且**带我们给引擎那份属性**的活跃播放还在 ([SystemSpeech]) |
+     *
+     * **`AudioManager.isMusicActive` 从这条链上整个删掉了** (2026-10-16 主人: "正在说有时会跟随手机其它
+     * 应用播放而显示"): 它答的是全系统 STREAM_MUSIC 的活跃度, 不看是谁在放, 于是任何一次朗读之后那段
+     * 预算窗里, 别的应用一放音乐/视频就把它带起来, 窗口长度还与本句真实播了多久无关。现在宁可「正在说」
+     * 多亮一会儿 (有 [SpeechTail.budgetMs] 上限), 也不能被别人的音乐带起来 —— 拿不到播放列表时**退化
+     * 成"只按预算"**, 绝不回退到媒体流那一条
      */
     internal fun talking(context: Context): Boolean {
-        if (speakingNow) return true
-        if (VoiceState.spokeUntil <= System.currentTimeMillis()) return false
-        // 播放状态问的是**媒体流有没有在放**: 系统那条引擎放音走的就是它, 而"放完了"这件事引擎自己
-        // 报不准 (上面那条); 拿不到 AudioManager 时按"没在放"处理 —— 宁可早一点放开麦
-        val audio = context.getSystemService(AudioManager::class.java) ?: return false
-        return audio.isMusicActive
+        // 自带那条与两条在线引擎: 播放器在进程内, 精确
+        val onThisProcess = LwTts.speaking || LwEdgeTts.speaking || LwApiTts.speaking
+        // 系统那条: 只有它才去问"带我们那份属性的活跃播放"
+        val ownPlayback = lastWasSystem && SystemSpeech.playing(context)
+        return SpeechTail.holding(
+            now = System.currentTimeMillis(),
+            enginePlaying = onThisProcess,
+            // 还挂着一条没收到 onDone / onError 的 utterance
+            utterancePending = current != null,
+            tailUntil = VoiceState.spokeUntil,
+            ownPlayback = ownPlayback,
+        )
     }
 
     /**
      * 这一句念完之后留多长的"可能还在响"预算
      *
-     * 一个汉字在正常语速下两百多毫秒, 语速设到 2.0 时还要减半 —— 这里按 350 ms 一个字符再加 4 s
-     * 的余量, 上限 25 s: **它只是上限**, 真正的放完由媒体流那一条判 ([talking])
+     * **它只是上限**, 算术在 [SpeechTail.budgetMs] (那里能单测): 系统那条引擎的合成比实时快, 所以
+     * 引擎报完之后还要留一段, 真实长度由 [talking] 里那两条精确判据说
      */
-    private fun tailBudgetMs(text: String): Long =
-        (text.length * TAIL_MS_PER_CHAR + TAIL_MARGIN_MS).coerceAtMost(TAIL_MAX_MS)
-
-    private const val TAIL_MS_PER_CHAR = 350L
-    private const val TAIL_MARGIN_MS = 4_000L
-    private const val TAIL_MAX_MS = 25_000L
+    private fun tailBudgetMs(text: String): Long = SpeechTail.budgetMs(text)
 
     /** 把引擎放掉: 下一次 status/speak 会重新初始化 */
     private fun release(): JsonObject {
@@ -475,6 +530,12 @@ internal object LwSpeak {
                     current?.latch?.countDown()
                 }
             })
+            // **给它一份专属属性** (2026-10-16): 引擎的播放器在它自己的进程里, 这是应用这一侧唯一能
+            // "认出我那一份声音还在不在"的办法 —— [talking] 就靠它取代了原来的 `isMusicActive`
+            // (那条会把别的应用的音乐算成"她还在说")。引擎不吃这份属性时不影响它念, 只是判据退化成
+            // "只按预算", 而 `speak op=probe` 量得出来
+            runCatching { instance.setAudioAttributes(SystemSpeech.attributes()) }
+                .onFailure { Log.w(TAG, "the engine would not take this app's audio attributes", it) }
             engine = instance
             return instance
         }

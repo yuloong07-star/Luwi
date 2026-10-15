@@ -23,7 +23,7 @@ import { pathToFileURL } from 'node:url'
  * 它是给"静默少一个"兜底的 —— 比如某个工具的定义被条件包住而条件不成立, 那时没有异常,
  * 只有数字会变
  */
-const FLOOR = 61
+const FLOOR = 62
 
 const pluginPath = resolve(process.argv[2] ?? 'host-plugin/index.mjs')
 
