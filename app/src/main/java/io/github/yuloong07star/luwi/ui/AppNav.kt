@@ -24,7 +24,6 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.host.BallReturn
 import io.github.yuloong07star.luwi.theme.ApplySystemBarsAppearance
-import io.github.yuloong07star.luwi.theme.ThemeSettings
 import io.github.yuloong07star.luwi.theme.ThemeStore
 import io.github.yuloong07star.luwi.theme.controller
 import kotlinx.serialization.Serializable
@@ -94,9 +93,10 @@ fun LuwiApp() {
     ) {
         settings.controller()
     }
-    val swipe = if (settings.swipeBack) NavSwipeDirection.LeftToRight else NavSwipeDirection.None
-    val crossActivity = settings.transition == ThemeSettings.TRANSITION_AOSP
-    val transition = if (crossActivity) CrossActivityTransition else NavTransitions.MiuixDefault
+    // 2026-10-17 主人: 导航那一段整段撤掉 —— 只用 Miuix 那一套转场, 横滑返回一直开着。
+    // 于是这里没有分支可看: 两个值都写死 (存过的旧 pref 不再有人读)
+    val swipe = NavSwipeDirection.LeftToRight
+    val transition = NavTransitions.MiuixDefault
 
     // 主页上按返回不等于离开应用: 这一句提示是"再按一次"的第一次, 第二次才把任务放到后台去。
     // 不管任务是去是留, host 与虚拟屏都照跑, 所以这里既不 finish 也不停服务
@@ -130,12 +130,11 @@ fun LuwiApp() {
         ApplySystemBarsAppearance(LocalActivity.current?.window)
         val cornerRadius = rememberNavSystemCornerRadius()
         val backdrop = colorScheme.surface
-        val effects = remember(cornerRadius, backdrop, crossActivity) {
+        val effects = remember(cornerRadius, backdrop) {
             NavDisplayEffects(
                 enableCornerClip = true,
                 cornerClipRadius = cornerRadius,
-                // 跨 activity 那一套四角都收, Miuix 默认只收上边缘那两个角
-                cornerClipMode = if (crossActivity) NavCornerClipMode.All else NavCornerClipMode.Leading,
+                cornerClipMode = NavCornerClipMode.Leading,
                 dimAmount = 0.5f,
                 blockInputDuringTransition = true,
                 backdropColor = backdrop,

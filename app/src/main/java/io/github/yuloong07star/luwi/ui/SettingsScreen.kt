@@ -188,16 +188,6 @@ private val themeModes = listOf(
     R.string.settings_theme_dark,
 )
 
-/**
- * 过渡风格, 与 `ThemeSettings.transition` 的下标一一对应
- *
- * 就是 SFA 的 `pref_transition_style_miuix` 与 `pref_transition_style_aosp` 两项, 没有 "无": 页面
- * 切换要么是 Miuix 那种整页平移, 要么是平台那种缩小让位
- */
-private val transitionStyles = listOf(
-    R.string.settings_transition_miuix,
-    R.string.settings_transition_aosp,
-)
 
 /**
  * 浮标手势灵敏度那两项 (见 [BallFeel]): **顺序就是下拉里从上到下那两行**
@@ -235,7 +225,7 @@ private val CollapsedSections = listSaver<Set<String>, String>(
  * (主人 2026-10-08: "省电模式单独拿出来放第一排")
  */
 internal val SettingsSectionsAlwaysOpenKeys = listOf(
-    "power", "appearance", "navigation", "channel", "ball", "wake", "speak",
+    "power", "appearance", "channel", "ball", "wake", "speak",
 )
 
 /** 白名单的集合形态, 给 [defaultCollapsed] 算差集用 */
@@ -509,30 +499,6 @@ fun SettingsScreen() {
                                 onCheckedChange = { ThemeStore.update(settings.copy(squircle = it)) },
                             )
                         }
-                    }
-                }
-
-                settingsSection(
-                    key = "navigation",
-                    title = R.string.settings_section_navigation,
-                    summary = R.string.settings_section_navigation_summary,
-                    collapsed = collapsed,
-                    onToggle = toggleSection,
-                ) {
-                    Card {
-                        OverlayDropdownPreference(
-                            title = stringResource(R.string.settings_transition),
-                            summary = stringResource(R.string.settings_transition_summary),
-                            items = transitionStyles.map { stringResource(it) },
-                            selectedIndex = settings.transition.coerceIn(0, transitionStyles.lastIndex),
-                            onSelectedIndexChange = { ThemeStore.update(settings.copy(transition = it)) },
-                        )
-                        SwitchPreference(
-                            title = stringResource(R.string.settings_swipe_back),
-                            summary = stringResource(R.string.settings_swipe_back_summary),
-                            checked = settings.swipeBack,
-                            onCheckedChange = { ThemeStore.update(settings.copy(swipeBack = it)) },
-                        )
                     }
                 }
 

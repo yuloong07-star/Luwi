@@ -79,15 +79,6 @@
     <string name="settings_squircle">Squircle corners</string>
     <string name="settings_squircle_summary">Use smooth rounded rectangles on rounded UI elements</string>
 
-    <string name="settings_section_navigation">Navigation</string>
-    <string name="settings_section_navigation_summary">Going back, and how pages slide in</string>
-    <string name="settings_transition">Transition style</string>
-    <string name="settings_transition_summary">Animation style for page transitions</string>
-    <string name="settings_transition_miuix">Miuix</string>
-    <string name="settings_transition_aosp">AOSP</string>
-    <string name="settings_swipe_back">Swipe back</string>
-    <string name="settings_swipe_back_summary">Swipe a pushed page to go back</string>
-
     <string name="settings_section_channel">Privileged channel</string>
     <string name="settings_section_channel_summary">Anything that touches the screen needs it</string>
     <string name="settings_channel_reading">Reading...</string>
@@ -578,7 +569,8 @@
     <string name="menu_sync_need_remote">No repository address yet - fill one in under Settings → Sync first</string>
     <string name="menu_sync_switched_on">Sync is on; restarting the DSH host…</string>
     <string name="menu_sync_switched_off">Sync is off; restarting the DSH host…</string>
-    <string name="settings_sync_session_remote">Session repository</string>    <string name="settings_sync_session_remote_summary">The git remote both machines push sessions to (https:// / git:// / ssh:// / user@host:path / a local path). Leave empty and only status/diff work</string>
+    <string name="settings_sync_session_remote">Session repository</string>
+    <string name="settings_sync_session_remote_summary">The git remote both machines push sessions to (https:// / git:// / ssh:// / user@host:path / a local path). Leave empty and only status/diff work</string>
     <string name="settings_sync_workspace_remote">Workspace repository</string>
     <string name="settings_sync_workspace_remote_summary">The git remote for the workspace files. Leave empty and that mirror stays off</string>
     <string name="settings_sync_remote_set">configured</string>

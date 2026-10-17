@@ -23,8 +23,8 @@ import top.yukonga.miuix.kmp.theme.ThemePaletteStyle
  * @property palette Google 的调色板风格
  * @property spec Google 的色彩规范版本
  * @property squircle 方形控件的圆角是否用方圆形
- * @property transition 页面切换的动效, Miuix 默认或 AOSP
- * @property swipeBack 是否允许从边缘滑动返回
+ * @property transition **已废** (2026-10-17 主人撤掉导航那一段): 转场只剩 Miuix 那套, 这个字段只为读旧 pref 保留, 没人读它
+ * @property swipeBack **已废** (同上): 横滑返回一直开着, 这个字段只为读旧 pref 保留
  */
 data class ThemeSettings(
     val mode: Int = MODE_SYSTEM,

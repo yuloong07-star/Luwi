@@ -16,8 +16,8 @@ import org.junit.Test
  */
 class SettingsSectionsTest {
 
-    /** D1 拍板的那七段: 省电那一段 + 「常用」一级分组下那六段 */
-    private val common = listOf("power", "appearance", "navigation", "channel", "ball", "wake", "speak")
+    /** D1 拍板的那六段: 省电那一段 + 「常用」一级分组下那五段 (导航那一段 2026-10-17 撤了) */
+    private val common = listOf("power", "appearance", "channel", "ball", "wake", "speak")
 
     /** 「能力」那一组的 13 段, 缺省全收着 */
     private val abilities = listOf(
@@ -29,7 +29,7 @@ class SettingsSectionsTest {
     fun commonSectionsAreOpen() {
         val collapsed = defaultCollapsed(SettingsSectionKeys)
 
-        assertEquals("白名单就是 D1 那七段", common.toSet(), SettingsSectionsAlwaysOpen)
+        assertEquals("白名单就是 D1 那六段 (导航撤了)", common.toSet(), SettingsSectionsAlwaysOpen)
         common.forEach { key ->
             assertFalse("$key 是常用那一段, 缺省应当开着", key in collapsed)
         }
@@ -89,7 +89,7 @@ class SettingsSectionsTest {
     @Test
     fun sectionKeysAreUnique() {
         assertEquals("段名不能重复", SettingsSectionKeys.size, SettingsSectionKeys.toSet().size)
-        assertEquals("现在页面上是 20 段", 20, SettingsSectionKeys.size)
-        assertEquals("常用七段 + 能力十三段", SettingsSectionKeys.size, common.size + abilities.size)
+        assertEquals("现在页面上是 19 段", 19, SettingsSectionKeys.size)
+        assertEquals("常用六段 + 能力十三段", SettingsSectionKeys.size, common.size + abilities.size)
     }
 }

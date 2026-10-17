@@ -50,8 +50,8 @@ const page = [...screen.matchAll(/settingsSection\(\s*key = "([a-z-]+)"/gu)].map
 
 /* ── 一、名单本身 ─────────────────────────────────────────────────────── */
 
-check('白名单就是 D1 那七段 (省电 + 常用六段)', open, [
-  'power', 'appearance', 'navigation', 'channel', 'ball', 'wake', 'speak',
+check('白名单就是 D1 那六段 (省电 + 常用五段; 导航那一段 2026-10-17 撤了)', open, [
+  'power', 'appearance', 'channel', 'ball', 'wake', 'speak',
 ])
 
 check('能力那一组 13 段', ability, [
@@ -59,7 +59,7 @@ check('能力那一组 13 段', ability, [
   'automation', 'quick', 'plugin', 'skills', 'linux', 'sync', 'permissions',
 ])
 
-check('页面上真是 20 段', page.length, 20)
+check('页面上真是 19 段', page.length, 19)
 
 check('两份名单拼起来与页面逐个对齐 (顺序也管)', [...(open ?? []), ...(ability ?? [])], page)
 
