@@ -16,6 +16,19 @@ import org.junit.Test
  */
 class CustomPresetsTest {
 
+    /** 那张行 id 表: 三份模式预设, 顺序也是补声明的顺序 (2.7.8 批次 7 加的第三条是探索模式) */
+    @Test
+    fun `三份模式预设的行 id 就是那三对`() {
+        assertEquals(
+            listOf(
+                "preset-mobile-use" to "mobile-use",
+                "preset-video" to "video",
+                "preset-explore" to "explore",
+            ),
+            CustomPresets.PRESET_ROWS,
+        )
+    }
+
     /** 一份像 `presets/mobile-use/cordis.patch.yml` 那样的文件: 注释 + insert 段 + 后面两条顶层行 */
     private val mobileUse = """
         # 2026-10-04 本机加入：手机模式预设（preset-mobile-use）。

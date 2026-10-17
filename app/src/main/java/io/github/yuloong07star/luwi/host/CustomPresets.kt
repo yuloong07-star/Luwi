@@ -17,7 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * 把随机发的三份预设声明落成设备上的事实 —— **新装的手机开箱就该有「自定义模式」与两个模式预设**
+ * 把随包发的四份预设声明落成设备上的事实 —— **新装的手机开箱就该有「自定义模式」与三个模式预设**
  *
  * 主人 2026-10-09 报的那条: "安装手机时默认的 custom 预设声明没有装进去, 导致进行语音输入时开不了
  * 新的会话"。根子是这一条链**只有开发机上手工做过**: `dsh-custom-mode` 那个插件（它把
@@ -69,7 +69,20 @@ internal object CustomPresets {
     /** 三份声明各自那个 loader 行 id: 幂等判据就是"patch 里有没有这一行" */
     private const val ROW_MOBILE = "preset-mobile-use"
     private const val ROW_VIDEO = "preset-video"
+    private const val ROW_EXPLORE = "preset-explore"
     private const val ROW_REGISTRY = "agent-preset-registry"
+
+    /**
+     * 三份模式预设: 行 id 与随 host 树那份 `lw-presets/<名字>.patch.yml` 的对照表
+     *
+     * **一张表两处读** ([ensurePatch] 按它补声明, [describe] 按它报缺哪一份), 从前那张表是写死在
+     * `ensurePatch` 里的 —— 第三份 (探索模式, 2.7.8 批次 7) 进来时正是靠把它提出来才没有第三处副本
+     */
+    val PRESET_ROWS: List<Pair<String, String>> = listOf(
+        ROW_MOBILE to "mobile-use",
+        ROW_VIDEO to "video",
+        ROW_EXPLORE to "explore",
+    )
 
     /** `link:` 那一条: 相对 profile 目录 (`profiles/web`) 算, 落到的就是耐久副本 [durablePackage] */
     private const val LINK = "link:../../../plugins/$PACKAGE"
@@ -166,7 +179,7 @@ internal object CustomPresets {
         val profile = profileDirectory(context)
         val patch = File(profile, "cordis.patch.yml")
             .takeIf { it.isFile }?.readText().orEmpty()
-        val rows = listOf(ROW_MOBILE, ROW_VIDEO, ROW_REGISTRY).filter { !hasRow(patch, it) }
+        val rows = (PRESET_ROWS.map { it.first } + ROW_REGISTRY).filter { !hasRow(patch, it) }
         val bundled = File(profile, "package.json").takeIf { it.isFile }?.readText()
             ?.contains("\"$PACKAGE\"") == true
         return buildString {
@@ -256,8 +269,8 @@ internal object CustomPresets {
         // profile 还不存在时从 dsh 自己那份模板起 (见 [PATCH_TEMPLATE])
         var patch = if (file.isFile) file.readText() else PATCH_TEMPLATE
         val before = patch
-        // 另外两份模式预设: 正文随 host 树走 (lw-presets/), 我们只取开头那段 `- insert:`
-        for ((row, staged) in listOf(ROW_MOBILE to "mobile-use", ROW_VIDEO to "video")) {
+        // 另外三份模式预设: 正文随 host 树走 (lw-presets/), 我们只取开头那段 `- insert:`
+        for ((row, staged) in PRESET_ROWS) {
             if (hasRow(patch, row)) continue
             val source = File(File(DshHost.hostRoot(context), "lw-presets"), "$staged.patch.yml")
             val block = source.takeIf { it.isFile }?.readText()?.let(::insertBlock)

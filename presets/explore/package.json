@@ -1,0 +1,13 @@
+{
+  "name": "@local/dsh-preset-explore",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Luwi local preset: a read-only exploration agent that roams this phone inside a host-counted budget and leaves one structured summary plus memory candidates.",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

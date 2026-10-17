@@ -648,7 +648,7 @@ cpSync(customMode, customInstalled, { recursive: true })
 console.log(`pack-host: installed dsh-custom-mode from ${customMode}`)
 
 /**
- * 另外两份预设声明 (手机模式 / 视频模式) 随树走, 落在 `lw-presets/` 下
+ * 另外三份预设声明 (手机模式 / 视频模式 / 探索模式) 随树走, 落在 `lw-presets/` 下
  *
  * 它们的正文本来就是仓库里的 `presets/<名字>/cordis.patch.yml`; 应用那一侧要把开头那段 `- insert:`
  * 追加进 profile patch, 而它读不到仓库 —— 所以这里拷进树里。mobile-use 那一份末尾还带着它自己的
@@ -656,7 +656,7 @@ console.log(`pack-host: installed dsh-custom-mode from ${customMode}`)
  */
 const presetSeed = join(out, 'lw-presets')
 mkdirSync(presetSeed, { recursive: true })
-for (const name of ['mobile-use', 'video']) {
+for (const name of ['mobile-use', 'video', 'explore']) {
   cpSync(
     fileURLToPath(new URL(`../presets/${name}/cordis.patch.yml`, import.meta.url)),
     join(presetSeed, `${name}.patch.yml`),

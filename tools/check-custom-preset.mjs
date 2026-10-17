@@ -6,7 +6,7 @@
  *   1. **vendored 的 dsh-custom-mode 副本齐不齐**: 它是"那个 `custom` 预设注册进 dsh 注册表"的
  *      唯一来源, 少一个文件的现象是"新机上没有「自定义模式」"
  *   2. **它那个助手的五个文件与 Kotlin 那一份表一致**: 名字漂开的现象是"装了包而没有助手目录"
- *   3. **三段声明各有那段 `- insert:` 与那个行 id**: 应用那一侧按行 id 去重, id 换了就会重复追加
+ *   3. **四段声明各有那段 `- insert:` 与那个行 id**: 应用那一侧按行 id 去重, id 换了就会重复追加
  *   4. **打包那一步真的把它们拷进树** (`tools/pack-host.mjs`): 拷漏了的现象是"代码全对, 设备上没有"
  *
  * 跑法: node tools/check-custom-preset.mjs
@@ -72,7 +72,7 @@ const seeded = []
 for (const name of names) seeded.push(await exists(`presets/custom-mode/package/preset/${name}`))
 check('表里那五个文件包内都有', seeded, names.map(() => true))
 
-/* ── 三、三段声明: 各自有 `- insert:` 与那个行 id ─────────────────────── */
+/* ── 三、四段声明: 各自有 `- insert:` 与那个行 id ─────────────────────── */
 
 /** 一份 patch 里开头那段 `- insert:` (到下一个顶层 `- ` 之前, 与 Kotlin 那个 `insertBlock` 同一个认法) */
 function insertBlock(source) {
@@ -92,6 +92,7 @@ function insertBlock(source) {
 for (const [file, row] of [
   ['presets/mobile-use/cordis.patch.yml', 'preset-mobile-use'],
   ['presets/video/cordis.patch.yml', 'preset-video'],
+  ['presets/explore/cordis.patch.yml', 'preset-explore'],
 ]) {
   const block = insertBlock(await read(file))
   check(`${file} 有那段 insert`, block !== null, true)
@@ -99,9 +100,19 @@ for (const [file, row] of [
 }
 
 check(
-  'Kotlin 那一侧认的两个行 id 与上面那两份一致',
-  [kotlin.includes('ROW_MOBILE = "preset-mobile-use"'), kotlin.includes('ROW_VIDEO = "preset-video"')],
-  [true, true],
+  'Kotlin 那一侧认的三个行 id 与上面那三份一致',
+  [
+    kotlin.includes('ROW_MOBILE = "preset-mobile-use"'),
+    kotlin.includes('ROW_VIDEO = "preset-video"'),
+    kotlin.includes('ROW_EXPLORE = "preset-explore"'),
+  ],
+  [true, true, true],
+)
+
+check(
+  'Kotlin 那张 PRESET_ROWS 就是那三对 (补声明与报缺哪一份读同一张表)',
+  /val PRESET_ROWS: List<Pair<String, String>> = listOf\(\s*ROW_MOBILE to "mobile-use",\s*ROW_VIDEO to "video",\s*ROW_EXPLORE to "explore",\s*\)/.test(kotlin),
+  true,
 )
 
 check(
@@ -122,8 +133,8 @@ check(
   true,
 )
 check(
-  'pack-host 把两份声明摆到 lw-presets/ 下',
-  /\['mobile-use', 'video'\]/.test(pack) && /lw-presets/.test(pack),
+  'pack-host 把三份声明摆到 lw-presets/ 下',
+  /\['mobile-use', 'video', 'explore'\]/.test(pack) && /lw-presets/.test(pack),
   true,
 )
 check(
@@ -165,6 +176,7 @@ if (!treeBuilt) {
     ...moduleNames(await read('presets/custom-mode/package/preset/agent.cordis.yml')),
     ...moduleNames(insertBlock(await read('presets/mobile-use/cordis.patch.yml')) ?? ''),
     ...moduleNames(insertBlock(await read('presets/video/cordis.patch.yml')) ?? ''),
+    ...moduleNames(insertBlock(await read('presets/explore/cordis.patch.yml')) ?? ''),
   ]
   const unique = [...new Set(rows)].sort()
   const missing = []
@@ -176,7 +188,7 @@ if (!treeBuilt) {
       missing.push(name)
     }
   }
-  check(`那三份组成引用的 ${unique.length} 个包在这棵树上都有`, missing, [])
+  check(`那四份组成引用的 ${unique.length} 个包在这棵树上都有`, missing, [])
 }
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
