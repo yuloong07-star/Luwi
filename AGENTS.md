@@ -122,7 +122,7 @@ dsh 这个 fork 的定位也是**部署在远程服务器上, 从任意浏览器
 - 系统栏图标深浅由 `theme/SystemBars.kt` 按**实际渲染出来的配色**定, 在 `MiuixTheme` 里调一次; **顶栏没有模糊也没有那个选项** (画面自己不透明, 糊了没人看得见)
 - **三处图标是同一份标记, 由一张品牌图出** (2026-10-10 主人: "图标全部改用这个, 包括 ball, 注意图案占比要和现在的一样"): `drawable/ic_launcher_foreground.xml` (一圈水花里一只鲸尾, `#01B4FF`) 同时是**自适应图标的前景与单色层**与**球上那个染白的标记** (`overlay/Ball.kt`), `drawable/ic_notification.png` 是通知栏那份白模, 而 `mipmap-*dpi/*.webp` 是密度位图那条回退 —— 它们**全部**从 `tools/brand/luwi-mark.png` (主人给的那张白底单色水彩画) 出: 矢量走 `tools/trace-mark.py` (等值线 -> 多边形 -> `evenOdd`) 再 `tools/vector-ink.py --write --ink-width 0.46` 定尺寸, 位图与白模走 `tools/make-icons.py`。**两份脚本都不进构建, 产物提交进仓库**, 换标记就是换那张品牌图再把这两条跑一遍。**墨迹宽度 0.46 是"占画布多少"那件事唯一的数** (那几张密度位图也按 0.46 摆, 与自适应图标长得一样), 主人点名过"要和现在的一样", 别顺手改它。**只有球那一处比它大** (`BallView.GLYPH_INK_RATIO` = 0.65 个球体直径, 照抄图标那份是 0.378): 同一份矢量, 只是承载它的那块 view 比球大一圈、多出来的透明边被圆裁掉 —— 主人 2026-10-10 看到球之后点名"ball 的图案占比小, 放大一点", 先给 0.55, 看过实机截图之后要的是 0.65
 - **设置页右上角有一个 ⋮**: "不用常驻一页"的事全收在那一个菜单里 —— 2026-10-08 起是**检测更新 / 捐赠 / 关于 / 重启 DSH host** 四条, 以后加选项就是往那个 `items` 里再加一条; 它们三个对话框由 `ui/AboutDialogs.kt` 画, 同一刻只开一个 (设置页拿着一个 `AboutPage?`); 注意 **material3 不是本项目的依赖** (只有 `material3-window-size-class`), 没有 `androidx.compose.material3.DropdownMenu` 可用
-- **设置页是两层分组 + 逐段可折叠** (2026-10-08): 一级是 `GroupTitle` (常用 / 能力), 二级是 `SectionTitle` (段名 + 一句摘要, 那一行整行可点 = 收起/展开, 折角是 `MiuixIcons.ChevronForward` 转 90 度 —— `ExpandLess` / `ExpandMore` 那两颗在模拟器上量出来是"两个断开的角", 认不出是一颗箭头); 每一段由 `LazyListScope.settingsSection(...)` 生成, **收起来的段存在页面那一层的 `collapsed` 集合里** (`rememberSaveable` + `listSaver`, 转屏不丢)。**缺省只展开省电与「常用」那五段 (导航那一段撤了), 能力那 13 段收着** (2026-10-17 第 1 条, D1 + D2): 白名单是 `SettingsSectionsAlwaysOpenKeys`, 缺省那一份由 `defaultCollapsed(SettingsSectionKeys)` = 全部 - 白名单算出来, 于是**以后新加一段天然是收起的** (从前那句"缺省全展开, 新加的一段自己就是展开的"已经翻面); 判据两条 —— `SettingsSectionsTest` 钉纯函数 (七段开 / 十三段收 / 假想的新段也收), `tools/check-settings-sections.mjs` 把那份名单与页面上 19 个 `settingsSection(key = …)` 逐个对齐 (顺序也管, 漏加一段会红)。**省电那一段排在第一个** (它原来是「唤醒词」里的三行): 省电模式 / 省电时段 / 省电时停自动指令都属于"现在别听我说话"这一笔账, 与"许可不允许唤醒"分开
+- **设置页是两层分组 + 逐段可折叠** (2026-10-08): 一级是 `GroupTitle` (常用 / 能力), 二级是 `SectionTitle` (段名 + 一句摘要, 那一行整行可点 = 收起/展开, 折角是 `MiuixIcons.ChevronForward` 转 90 度 —— `ExpandLess` / `ExpandMore` 那两颗在模拟器上量出来是"两个断开的角", 认不出是一颗箭头); 每一段由 `LazyListScope.settingsSection(...)` 生成, **收起来的段存在页面那一层的 `collapsed` 集合里** (`rememberSaveable` + `listSaver`, 转屏不丢)。**缺省只展开省电与「常用」那五段 (导航那一段撤了), 能力那 14 段收着** (2026-10-17 第 1 条, D1 + D2): 白名单是 `SettingsSectionsAlwaysOpenKeys`, 缺省那一份由 `defaultCollapsed(SettingsSectionKeys)` = 全部 - 白名单算出来, 于是**以后新加一段天然是收起的** (从前那句"缺省全展开, 新加的一段自己就是展开的"已经翻面); 判据两条 —— `SettingsSectionsTest` 钉纯函数 (七段开 / 十四段收 / 假想的新段也收), `tools/check-settings-sections.mjs` 把那份名单与页面上 20 个 `settingsSection(key = …)` 逐个对齐 (顺序也管, 漏加一段会红)。**省电那一段排在第一个** (它原来是「唤醒词」里的三行): 省电模式 / 省电时段 / 省电时停自动指令都属于"现在别听我说话"这一笔账, 与"许可不允许唤醒"分开
 - **「Luwi-dsh-sync」那一段 (G1-2, 2026-10-15) 排在 `linux` 与 `permissions` 之间**: 它写的是 `$DSH_HOME/lw/session-sync.json` —— **手机侧唯一的配置面** (插件的 overlay 行不带 config, 所以文件里的每个键都生效; 改完要重启 host, 段首那句 `settings_sync_note` 就为它)。读改写全在 `sync/SyncSetting.kt`: **保留未知键** (整棵树照抄, 只动自己那个键), 键名与插件那一侧由 `tools/check-sync-setting.mjs` 逐个对齐, 令牌只出 `maskedToken()` 的打码形态 («看当前配置»那一页也打码)。纯文件那一半 (`snapshotOf` / `setTextIn` / `setFlagIn` / `setPullIntervalIn` / `prettyOf`) 只吃一个 `File`, 于是能在临时目录上单测。**影工作区里的会话一律以电脑为准** (G1-3, 2026-10-14): 手机 GUI 里那个 `xxx（PC）` 分组是个真工作区, 在里面点「新对话」开的会话 `cwd` 落在影子根底下 (`$DSH_HOME/lw/peer-workspaces/…`) —— 归属方那条闸的**第 ④ 条判据**认它, 把这一句送到电脑**那边新开一场** (`kind:'new'`, 不复用最近那一场) 并把回执里的会话 id 绑成本机这一场的投影, 于是电脑的回答折回来落在主人正看着的那一场里; **本机模型一个字都不跑**, 送不出去只落一条「这一句没有送到 PC」的本地通知。面板那张对端卡的发消息框走的也是这条路 (工作区下拉 + `kind:'new'`; 它原来写死 `{kind:'session', id:''}`, 是一条从来没成功过的死路)。**「同步」默认关, 开关有两处** (G1-4, 2026-10-14): 新装没有仓库地址 = 关, 后台一圈都不跑; 打开它的地方是设置页「同步」那一段的开关, 与**进设置之前那个顶栏菜单**(`HostScreen.mainMenu()` 里「设置」正上方那一行, 与设置页读的是同一份状态)。数据面在 `SyncSetting.setSyncOnIn`: **关 = 把 `remote` 挪进 `lw.savedRemote` 存着, 同时把 `autoPullOnStart` / `autoPushOnTurnEnd` / `pullIntervalMinutes` 存进 `lw` 段再归零 —— 三件事缺一不可** (插件的引擎是无条件建的, 只清远端的话周期拉取照旧按点起来, 而那一轮要经 Linux 沙箱起 proot+git, 实测一条最轻的 `git --version` 就 2.1 s, 白烧电); 开 = 全部填回去。`lw` 段是**应用自己那一层**, 插件不读 (所以 PC 侧一点不受影响), 键名由 `tools/check-sync-setting.mjs` 单独钉。改完必须重启 host, 菜单那一行顺手重启。仓库地址/分支的对话框会补一句填写示例 (`settings_sync_remote_hint`), 段内按「① 仓库 → ② 节奏 → ③ 工作区」分步, 关着时只留一句引导; 对端通道与同步无关, **关着同步也能用**
 - **「视频模式」那一段 (3.0.2 需求 2 + 3.0.3, 2026-10-16) 落在「常用」组里**: 段名从「视频识别」改成**视频模式**, 而视频模式那几件事都住这一段 —— 最上面是**用哪一个模型说话** (缺省「跟随当前模型」; 它原来是单独一段「模式与模型」, 归并过来是因为"视频模式用哪个模型"就是这一段的事), 下面才是那台相机的参数 (抓几张 / 隔多久 / 多大 / 要不要拼网格)。模型那一行写的是 `$DSH_HOME/lw/mode-model.json` (`sync/ModeModel.kt`, 照 `SyncSetting.kt` 的形状: 保留未知键 / 纯文件那一半只吃 `File` / `revision` 记号), 宿主插件读它: `lw_mode` 切换那一路 (exec 里有会话 id, 切进视频前**现取**一次部署默认记成 `lastDefault`, **不信任旧值**) 与 `turn/start` 钩子 (只根会话, 兜住 GUI 自己开的会话; 投影里 pending 已经等于目标就一个 RPC 都不发)。判定抽成纯函数 `resolveModeModel(activeMode, config, sessionModel, restoreModel)` (宿主 `host-plugin/index.mjs` 里, `tools/check-mode-model.mjs` 把它抽出来跑那张真值表), 三档结论: `null` 什么都不做 / 切到配置那一对 / 带 `restore:true` 还回去。**`sessionController.selectModel` 会顺手把部署默认写成被选中的那一个 (`commands.ts` 里那个 `saveSelection`), 所以每一次切换之后都要立刻 `saveSelection` 把默认还回去 —— 这一条是必须的, 不是锦上添花**, 少它一次切换就把 GUI 里那个「当前模型」改掉了; 会话日志因此会多一条 `model/selection` 与一条 "model changed" 用户消息 (一次切换一条, 无法避免)。**还原不靠"下一轮兜底"**: 退出那一刻就按记下来的那几场当场还 (`modeModelState.sessions`, 三个触发点 = `lw_mode` 退出 / 语音命令退出 / 3 s 轮询看见"已经不是视频模式"——球单击与设备脚本走最后这一条), 只还 `agentAvailable === true` 的会话 (**判据不是 `running`**: 退出那一刻视频那一轮已经结束, 按 running 判过一次, 一场都没还, 于是退出后的第一句仍用视频模型回 —— 2026-10-16 真机上量到的); `turn/start` 那一条留着兜宿主重启后 `lastDefault` 没了的那一档。**工具那一层的 `execute(args, exec)` 里没有 `ctx`, 要用模块级的 `hostCtx`** (写成 `ctx.get(...)` 会在运行期抛 "ctx is not defined", 而它被 catch 住、回执上只少一行 —— 同一天真机上踩的)。读数两处: `lw_mode op=status` 的 `model:{...}` 行, 以及落成文件的 `$DSH_HOME/lw/mode-model-state.json` (`configured` / `active` / `switches` / `restored` / `sessions` / `endpoint`, 配置改了而没发 RPC 时轮询也会补写) —— **要量"发了几个 RPC"看这份文件, 别去解那份 zstd 多帧拼接的会话日志**。目录那一半反过来走: 宿主写 `$DSH_HOME/lw/model-catalog.json` (`sessionController.modelCatalog()`, 与 GUI 那个模型选择器同源; 原子写; **插件挂在命令行覆盖层上, `apply()` 可能早于 web bundle 注册 `sessionController` → 起来按 3/10/30 s 重试三次, 取不到就把 reason 写清**), 应用 `tool/LwModel.kt` 读它 —— 设置页候选列表与桥上的 `model op=catalog` 是**同一份** (`lw.ps1 -Method model` 从外面量到的就是应用里看见的), `ok:false` / items 为空时那一行**退化为两个文本框, 不假装有列表**; 应用打开对话框时写一个 `model-catalog-request.json` 记号, 宿主那条 3 s 轮询看见就刷。键名、文件名、上限与 strings 两侧由 `tools/check-mode-model.mjs` 逐个钉 (45 条)
 - **预设现在只有两份: `Luwi` 与 `探索模式`** (2026-10-18 主人: "删除手机模式和视频模式, 因为已经在自定义模式里了" + "自定义模式在预设里的名称也改成 Luwi, 并加简介, 这个要随包"): `presets/mobile-use` 与 `presets/video` 两棵目录已删, `CustomPresets.PRESET_ROWS` 只剩 `preset-explore`, 而**老机器 profile patch 里那两段声明由 `withoutRow` 真的删掉** (只停发的话, 已经装过的机器里那两段还在, 选择器里就永远看得见); `custom` 那个预设的 `preset.yml` 名字改成 `Luwi` 并带一句简介 (`presets/custom-mode/package/preset/preset.yml`), 已经装过的机器由 `presets/custom-mode/package/seed.mjs` 的 `applyShippedIdentity` 在每次激活时订正 (**只认我们自己播种过的名字**, 用户自己改过的不动; 与上游那条 `dropShippedDescription` 同一个契约)。**随包的 `dsh-custom-mode` 版本号必须跟着抬** (这一版 2.0.1 → 2.0.2): `copyDurable` 只在版本不同时刷新耐久副本, 不抬版本的话新 `seed.mjs` 根本到不了设备上, 迁移就白写。判据: `check-custom-preset` 24 条 (含"包内名字是 Luwi / 有一句简介 / 迁移函数在且每次激活都调"), `CustomPresetsTest` 10 条 (含 `withoutRow` 的三条)
@@ -507,19 +507,19 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 - **日程那条工具**: `lw_calendar` 六条 op (`list` / `events` / `read` / `create` / `update` / `free`),
   走 app 进程的 `ContentResolver`; 写入落在第一本可写日历 (可用 `calendarId` 指名), **没有可写的就拒**
 
-## 自动指令 (2026-10-08, 2.5.0 批次 8)
+## 自动指令 (2026-10-08, 2.5.0 批次 8; 2.7.8 批次 8 加了「只响一次」)
 
-"到什么时候做什么"那一条: 一份 JSON 一条规则, 六个监测器看条件, 命中之后把一句话投进会话。
+"到什么时候做什么"那一条: 一份 JSON 一条规则, 七个监测器看条件, 命中之后把一句话投进会话。
 施工单在 `docs/DSH-LW-2.5.0-批次8-开发计划.md`; 要记住的:
 
 | 文件 | 是什么 | 谁写 |
 | :-- | :-- | :-- |
 | `$DSH_HOME/automations/<名字>.json` | 一条规则 (`name` / `enabled` / `when` / `then` / 冷却 / 上限 / 静默) | 模型 (`lw_automation op=write`) 与设置页那个开关 |
-| `$DSH_HOME/automations/settings.json` | 六个监测器开关 + 频率档 + 静默时段 + 「允许它自己动手」 | 设置页 |
-| `$DSH_HOME/automations/history.jsonl` | 一行一次判定与原因 (冷却与上限就是从它现算的) | 引擎 |
+| `$DSH_HOME/automations/settings.json` | 七个监测器开关 + 频率档 + 静默时段 + 「允许它自己动手」+ `saidLimit` | 设置页 |
+| `$DSH_HOME/automations/history.jsonl` | 一行一次判定与原因 (冷却 / 上限 / 主动说那本账都是从它现算的; 手动跑的那行带 `manual`) | 引擎 |
 | `$DSH_HOME/automations/places.json` | 地名 → 经纬度 (geocoding 的结果) | 引擎 |
 
-- **六个监测器: 通知 / 前台应用 / 光感 / 时间 / 地点 / 天气**. 它们的低功耗口径是这一批的硬约束:
+- **七个监测器: 通知 / 前台应用 / 光感 / 时间 / 地点 / 天气 / 只响一次**. 它们的低功耗口径是这一批的硬约束:
   **没有启用的规则就不注册**; 通知与前台应用是事件驱动 (后者只认无障碍事件, **不退回 UsageStats
   轮询**); 光感一条 `SENSOR_DELAY_NORMAL` 的监听; 时间**只排一个**闹钟 (精确优先, 拿不到就退
   `setAndAllowWhileIdle` 并把"不精确"写进读数); 轮询只剩天气 (默认 60 分钟) 与地点
@@ -537,6 +537,35 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   `MODEL_OPERATIONS` 与 `host-plugin` 里那条 `enum`, 漂开由 `tools/check-automations.mjs` 拦;
   **删除只在桥上** (`op=delete`), 给模型的是 list / read / write / status / history
 - **工具数**: 这一批把插件从 58 个工具抬到 59 个, `tools/check-host-plugin.mjs` 的 `FLOOR` 跟着改
+
+## 探索 (2026-10-18, 2.7.8 批次 8: 定时 + 会演进的任务卡)
+
+"让她自己定期看一眼这台手机"那一条: **只有一张会演进的任务卡, 每天一个时刻自己开始, 没有任何手动入口**。
+主人 2026-10-17 的口径: "探索应该是定时的由用户决定开始时间，不要手动开始探索" + "先做一个初始卡，
+并且这个卡会不断变化，agent 由已知记忆、上次探索来决定下一次探索的任务，用户可以手动修改"。
+
+| 文件 / 工具 | 是什么 | 谁写 |
+| :-- | :-- | :-- |
+| `$DSH_HOME/lw/explore-card.md` | 下一场探索的任务 (一段 Markdown) | 宿主收尾时按 `nextTask` 覆盖 (`tool/ExploreTask` 只读/手改写) |
+| `$DSH_HOME/lw/explore-schedule.json` | `enabled` / `at` (`HH:mm`) / `last` (最近一趟的结果) | 设置页「探索」段 (`tool/ExploreSchedule`) |
+| `$DSH_HOME/lw/explore.json` | 那一场探索的 run 账 (批次 7) | 宿主; 应用只读 (`ExploreTask.running`) |
+| `lw_explore` | `op` 只有 **status / finish** (手动 `start` 已撤) | 宿主工具 |
+
+- **没有手动开始**: 设置页「探索」段只有 开关 / 每天几点 / 那张任务卡 (可手改) / 每天最多主动说几次 +
+  两行读数。到点由应用一个 `AlarmManager` 闹钟 (`ExploreAlarmReceiver`, requestCode 42) 读卡写一行
+  `voice/inbox.jsonl` (`source:"explore"`), 宿主照批次 7 的 `startExplore` 开一场; **宿主没在跑 /
+  省电 / 上一场还在跑 / 卡是空的** 四种情况都记在 `explore-schedule.json` 的 `last` 里 (卡空时按
+  "自由探索这台手机"投)
+- **卡会演进**: 收尾时 `lw_explore op=finish` 多一个 `nextTask`, 宿主把它原子写进 `explore-card.md`
+  (上限 8000 字); 初始卡是随包那份"看手机环境 + 应用 + 用户画像"的任务, 首启抄一次 (记号
+  `.lw-seed-explore`), 之后由 agent 与主人改
+- **主动说话的上限**: 「每天最多主动说几次」(`saidLimit`, 1~10, 缺省 3) 只数 `then.kind="task"` 的
+  投递, 账从 `automations/history.jsonl` 现算 (手动「立刻跑一次」不算), 到顶就 `blocked:"said"`;
+  静默时段照旧"跳过、不补发"
+- **「只响一次」**: `when.kind="once"` + `at` (带时区的 ISO 8601), 与 `time` 共用闹钟; 时刻一过
+  (投出去 / 被拦 / 错过窗口) 就 `enabled:false` 并记一行 —— 收尾时那条主动对话就是它
+- 判据: `tools/check-explore.mjs` 106 条 (含初始卡四块 / 排期 / 卡原子写 / 界面无手动入口 /
+  `nextTask` 两处); `check-automations` 30 条 (含 once 与 said 上限)
 
 ## p 图 (AI 改图, 2026-10-08, 2.5.0 批次 9)
 
