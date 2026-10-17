@@ -34,7 +34,7 @@ import { dshHome, PRESET_DIR } from './paths.mjs'
 import { readPresetMeta, writePresetMeta, presetMetaPath } from './meta.mjs'
 import { writeAtomic } from './atomic.mjs'
 import { unresolvableRows } from './composition.mjs'
-import { seedPreset, seedPresetWithLog, dropShippedDescription } from './seed.mjs'
+import { seedPreset, seedPresetWithLog, dropShippedDescription, applyShippedIdentity, PRESET_NAME } from './seed.mjs'
 
 /**
  * Preset ids a directory may use, mirrored from
@@ -339,6 +339,18 @@ export function seedOnActivation({ root, templateDir, composition, log = console
       }
     } catch (error) {
       log(`custom-mode: 描述迁移失败（已忽略）—— ${describe(error)}`)
+    }
+  }
+
+  // 名字与简介：Luwi 那一份（详见 seed.mjs 的 applyShippedIdentity）。与上面同一条道理 —— 装过插件的
+  // 机器才会走到"already seeded"那条早退里，所以必须放在这个每次激活都会跑的循环里。
+  for (const dir of existing) {
+    try {
+      if (applyShippedIdentity(dir).migrated === true) {
+        info(`custom-mode: 已把 ${dir} 的名字/简介订正成「${PRESET_NAME}」`)
+      }
+    } catch (error) {
+      log(`custom-mode: 名字与简介迁移失败（已忽略）—— ${describe(error)}`)
     }
   }
 

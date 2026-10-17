@@ -217,6 +217,50 @@ export function dropShippedDescription(presetDir) {
 }
 
 /**
+ * Luwi 的改名与简介（2026-10-18，主人："自定义模式在预设里的名称也改成 Luwi，并加简介，这个要随包"）。
+ *
+ * 与 {@link dropShippedDescription} 同一套契约：**只认我们自己播种过的名字**（`自定义模式` 与上游的
+ * `custom`），用户自己起过名字的一个字都不动；简介只在为空、或还是我们早年写进去的那条中英拼接时补上。
+ * 于是这个迁移可以每次激活都跑，重复跑也不会把用户改过的内容盖掉。
+ */
+export const PRESET_NAME = 'Luwi'
+
+/**
+ * 简介写得短：壳把描述原样画在模式卡片上，长过一截会把卡片顶高（见 {@link SHIPPED_DESCRIPTIONS} 上面那段）。
+ * 这里只写中文 —— 这个应用只有中文一种界面，与上游"两种语言都写等于混拼"的教训不冲突。
+ */
+export const PRESET_DESCRIPTION = 'Luwi 本体：会读屏、能动手、也会自己学；手机与视频两种状态在会话里自己切。'
+
+/** 我们播种过的名字（含上游默认）：只有这几个会被改成 {@link PRESET_NAME} */
+const SHIPPED_NAMES = ['自定义模式', 'custom', 'Luwi', 'Custom']
+
+/**
+ * 把播种进来的名字/简介订正成 Luwi 那一份。
+ *
+ * @param {string} presetDir - the installed preset directory.
+ * @returns {{migrated: boolean, reason?: string}} what happened.
+ */
+export function applyShippedIdentity(presetDir) {
+  const file = join(presetDir, 'preset.yml')
+  if (!existsSync(file)) return { migrated: false, reason: 'no preset.yml' }
+  let meta
+  try {
+    meta = readPresetMeta(presetDir)
+  } catch (error) {
+    return { migrated: false, reason: describe(error) }
+  }
+  const name = typeof meta.name === 'string' ? meta.name.trim() : ''
+  const description = typeof meta.description === 'string' ? meta.description.trim() : ''
+  const wantName = name === '' || SHIPPED_NAMES.includes(name) ? PRESET_NAME : name
+  const wantDescription = description === '' || SHIPPED_DESCRIPTIONS.includes(description)
+    ? PRESET_DESCRIPTION
+    : description
+  if (wantName === name && wantDescription === description) return { migrated: false, reason: 'already' }
+  const written = writePresetMeta(wantName, wantDescription, presetDir)
+  return written.ok === true ? { migrated: true } : { migrated: false, reason: String(written.code ?? 'writeFailed') }
+}
+
+/**
  * Seed and report, in the form the host half logs.
  *
  * Silent when the preset was already complete — the common case after the first
@@ -251,6 +295,14 @@ export function seedPresetWithLog(presetDir, log = console.error, info = console
     }
   } catch (error) {
     log(`custom-mode: 描述迁移失败（已忽略）: ${describe(error)}`)
+  }
+  // 名字与简介订正成 Luwi 那一份（见 applyShippedIdentity）
+  try {
+    if (applyShippedIdentity(presetDir).migrated === true) {
+      info(`custom-mode: 已把 ${presetDir} 的名字/简介订正成「${PRESET_NAME}」`)
+    }
+  } catch (error) {
+    log(`custom-mode: 名字与简介迁移失败（已忽略）: ${describe(error)}`)
   }
   for (const error of result.errors) {
     log(`custom-mode: preset 播种未完成 —— ${error}`)

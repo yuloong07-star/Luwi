@@ -1,7 +1,7 @@
 # 2026-10-18 本机加入: 探索模式预设 (preset-explore)。
 # 用途 = 在宿主给的一小段预算里 (缺省 30 分钟 / 60 步) 只读地自由探索这台手机, 最后折成一份结构化摘要与记忆候选卡。
 # 三条红线是这一档唯一的闸 (D9 拍板: 闸在提示词层) —— 宿主不加硬拦、不叠 read-only 档, 也不 deny 任何工具。
-# plugins 列表逐字复制自同文件的 preset-mobile-use (已实测可用), 仅替换 id/name/description/order 与 persona。
+# plugins 列表逐行照抄手机模式那一份 (19 行一个都不删; 那两份预设 2026-10-18 下线, 行本身继续留在这里)。
 - insert:
     - id: preset-explore
       name: '@deepseek-ai/dsh-agent-preset'

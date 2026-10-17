@@ -16,20 +16,55 @@ import org.junit.Test
  */
 class CustomPresetsTest {
 
-    /** 那张行 id 表: 三份模式预设, 顺序也是补声明的顺序 (2.7.8 批次 7 加的第三条是探索模式) */
+    /** 那张行 id 表: 现在只剩探索那一份 (2026-10-18 手机/视频两条预设下线) */
     @Test
-    fun `三份模式预设的行 id 就是那三对`() {
-        assertEquals(
-            listOf(
-                "preset-mobile-use" to "mobile-use",
-                "preset-video" to "video",
-                "preset-explore" to "explore",
-            ),
-            CustomPresets.PRESET_ROWS,
-        )
+    fun `随包发的模式预设只剩探索那一份`() {
+        assertEquals(listOf("preset-explore" to "explore"), CustomPresets.PRESET_ROWS)
     }
 
-    /** 一份像 `presets/mobile-use/cordis.patch.yml` 那样的文件: 注释 + insert 段 + 后面两条顶层行 */
+    /** 下线的两条: 判据是那张名单本身, 别把 id 拼错 (拼错了就删不掉老机器里的那两段) */
+    @Test
+    fun `下线那两条就是手机模式与视频模式`() {
+        assertEquals(listOf("preset-mobile-use", "preset-video"), CustomPresets.LEGACY_ROWS)
+    }
+
+    /** 删一条顶层条目: 那一整段 (含它缩进的插件行) 都没了, 别的条目与文件头注释原样留着 */
+    @Test
+    fun `删掉下线那一条时别的条目一个字不动`() {
+        val text = """
+            # 文件头那两行注释
+            # 也不属于任何条目
+            - insert:
+                - id: preset-mobile-use
+                  name: '@deepseek-ai/dsh-agent-preset'
+                  config:
+                    id: mobile-use
+            - insert:
+                - id: preset-video
+                  name: '@deepseek-ai/dsh-agent-preset'
+                  config:
+                    id: video
+            - id: agent-preset-registry
+              config:
+                selectedDefault: custom
+        """.trimIndent()
+        val once = CustomPresets.withoutRow(text, "preset-mobile-use")
+        assertFalse(once.contains("preset-mobile-use"))
+        assertFalse(once.contains("mobile-use"))
+        // 另一条预设与注册表那一条都还在, 文件头注释也还在
+        assertTrue(once.contains("preset-video"))
+        assertTrue(once.contains("agent-preset-registry"))
+        assertTrue(once.startsWith("# 文件头那两行注释"))
+        // 幂等: 再删一次一个字都不变 (ensurePatch 每次 spawn 都会调)
+        assertEquals(once, CustomPresets.withoutRow(once, "preset-mobile-use"))
+        // 两条都删完之后只剩注册表那一条, 而且结尾只有一个换行
+        val twice = CustomPresets.withoutRow(once, "preset-video")
+        assertFalse(twice.contains("preset-video"))
+        assertTrue(twice.trimEnd().endsWith("selectedDefault: custom"))
+        assertEquals(twice.trimEnd() + "\n", twice)
+    }
+
+    /** 一份像以前那两份模式预设声明那样的文件: 注释 + insert 段 + 后面两条顶层行 */
     private val mobileUse = """
         # 2026-10-04 本机加入：手机模式预设（preset-mobile-use）。
         # 注释还有好几行

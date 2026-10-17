@@ -648,15 +648,18 @@ cpSync(customMode, customInstalled, { recursive: true })
 console.log(`pack-host: installed dsh-custom-mode from ${customMode}`)
 
 /**
- * 另外三份预设声明 (手机模式 / 视频模式 / 探索模式) 随树走, 落在 `lw-presets/` 下
+ * 随树走的那份预设声明 (探索模式), 落在 `lw-presets/` 下
  *
- * 它们的正文本来就是仓库里的 `presets/<名字>/cordis.patch.yml`; 应用那一侧要把开头那段 `- insert:`
- * 追加进 profile patch, 而它读不到仓库 —— 所以这里拷进树里。mobile-use 那一份末尾还带着它自己的
- * `agent-preset-registry` 与 `session-log-deepseek` 两行, 应用只取 `- insert:` 那一整段
+ * 它的正文本来就是仓库里的 `presets/<名字>/cordis.patch.yml`; 应用那一侧要把开头那段 `- insert:`
+ * 追加进 profile patch, 而它读不到仓库 —— 所以这里拷进树里
+ *
+ * **2026-10-18 起只剩探索那一份**: 手机模式与视频模式那两份声明下线了 (主人: "删除手机模式和视频模式,
+ * 因为已经在自定义模式里了") —— 那两套提示词本来就装在 `assets/modes/*.md` 里, 切模式时由应用写进
+ * 自定义模式的 `prompt.md`, 单独的预设只是同一个东西的第二份
  */
 const presetSeed = join(out, 'lw-presets')
 mkdirSync(presetSeed, { recursive: true })
-for (const name of ['mobile-use', 'video', 'explore']) {
+for (const name of ['explore']) {
   cpSync(
     fileURLToPath(new URL(`../presets/${name}/cordis.patch.yml`, import.meta.url)),
     join(presetSeed, `${name}.patch.yml`),

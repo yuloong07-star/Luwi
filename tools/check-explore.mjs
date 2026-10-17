@@ -36,7 +36,18 @@ function check(name, got, want) {
 
 const host = await read('host-plugin/index.mjs')
 const preset = await read('presets/explore/cordis.patch.yml')
-const mobileUse = await read('presets/mobile-use/cordis.patch.yml')
+
+/**
+ * 探索那一档的 plugins 行**该是哪 19 条** (persona 之后那些)
+ *
+ * 2026-10-18 手机/视频那两份预设下线之后, 这份名单就没有仓库里的对照物了 —— 于是把它写成字面量:
+ * 少一条的现象是"探索里有一类工具用不了", 而这一条正是 D9 说的"一个工具都不删"
+ */
+const EXPECTED_PLUGINS = [
+  'agent-instructions', 'tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'tool-jobs',
+  'skill-filesystem', 'tool-skill', 'command-goal', 'tool-goal', 'planning', 'compaction',
+  'delegation', 'tool-ask-user', 'tool-todo', 'tool-web', 'present', 'tool-plugin-manager',
+]
 
 /* ── 抽那一段纯函数 (预算 / 摘要名 / 开场正文 / 候选卡) ─────────────────── */
 
@@ -95,11 +106,13 @@ check('persona 那一行在 (prefix 与 suffix 都在)', [
   exploreBlock.includes('suffix: |-'),
 ], [true, true, true])
 check(
-  'plugins 的 19 行与 mobile-use 逐行相同 (一个工具都不删, D9)',
-  pluginRows(exploreBlock),
-  pluginRows(insertBlock(mobileUse)),
+  'plugins 的 19 行一条不少、顺序也不变 (一个工具都不删, D9)',
+  pluginRows(exploreBlock)
+    // 只认 `plugins:` 那一层的 10 个空格: 组里的子行 (plan-mode / compaction-basic …) 更深
+    .map((line) => /^ {10}- id: (.+)$/.exec(line)?.[1])
+    .filter((name) => name !== undefined),
+  EXPECTED_PLUGINS,
 )
-check('persona 与手机模式不同 (换的就是它)', exploreBlock !== insertBlock(mobileUse), true)
 
 /* ── 二、persona 与摘要口径 ─────────────────────────────────────────────── */
 
@@ -295,7 +308,7 @@ check(
 const pack = await read('tools/pack-host.mjs')
 const custom = await read('app/src/main/java/io/github/yuloong07star/luwi/host/CustomPresets.kt')
 const inbox = await read('app/src/main/java/io/github/yuloong07star/luwi/voice/VoiceInbox.kt')
-check('pack-host 摆三份声明', /for \(const name of \['mobile-use', 'video', 'explore'\]\)/u.test(pack), true)
+check('pack-host 摆的就是探索那一份 (手机/视频两条 2026-10-18 下线)', /for \(const name of \['explore'\]\)/u.test(pack), true)
 check('Kotlin 那张 PRESET_ROWS 是三对', /ROW_EXPLORE to "explore",/u.test(custom), true)
 check('应用与宿主同一个来源字面量 (`explore`)', [
   /const val SOURCE_EXPLORE = "explore"/u.test(inbox),

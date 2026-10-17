@@ -232,8 +232,9 @@ object DshHost {
         // "something is listening there" from depending on which of the two started first
         val channel = PrivilegedBridge.start()
         // The overlay is what adds this app's tools to the profile the host boots
-        // 三份预设声明与内置的 dsh-custom-mode 也要在 spawn 之前落进 profile: 那一步做完, 第一次启动的
-        // host 就把「自定义模式 / 手机模式 / 视频模式」一起读进来, 不需要重启一次才生效
+        // 那份预设声明与内置的 dsh-custom-mode 也要在 spawn 之前落进 profile: 那一步做完, 第一次启动的
+        // host 就把「Luwi」(自定义模式) 与「探索模式」一起读进来, 不需要重启一次才生效; 它顺手还会把
+        // 老机器 patch 里手机/视频那两段已经下线的声明删掉 (见 CustomPresets.LEGACY_ROWS)
         //
         // **两处都叫一遍是刻意的**: 首启那次 `DshHostService.onCreate` 跑在 host 树解压之前 (它那一步
         // 要几分钟), 所以那时树里还没有那个包; 这里排在解压之后, 于是"第一次启动就补齐"这件事

@@ -6,7 +6,8 @@
  *   1. **vendored 的 dsh-custom-mode 副本齐不齐**: 它是"那个 `custom` 预设注册进 dsh 注册表"的
  *      唯一来源, 少一个文件的现象是"新机上没有「自定义模式」"
  *   2. **它那个助手的五个文件与 Kotlin 那一份表一致**: 名字漂开的现象是"装了包而没有助手目录"
- *   3. **四段声明各有那段 `- insert:` 与那个行 id**: 应用那一侧按行 id 去重, id 换了就会重复追加
+ *   3. **随包那一份声明有那段 `- insert:` 与那个行 id, 下线那两条真的被删掉**: 应用那一侧按行 id
+ *      去重与删除, id 换了就会重复追加 / 删不掉老机器里的旧声明
  *   4. **打包那一步真的把它们拷进树** (`tools/pack-host.mjs`): 拷漏了的现象是"代码全对, 设备上没有"
  *
  * 跑法: node tools/check-custom-preset.mjs
@@ -72,7 +73,34 @@ const seeded = []
 for (const name of names) seeded.push(await exists(`presets/custom-mode/package/preset/${name}`))
 check('表里那五个文件包内都有', seeded, names.map(() => true))
 
-/* ── 三、四段声明: 各自有 `- insert:` 与那个行 id ─────────────────────── */
+/* ── 二之二、预设的名字与简介随包发 ───────────────────────────────────── */
+
+const presetMeta = await read('presets/custom-mode/package/preset/preset.yml')
+check('包内那份 preset.yml 名字就是 Luwi', /^name: Luwi$/m.test(presetMeta), true)
+check(
+  '包内那份 preset.yml 有一句简介 (空字符串不算)',
+  /^description: "([^"]{8,})"$/m.test(presetMeta),
+  true,
+)
+
+const seedModule = await read('presets/custom-mode/package/seed.mjs')
+const assistants = await read('presets/custom-mode/package/assistants.mjs')
+check(
+  '已经装过的机器也会被订正: 迁移函数在, 而且每次激活都会调它',
+  [
+    /export function applyShippedIdentity\(presetDir\)/u.test(seedModule),
+    /export const PRESET_NAME = 'Luwi'/u.test(seedModule),
+    /applyShippedIdentity\(dir\)/u.test(assistants),
+  ],
+  [true, true, true],
+)
+check(
+  '只订正我们自己播种过的名字 (用户改过的不动)',
+  [/const SHIPPED_NAMES = \['自定义模式', 'custom', 'Luwi', 'Custom'\]/u.test(seedModule)],
+  [true],
+)
+
+/* ── 三、随包那份声明: 有 `- insert:` 与那个行 id ─────────────────────── */
 
 /** 一份 patch 里开头那段 `- insert:` (到下一个顶层 `- ` 之前, 与 Kotlin 那个 `insertBlock` 同一个认法) */
 function insertBlock(source) {
@@ -90,8 +118,6 @@ function insertBlock(source) {
 }
 
 for (const [file, row] of [
-  ['presets/mobile-use/cordis.patch.yml', 'preset-mobile-use'],
-  ['presets/video/cordis.patch.yml', 'preset-video'],
   ['presets/explore/cordis.patch.yml', 'preset-explore'],
 ]) {
   const block = insertBlock(await read(file))
@@ -100,19 +126,35 @@ for (const [file, row] of [
 }
 
 check(
-  'Kotlin 那一侧认的三个行 id 与上面那三份一致',
+  '手机与视频那两条预设的目录已经不在了 (2026-10-18 下线)',
+  [await exists('presets/mobile-use'), await exists('presets/video')],
+  [false, false],
+)
+
+check(
+  'Kotlin 那一侧认的行 id 与随包那几份一致',
   [
-    kotlin.includes('ROW_MOBILE = "preset-mobile-use"'),
-    kotlin.includes('ROW_VIDEO = "preset-video"'),
     kotlin.includes('ROW_EXPLORE = "preset-explore"'),
+    kotlin.includes('ROW_MOBILE = "preset-mobile-use"') === false,
+    kotlin.includes('ROW_VIDEO = "preset-video"') === false,
   ],
   [true, true, true],
 )
 
 check(
-  'Kotlin 那张 PRESET_ROWS 就是那三对 (补声明与报缺哪一份读同一张表)',
-  /val PRESET_ROWS: List<Pair<String, String>> = listOf\(\s*ROW_MOBILE to "mobile-use",\s*ROW_VIDEO to "video",\s*ROW_EXPLORE to "explore",\s*\)/.test(kotlin),
+  'Kotlin 那张 PRESET_ROWS 只剩探索那一对 (补声明与报缺哪一份读同一张表)',
+  /val PRESET_ROWS: List<Pair<String, String>> = listOf\(\s*ROW_EXPLORE to "explore",\s*\)/.test(kotlin),
   true,
+)
+
+check(
+  '下线那两条也在名单里, 而且 ensurePatch 真的按它删 (只停发的话老机器里还看得见)',
+  [
+    /val LEGACY_ROWS: List<String> = listOf\("preset-mobile-use", "preset-video"\)/.test(kotlin),
+    /for \(row in LEGACY_ROWS\) \{/.test(kotlin),
+    /patch = withoutRow\(patch, row\)/.test(kotlin),
+  ],
+  [true, true, true],
 )
 
 check(
@@ -133,9 +175,14 @@ check(
   true,
 )
 check(
-  'pack-host 把三份声明摆到 lw-presets/ 下',
-  /\['mobile-use', 'video', 'explore'\]/.test(pack) && /lw-presets/.test(pack),
+  'pack-host 只摆探索那一份声明到 lw-presets/ 下',
+  /\['explore'\]/.test(pack) && /lw-presets/.test(pack),
   true,
+)
+check(
+  'pack-host 不再提手机/视频那两份 (停发了就别在树里留名字)',
+  ['mobile-use', 'video'].filter((name) => pack.includes(`'${name}'`)),
+  [],
 )
 check(
   '那一步也被 Gradle 当成输入 (改了 preset 会重打树)',
@@ -174,8 +221,6 @@ if (!treeBuilt) {
 } else {
   const rows = [
     ...moduleNames(await read('presets/custom-mode/package/preset/agent.cordis.yml')),
-    ...moduleNames(insertBlock(await read('presets/mobile-use/cordis.patch.yml')) ?? ''),
-    ...moduleNames(insertBlock(await read('presets/video/cordis.patch.yml')) ?? ''),
     ...moduleNames(insertBlock(await read('presets/explore/cordis.patch.yml')) ?? ''),
   ]
   const unique = [...new Set(rows)].sort()
@@ -188,7 +233,7 @@ if (!treeBuilt) {
       missing.push(name)
     }
   }
-  check(`那四份组成引用的 ${unique.length} 个包在这棵树上都有`, missing, [])
+  check(`那两份组成引用的 ${unique.length} 个包在这棵树上都有`, missing, [])
 }
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)

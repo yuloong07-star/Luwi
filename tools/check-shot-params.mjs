@@ -25,8 +25,6 @@ const plugin = await read('../host-plugin/index.mjs')
 const authority = await read('../docs/shot-params.md')
 const video = await read('../app/src/main/assets/modes/video.md')
 const skill = await read('../skills/android-device-control/SKILL.md')
-const preset = await read('../presets/video/cordis.patch.yml')
-const presetReadme = await read('../presets/video/README.md')
 const looks = await read('../app/src/main/java/io/github/yuloong07star/luwi/tool/VideoLooks.kt')
 const camera = await read('../app/src/main/java/io/github/yuloong07star/luwi/tool/LwCamera.kt')
 const bridge = await read('../app/src/main/java/io/github/yuloong07star/luwi/channel/PrivilegedBridge.kt')
@@ -156,8 +154,7 @@ check(
 /**
  * 一篇提示词里第 N 条那一整段 (从 `N. ` 到 `N+1. `)
  *
- * **前导空白要容忍**: `presets/video/cordis.patch.yml` 里那些条目整段缩进了十六个空格, 而
- * `assets/modes/video.md` 是顶格写的 —— 同一个函数读两份
+ * **前导空白要容忍**: 这些条目有的顶格写, 有的缩进过 —— 同一个函数读几份
  */
 function article(text, number) {
   const from = new RegExp(`(^|\\n)\\s*${number}\\. `).exec(text)
@@ -183,15 +180,6 @@ const ruleBook = [
   ['video.md 第 12 条: 说清"屏幕"指镜头', video, 12, '镜头'],
   ['video.md 第 8 条: 相机被别场占着的出口', video, 8, '释放视频模式'],
   ['video.md 第 22 条: 指到口径表', video, 22, 'docs/shot-params.md'],
-  ['video 预置第 9 条: 第一组张数', preset, 9, table.look.framesDefault],
-  ['video 预置第 9 条: 第二组张数', preset, 9, table.look.secondLook],
-  ['video 预置第 9 条: 最多两组', preset, 9, '最多两组'],
-  ['video 预置第 11 条: 动的东西那一档', preset, 11, table.look.movingFrames],
-  ['video 预置第 12 条: 说清"屏幕"指镜头', preset, 12, '镜头'],
-  ['video 预置第 20 条: 指到口径表', preset, 20, 'shot-params'],
-  ['video 预置 README: 第一组张数', presetReadme, null, `frames=${table.look.framesDefault}`],
-  ['video 预置 README: 第二组张数', presetReadme, null, `frames=${table.look.secondLook}`],
-  ['video 预置 README: 动的东西那一档', presetReadme, null, `frames=${table.look.movingFrames}`],
   ['技能: 取景缺省张数', skill, null, `缺省 ${table.look.framesDefault}`],
   ['技能: 第二组张数', skill, null, table.look.secondLook],
   ['技能: 取景间隔', skill, null, `${table.look.intervalMinMs}–${table.look.intervalMaxMs}`],

@@ -17,7 +17,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * 把随包发的四份预设声明落成设备上的事实 —— **新装的手机开箱就该有「自定义模式」与三个模式预设**
+ * 把随包发的预设声明落成设备上的事实 —— **新装的手机开箱就该有「自定义模式」与「探索模式」**
+ *
+ * **2026-10-18 主人改了形状**: 手机模式与视频模式那两条独立的预设下线 ("因为已经在自定义模式里了"),
+ * 于是这一条链现在只补探索那一份, 并且顺手把老机器里那两段声明删掉 ([LEGACY_ROWS])
  *
  * 主人 2026-10-09 报的那条: "安装手机时默认的 custom 预设声明没有装进去, 导致进行语音输入时开不了
  * 新的会话"。根子是这一条链**只有开发机上手工做过**: `dsh-custom-mode` 那个插件（它把
@@ -66,23 +69,29 @@ internal object CustomPresets {
         "prompt-tool.mjs",
     )
 
-    /** 三份声明各自那个 loader 行 id: 幂等判据就是"patch 里有没有这一行" */
-    private const val ROW_MOBILE = "preset-mobile-use"
-    private const val ROW_VIDEO = "preset-video"
+    /** 声明各自那个 loader 行 id: 幂等判据就是"patch 里有没有这一行" */
     private const val ROW_EXPLORE = "preset-explore"
     private const val ROW_REGISTRY = "agent-preset-registry"
 
     /**
-     * 三份模式预设: 行 id 与随 host 树那份 `lw-presets/<名字>.patch.yml` 的对照表
+     * 随包发的模式预设: 行 id 与随 host 树那份 `lw-presets/<名字>.patch.yml` 的对照表
      *
-     * **一张表两处读** ([ensurePatch] 按它补声明, [describe] 按它报缺哪一份), 从前那张表是写死在
-     * `ensurePatch` 里的 —— 第三份 (探索模式, 2.7.8 批次 7) 进来时正是靠把它提出来才没有第三处副本
+     * **一张表三处读** ([ensurePatch] 按它补声明, [describe] 按它报缺哪一份, [LEGACY_ROWS] 是同一张
+     * 名单的反面): 2.7.8 批次 7 把写死在 `ensurePatch` 里的那张表提了出来, 于是加一份 / 退一份都只改这里
      */
     val PRESET_ROWS: List<Pair<String, String>> = listOf(
-        ROW_MOBILE to "mobile-use",
-        ROW_VIDEO to "video",
         ROW_EXPLORE to "explore",
     )
+
+    /**
+     * **已经下线的那两条**: 手机模式 (`preset-mobile-use`) 与视频模式 (`preset-video`)
+     *
+     * 主人 2026-10-18: "删除手机模式和视频模式, 因为已经在自定义模式里了" —— 那两套提示词本来就装在
+     * `assets/modes/` 下那几份 md 里, 切模式时由应用写进自定义模式的 `prompt.md`, 单独的预设只是同一个
+     * 东西的第二份。**这里要把它们从老机器的 profile patch 里真正删掉** (只停止随包发的话, 已经装过的
+     * 机器里那两段声明还在, 选择器里就永远看得见), 见 [withoutRow]
+     */
+    val LEGACY_ROWS: List<String> = listOf("preset-mobile-use", "preset-video")
 
     /** `link:` 那一条: 相对 profile 目录 (`profiles/web`) 算, 落到的就是耐久副本 [durablePackage] */
     private const val LINK = "link:../../../plugins/$PACKAGE"
@@ -263,13 +272,13 @@ internal object CustomPresets {
         Log.i(TAG, "the profile manifest now carries $PACKAGE")
     }
 
-    /** 三段声明: 按行 id 认, 缺哪一段补哪一段 (已有的一律不动) */
+    /** 随包发的那份声明按行 id 补, 下线的那几条按行 id 删 (已有的一律不动) */
     private fun ensurePatch(context: Context, profile: File) {
         val file = File(profile, "cordis.patch.yml")
         // profile 还不存在时从 dsh 自己那份模板起 (见 [PATCH_TEMPLATE])
         var patch = if (file.isFile) file.readText() else PATCH_TEMPLATE
         val before = patch
-        // 另外三份模式预设: 正文随 host 树走 (lw-presets/), 我们只取开头那段 `- insert:`
+        // 模式预设: 正文随 host 树走 (lw-presets/), 我们只取开头那段 `- insert:`
         for ((row, staged) in PRESET_ROWS) {
             if (hasRow(patch, row)) continue
             val source = File(File(DshHost.hostRoot(context), "lw-presets"), "$staged.patch.yml")
@@ -279,6 +288,13 @@ internal object CustomPresets {
                 continue
             }
             patch = appendBlock(patch, block)
+        }
+        // **下线那两条真的从老机器的 patch 里删掉** (见 [LEGACY_ROWS]): 只停发的话, 已经装过的机器里
+        // 那两段声明还在, 预设选择器里就一直看得见它们
+        for (row in LEGACY_ROWS) {
+            if (!hasRow(patch, row)) continue
+            patch = withoutRow(patch, row)
+            Log.i(TAG, "the retired preset declaration $row is now out of ${file.absolutePath}")
         }
         // 我们那一条注册表行: 只负责"没有时写一份默认", 已经有的话一个字都不动 (主人可能自己选过)
         if (!hasRow(patch, ROW_REGISTRY)) patch = appendBlock(patch, REGISTRY_ROW)
@@ -345,6 +361,41 @@ internal object CustomPresets {
     /** 这一行在不在: 判据是"某个顶层行的 id 就是它" (缩进过的子行不算) */
     fun hasRow(patch: String, rowId: String): Boolean =
         patch.lines().any { it.trimStart() == "- id: $rowId" }
+
+    /**
+     * 把一个行 id 所在的**那一条顶层条目**从 patch 里删掉 (见 [LEGACY_ROWS])
+     *
+     * 认法与 [insertBlock] 是同一套: 一条顶层条目从 `- ` 那一行起, 到下一条顶层 `- ` 之前; 段里只要有
+     * 一行 `- id: <rowId>` (顶格或缩进过) 就整条丢掉。注释与空行跟着**后一条**走, 所以删掉中间那一条
+     * 不会把下一段的注释一起吃掉; 收尾把连续空行压成一个
+     *
+     * 幂等: 已经删过的 patch 再跑一遍一个字都不变 (`ensurePatch` 每次 spawn 都会调它)
+     */
+    fun withoutRow(patch: String, rowId: String): String {
+        val lines = patch.lines()
+        val kept = mutableListOf<String>()
+        var index = 0
+        // 文件头那几行注释不属于任何条目: 先原样留着
+        while (index < lines.size && !lines[index].startsWith("- ")) {
+            kept += lines[index]
+            index += 1
+        }
+        while (index < lines.size) {
+            val start = index
+            var end = index + 1
+            while (end < lines.size && !lines[end].startsWith("- ")) end += 1
+            val entry = lines.subList(start, end)
+            if (entry.none { it.trimStart() == "- id: $rowId" }) kept += entry
+            index = end
+        }
+        val collapsed = mutableListOf<String>()
+        for (line in kept) {
+            if (line.isBlank() && (collapsed.isEmpty() || collapsed.last().isBlank())) continue
+            collapsed += line
+        }
+        while (collapsed.isNotEmpty() && collapsed.last().isBlank()) collapsed.removeAt(collapsed.lastIndex)
+        return collapsed.joinToString("\n") + "\n"
+    }
 
     /**
      * 把一段声明追加进 patch
