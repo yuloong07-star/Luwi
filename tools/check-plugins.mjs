@@ -539,6 +539,8 @@ const chatBubbleUser = await read('app/src/main/res/layout/lw_widget_slot_chat_b
 const chatBubbleAssistant = await read('app/src/main/res/layout/lw_widget_slot_chat_bubble_assistant.xml')
 const widgetSpecKt = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSpec.kt')
 const slotReceivers = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSlotReceivers.kt')
+const pluginManifest = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginManifest.kt')
+const pluginSettings = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginSettings.kt')
 
 check(
   '清单里声明了对话槽与那颗「说一句」的接收器',
@@ -572,18 +574,47 @@ check(
   [true, true, true, true, true, true, true, true, true, true, true, true, true],
 )
 check(
-  '对话槽不挂插件: 它在 ALL 里, 但不在插件填的那一份名单里',
+  '对话槽由插件填 (主人 2026-10-17: 这个组件要作为插件发): 声明归属只写 slot 与 name, 内容走 ui.settings',
   [
     widgetSlotKt.includes('const val CHAT = "chat"'),
     widgetSlotKt.includes('val ALL = listOf(ANIM, IMAGE, CHAT)'),
-    widgetSlotKt.includes('val PLUGIN_FILLED = listOf(ANIM, IMAGE)'),
-    // 设置页那几行只列插件填得的槽 (对话槽那一行在「浮标」段)
+    widgetSlotKt.includes('val PLUGIN_FILLED = listOf(ANIM, IMAGE, CHAT)'),
+    // 设置页那几行照 ALL / PLUGIN_FILLED 列 (三个槽都在)
     settings.includes('WidgetSlot.PLUGIN_FILLED.forEach'),
-    // 一份写 slot=chat 的 widget.json 当场拒
-    widgetSpecKt.includes('if (slot == WidgetSlot.CHAT)') && widgetSpecKt.includes('那一格由应用自己画'),
+    // 一份 chat 的 widget.json 只收 slot 与 name (写 frames 那些当场拒)
+    widgetSpecKt.includes('if (slot == WidgetSlot.CHAT)') && widgetSpecKt.includes('widget.json 只写 slot 与 name'),
     chatReceivers.includes('class WidgetSlotChat : WidgetSlotBase(WidgetSlot.CHAT)'),
+    // 那一格的内容读插件自己那几项设置 (协议第 10 节 ui.settings)
+    widgetChat.includes('PluginSettings.values(context, manifest)'),
+    widgetChat.includes('WidgetSlots.holder(context, WidgetSlot.CHAT)'),
   ],
-  [true, true, true, true, true, true],
+  [true, true, true, true, true, true, true, true],
+)
+check(
+  '插件自己那几项设置 (协议 ui.settings) 真的接通了',
+  [
+    pluginManifest.includes('PluginSettings.parse(block["settings"] as? JsonArray)'),
+    pluginManifest.includes('- setOf("settings")'),
+    pluginSettings.includes('internal fun parse(array: JsonArray?)'),
+    pluginSettings.includes('internal fun normalize(setting: Setting'),
+    // 四项类型与"装的时候就要拒"那一道
+    pluginSettings.includes('val TYPES = setOf("int", "bool", "enum", "string")'),
+    pluginSettings.includes('的 default $number 大于 max'),
+    // 值落在插件自己那一块盘上 (卸载连数据一起删动的就是它)
+    pluginSettings.includes('File(PluginStore.dataDir(context, id), FILE)'),
+  ],
+  [true, true, true, true, true, true, true],
+)
+check(
+  '气泡区 = 人物高度 + 一行气泡 (主人 2026-10-17 第三条), 而人物仍随格子等比',
+  [
+    widgetChat.includes('fun bubbleAreaDp(faceDp: Int, bubbleSp: Long): Int = faceDp + oneLineDp(bubbleSp)'),
+    widgetChat.includes('Face.bubbleAreaDp(faceDp, bubbleSp)'),
+    widgetChat.includes('setViewLayoutHeight(\n            R.id.lw_chat_bubbles'),
+    widgetChat.includes('fun actualDp(cellWidthDp: Int, cellHeightDp: Int, baseDp: Long): Int'),
+    widgetChat.includes('setTextViewTextSize(R.id.lw_chat_bubble_text, TypedValue.COMPLEX_UNIT_SP'),
+  ],
+  [true, true, true, true, true],
 )
 
 check(
@@ -909,3 +940,4 @@ check(
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
 if (failures > 0) process.exit(1)
+

@@ -21,16 +21,18 @@ internal object WidgetSlots {
     const val FILE = ".widgets.json"
 
     @Serializable
-    data class Assignments(val anim: String? = null, val image: String? = null) {
+    data class Assignments(val anim: String? = null, val image: String? = null, val chat: String? = null) {
         fun get(slot: String): String? = when (slot) {
             WidgetSlot.ANIM -> anim
             WidgetSlot.IMAGE -> image
+            WidgetSlot.CHAT -> chat
             else -> null
         }
 
         fun with(slot: String, id: String?): Assignments = when (slot) {
             WidgetSlot.ANIM -> copy(anim = id)
             WidgetSlot.IMAGE -> copy(image = id)
+            WidgetSlot.CHAT -> copy(chat = id)
             else -> this
         }
     }

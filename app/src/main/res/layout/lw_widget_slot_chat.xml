@@ -2,59 +2,65 @@
 <!--
   宿主的第三个槽: 桌面对话组件 (2.7.8 批次 6)
 
-  版式照 `2.3` 定下的那一份, 而**两块的位置在 2026-10-17 由主人对换过一次**: 立绘在**左下**, 那颗
-  「说一句」在**右下**, 气泡区仍在顶部 (改成 ViewFlipper 帧序列, 与动画槽同一条路 ——
-  `setImageViewResource` 与 `AnimationDrawable` 在桌面上都不动)
+  两块的位置在 2026-10-17 由主人定过两次: 立绘在**左下**, 那颗「说一句」在**右下**, 气泡区在上方;
+  而**气泡区的高度 = 人物高度 + 一行气泡的高度** (主人 2026-10-17 第三条) —— 那个数由
+  `WidgetChat` 每次组装时按格子与设置算出来 (`setViewLayoutHeight`), 这里只给缺省
 
-  **气泡是 `addView` 逐条加进去的** (每条的版式见 `lw_widget_slot_chat_bubble_*.xml`): RemoteViews 里
-  不能在预置布局里写死"最多几条", 而这一格本来就只显示最近三条
-
-  立绘那一块**故意用 `fitCenter`**: 浮标外观有两档 `fit` (`cover` 球型与 `contain` 全身立绘),
-  而 RemoteViews 不能给 ImageView 换 scaleType —— 方窗里按比例装进去对两档都是"看得见整个人"
+  立绘那一块**故意用 `fitCenter`** (`lw_widget_slot_frame.xml`): 浮标外观有两档 `fit` (`cover` 球型
+  与 `contain` 全身立绘), 而 RemoteViews 不能给 ImageView 换 scaleType —— 方窗里按比例装进去对两档
+  都是"看得见整个人", 也不会被拉宽
 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/lw_chat_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/lw_chat_panel"
+    android:gravity="bottom"
+    android:orientation="vertical"
     android:padding="8dp">
 
     <LinearLayout
         android:id="@+id/lw_chat_bubbles"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|start"
+        android:layout_height="72dp"
+        android:gravity="bottom"
         android:orientation="vertical" />
 
     <TextView
         android:id="@+id/lw_chat_empty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|start"
         android:maxLines="3"
         android:textColor="#99EDEDED"
         android:textSize="11sp" />
 
-    <TextView
-        android:id="@+id/lw_chat_say"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|end"
-        android:background="@drawable/lw_chat_say"
-        android:paddingStart="10dp"
-        android:paddingTop="4dp"
-        android:paddingEnd="10dp"
-        android:paddingBottom="4dp"
-        android:text="@string/widget_chat_say"
-        android:textColor="#FFEDEDED"
-        android:textSize="11sp" />
+    <FrameLayout
+        android:id="@+id/lw_chat_bottom"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
 
-    <ViewFlipper
-        android:id="@+id/lw_chat_flipper"
-        android:layout_width="64dp"
-        android:layout_height="64dp"
-        android:layout_gravity="bottom|start"
-        android:autoStart="true"
-        android:flipInterval="100" />
+        <ViewFlipper
+            android:id="@+id/lw_chat_flipper"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="bottom|start"
+            android:autoStart="true"
+            android:flipInterval="100" />
 
-</FrameLayout>
+        <TextView
+            android:id="@+id/lw_chat_say"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:background="@drawable/lw_chat_say"
+            android:paddingStart="10dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="4dp"
+            android:text="@string/widget_chat_say"
+            android:textColor="#FFEDEDED"
+            android:textSize="11sp" />
+
+    </FrameLayout>
+
+</LinearLayout>

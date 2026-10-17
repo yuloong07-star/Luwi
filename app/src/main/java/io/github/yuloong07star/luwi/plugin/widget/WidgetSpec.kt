@@ -65,13 +65,32 @@ internal data class WidgetSpec(
                     "$where 的 slot 只能是 ${WidgetSlot.PLUGIN_FILLED.joinToString(" / ")}, 这一份写的是 \"$slot\"",
                 )
             }
-            // chat 那一格**不收插件内容** (2.7.8 批次 6): 立绘取当前浮标外观, 气泡取那份
-            // `lw/desktop-chat.json`, 而这两样都不在插件目录里 —— 收下一份 widget.json 也无处可画,
-            // 于是当场说清楚, 而不是留一个"装上了但什么都不显示"的槽
+            // 对话槽 (2.7.8 批次 6): 它由插件**声明归属**, 而内容全在插件自己那几项设置里
+            // (`ui.settings`: 气泡字号 / 显示的人物 / 原始大小) —— 于是这一份 widget.json 只要名字,
+            // 写 frames / buttons 那些是别的槽才有的东西
             if (slot == WidgetSlot.CHAT) {
-                throw IllegalArgumentException(
-                    "$where 的 slot 不能是 chat: 那一格由应用自己画 (立绘取当前浮标外观, 气泡取" +
-                        " lw/desktop-chat.json), 插件不往这一格填内容, 能填的是 ${WidgetSlot.PLUGIN_FILLED.joinToString(" / ")}",
+                val name = raw.string("name")
+                if (name.length > 40) {
+                    throw IllegalArgumentException("$where 的 name 最多 40 个字, 这一份是 ${name.length} 个")
+                }
+                val knownKeys = setOf("slot", "name")
+                val extra = raw.keys - knownKeys
+                if (extra.isNotEmpty()) {
+                    throw IllegalArgumentException(
+                        "$where 是 chat 槽, 内容由插件那几项设置决定 (气泡字号 / 人物 / 原始大小), " +
+                            "widget.json 只写 slot 与 name; 多出来的键: ${extra.joinToString(", ")}",
+                    )
+                }
+                return WidgetSpec(
+                    slot = slot,
+                    name = name,
+                    tap = "none",
+                    frames = null,
+                    sets = emptyList(),
+                    title = "",
+                    text = "",
+                    image = "",
+                    buttons = emptyList(),
                 )
             }
             val name = raw.string("name")

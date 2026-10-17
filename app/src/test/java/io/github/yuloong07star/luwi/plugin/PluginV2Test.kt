@@ -6,7 +6,6 @@ import io.github.yuloong07star.luwi.plugin.widget.WidgetSpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -120,21 +119,26 @@ class PluginV2Test {
     }
 
     @Test
-    fun chatSlotIsNotForPlugins() {
-        // 2.7.8 批次 6: 对话那一格由应用自己画 (当前浮标立绘 + desktop-chat.json), 插件往里填不了
-        // 任何东西 —— 于是那一份 widget.json 要**当场拒**, 而不是装上了却什么都不显示
-        val error = assertThrows(IllegalArgumentException::class.java) {
+    fun chatSlotOnlyTakesItsName() {
+        // 2.7.8 批次 6 (主人 2026-10-17: "这个作为插件发布"): 对话那一格由插件**声明归属**, 而内容全在
+        // 它自己那几项设置里 (`ui.settings`) —— 于是这份 widget.json 只收 slot 与 name
+        val spec = WidgetSpec.parse(Json.parseToJsonElement("""{"slot":"chat","name":"桌面对话"}""").jsonObject)
+        assertEquals(WidgetSlot.CHAT, spec.slot)
+        assertEquals("桌面对话", spec.name)
+        assertEquals("none", spec.tap)
+        assertTrue(spec.buttons.isEmpty())
+        // 写 frames / buttons 那些是别的槽才有的东西: 当场拒, 而不是装上了什么都不画
+        assertThrows(IllegalArgumentException::class.java) {
             WidgetSpec.parse(
                 Json.parseToJsonElement(
-                    """{"slot":"chat","name":"想占对话格的插件","title":"x"}""",
+                    """{"slot":"chat","name":"错的那一份","frames":{"dir":"art/x","count":1,"fps":1}}""",
                 ).jsonObject,
             )
         }
-        assertTrue(error.message.orEmpty().contains("chat"))
-        // 而"挂哪一只插件"这件事对它没有意义: 它不在插件填的那一份名单里
-        assertFalse(WidgetSlot.pluginFilled(WidgetSlot.CHAT))
+        // 三个槽都由插件填, 而对话槽也在那一份名单里
+        assertTrue(WidgetSlot.pluginFilled(WidgetSlot.CHAT))
         assertTrue(WidgetSlot.known(WidgetSlot.CHAT))
-        assertEquals(listOf(WidgetSlot.ANIM, WidgetSlot.IMAGE), WidgetSlot.PLUGIN_FILLED)
+        assertEquals(listOf(WidgetSlot.ANIM, WidgetSlot.IMAGE, WidgetSlot.CHAT), WidgetSlot.PLUGIN_FILLED)
     }
 
     @Test
@@ -184,3 +188,4 @@ class PluginV2Test {
         }
     }
 }
+

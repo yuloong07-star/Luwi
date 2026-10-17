@@ -32,8 +32,14 @@ internal object WidgetSlot {
     /** 全部宿主槽 (重画 / 开机补授权都按这一份走) */
     val ALL = listOf(ANIM, IMAGE, CHAT)
 
-    /** 由插件往里**填内容**的那几个槽 (设置页那几行、`WidgetSpec` 收的 slot 都是这几个) */
-    val PLUGIN_FILLED = listOf(ANIM, IMAGE)
+    /**
+     * 由插件往里**填内容**的那几个槽
+     *
+     * 三个都算了 (2026-10-17 主人: "这个作为插件发布, 并可在设置中安装") —— 对话槽的内容一半是它
+     * 挂的那只插件的设置 (`ui.settings`: 气泡字号 / 人物 / 原始大小), 一半是那句对话文件;
+     * 立绘本身仍然可以挑"与浮标相同外观"
+     */
+    val PLUGIN_FILLED = listOf(ANIM, IMAGE, CHAT)
 
     /** 槽位那几行在设置页里显示的顺序也是它 */
     fun known(slot: String): Boolean = slot in ALL

@@ -1858,6 +1858,7 @@ private fun QuickItems() {
 @Composable
 private fun PluginItems() {
     val context = LocalContext.current
+    val navigator = LocalRootNavigator.current
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     var revision by remember { mutableIntStateOf(0) }
@@ -1901,7 +1902,7 @@ private fun PluginItems() {
                 summary = pluginSummary(context, entry),
                 onClick = {
                     haptic.contextClick()
-                    acting = entry.id
+                    navigator.push(Screen.PluginDetail(entry.id))
                 },
             )
         }
@@ -2050,17 +2051,6 @@ private fun PluginItems() {
         )
     }
 
-    acting?.let { id ->
-        PluginDialog(
-            id = id,
-            revision = revision,
-            onDismiss = { acting = null },
-            onChanged = { said ->
-                message = said
-                revision += 1
-            },
-        )
-    }
 
     slotDialog?.let { slot ->
         WidgetSlotDialog(
@@ -5530,3 +5520,5 @@ private fun OcrItems() {
         }
     }
 }
+
+

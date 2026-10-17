@@ -48,6 +48,10 @@ sealed interface Screen : NavKey {
     /** 设置 → 技能 → 可用的那一页: 索引里全部技能, 刷新与全部安装都在那儿 */
     @Serializable
     data object SkillsAvailable : Screen
+
+    /** 设置 → 插件 → 某一只插件的那一页 (2.7.8 批次 6): 停用 / 它自己的设置 / 卸载与数据 */
+    @Serializable
+    data class PluginDetail(val id: String) : Screen
 }
 
 /** 谁想换页就问它, 页面自己不持有返回栈 */
@@ -156,6 +160,7 @@ fun LuwiApp() {
                 entry<Screen.Donate>(swipeDismiss = swipe) { DonateScreen() }
                 entry<Screen.SkillsInstalled>(swipeDismiss = swipe) { SkillsInstalledScreen() }
                 entry<Screen.SkillsAvailable>(swipeDismiss = swipe) { SkillsAvailableScreen() }
+                entry<Screen.PluginDetail>(swipeDismiss = swipe) { key -> PluginDetailScreen(key.id) }
             }
             // **返回键的最后一道**: 没被接住的那一下是平台的默认行为 —— 把这个 activity 关掉, 于是
             // host 与虚拟屏一起没了。所以这里兜底: 要么弹提示, 要么把任务放到后台, 两者都不结束任何
@@ -171,3 +176,4 @@ fun LuwiApp() {
         }
     }
 }
+

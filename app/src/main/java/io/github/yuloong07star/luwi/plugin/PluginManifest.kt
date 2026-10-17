@@ -48,6 +48,8 @@ internal data class PluginManifest(
     val requested: List<String>,
     val dangerous: List<String>,
     val tools: List<Tool>,
+    /** `ui.settings` 那一串声明 (协议第 10 节; 2.7.8 批次 6 才接通) */
+    val settings: List<PluginSettings.Setting>,
     val files: Map<String, String>,
 ) {
     data class Tool(val name: String, val summary: String, val params: JsonObject)
@@ -240,13 +242,17 @@ internal data class PluginManifest(
             }
 
             val ui = root["ui"]
+            var settings: List<PluginSettings.Setting> = emptyList()
             if (ui != null && ui != JsonNull) {
-                val keys = (ui as? JsonObject)?.keys.orEmpty()
-                if (keys.isNotEmpty()) {
+                val block = (ui as? JsonObject)
+                    ?: throw IllegalArgumentException("ui 那一段要么不写, 要么写成对象")
+                val unknown = block.keys - setOf("settings")
+                if (unknown.isNotEmpty()) {
                     throw IllegalArgumentException(
-                        "这一版还没有声明式设置与面板 (P4), ui 这一段要么不写要么写成空对象, 现在写着 ${keys.joinToString(", ")}",
+                        "ui 这一版只收 settings (声明式面板与动作按钮还没接通), 现在写着 ${unknown.joinToString(", ")}",
                     )
                 }
+                settings = PluginSettings.parse(block["settings"] as? JsonArray)
             }
 
             // 桌面那一段 (方案 3.1): 可以直接写在 plugin.json 里, 也可以单独放一份
@@ -293,6 +299,7 @@ internal data class PluginManifest(
                 requested = requested,
                 dangerous = dangerous,
                 tools = tools,
+                settings = settings,
                 files = files,
             )
             return if (directory == null) manifest else manifest.withPackageWidget(directory)

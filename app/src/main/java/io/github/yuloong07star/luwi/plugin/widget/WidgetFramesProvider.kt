@@ -33,9 +33,26 @@ class WidgetFramesProvider : ContentProvider() {
             segments.size == 3 && segments[0] == "theme" -> themeFrame(context, segments[1], segments[2])
             segments.size == 2 && segments[0] == "theme" -> themeFace(context, segments[1])
             segments.size == 2 && segments[0] == "image" -> image(context, segments[1])
+            // 插件自己包里的一张图 (2.7.8 批次 6): 对话槽的「显示的人物」可以是插件自带那张
+            segments.size == 2 && segments[0] == "file" -> pluginFile(context, segments[1], uri.getQueryParameter("p"))
             else -> throw FileNotFoundException("refusing $uri")
         }
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+
+    /** 插件包里的一个文件 (相对路径再过一次 [PluginPaths]: 插件目录是主人能手工改的地方) */
+    private fun pluginFile(context: android.content.Context, id: String, path: String?): File {
+        if (!ID_RULE.matches(id)) throw FileNotFoundException("refusing plugin file $id")
+        val relative = path.orEmpty()
+        if (relative.isBlank()) throw FileNotFoundException("refusing plugin file $id (no path)")
+        val directory = PluginStore.packageDir(context, id) ?: throw FileNotFoundException("$id 不在了")
+        val file = try {
+            PluginPaths.resolve(directory, relative, "ui.settings 的 face")
+        } catch (error: IllegalArgumentException) {
+            throw FileNotFoundException(error.message)
+        }
+        if (!file.isFile) throw FileNotFoundException("nothing at $file")
+        return file
     }
 
     /**
@@ -146,5 +163,11 @@ class WidgetFramesProvider : ContentProvider() {
         /** 当前浮标外观里 `state` 那一串帧的第 [frame] 张 */
         fun themeFrameUri(state: String, frame: Int): Uri =
             Uri.parse("content://$AUTHORITY/theme/$state/frame-%02d.png".format(frame))
+
+        /** 插件包里的一张图 (对话槽「显示的人物」选了插件自带那张时用) */
+        fun pluginFileUri(id: String, path: String): Uri =
+            Uri.parse("content://$AUTHORITY/file/$id").buildUpon()
+                .appendQueryParameter("p", path)
+                .build()
     }
 }
