@@ -328,6 +328,16 @@ check('兜底那一份桩摘要不写候选卡', [
   /async function exploreStub\(\)/u.test(section),
   /candidates: \[\],\n {4}ended: 'deadline',\n {4}stub: true,/u.test(section),
 ], [true, true])
+check(
+  '同一场再交一次 finish 时如实说"已经落过了" (真机 2026-10-17: 到点取消之后还会再交一次)',
+  [
+    /already: true,/u.test(section),
+    /const EXPLORE_ALREADY_SAVED_MS = 5 \* 60 \* 1000/u.test(section),
+    /saved\.stub !== true/u.test(section),
+    host.includes('}, sessionIdOf(exec))'),
+  ],
+  [true, true, true, true],
+)
 
 /* ── 十一、候选卡 ─────────────────────────────────────────────────────── */
 

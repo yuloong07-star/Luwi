@@ -3622,7 +3622,7 @@ const TOOLS = [
       schema: { type: 'string' },
       render: (_args, value) => [{ type: 'text', text: value }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const op = String(args?.op ?? '').trim()
       // 工具那一层没有 `ctx` 这个名字 (见 lw_mode 上面那段), 一律用模块级的 hostCtx
       if (op === 'status') return exploreStatusText(hostCtx)
@@ -3639,7 +3639,7 @@ const TOOLS = [
         const outcome = await finishExplore(hostCtx, {
           summary: args?.summary,
           candidates: args?.candidates,
-        })
+        }, sessionIdOf(exec))
         return exploreFinishText(outcome)
       }
       throw new Error('lw_explore takes op status, start or finish')
@@ -7633,6 +7633,14 @@ const EXPLORE_SENSITIVITY = ['low', 'high']
 const EXPLORE_TICK_MS = 5000
 
 /**
+ * 同一场收尾之后多久之内再交一次, 当成"这一份已经落过了"
+ *
+ * 到点那一下是"先取消再 followup", 而模型可能在被取消那一轮里已经把 finish 交了 ——
+ * 紧跟的 followup 再交一次时 run 已经清掉, 那时该说"已经落过了"而不是"没有正在跑的探索"
+ */
+const EXPLORE_ALREADY_SAVED_MS = 5 * 60 * 1000
+
+/**
  * 这一场探索现在花到哪了 (纯函数)
  *
  * `due` 三态是**这一批最要紧的一条判据**: `time` 是到点 (要取消那一轮), `steps` 是步数用尽
@@ -7773,6 +7781,15 @@ const exploreState = {
   lastRefusal: null,
   powerSaveUnknown: false,
   lastError: null,
+  /**
+   * 最近一次落盘的那份摘要 (`{ session, path, chars, candidates, stub, at }`)
+   *
+   * 2026-10-17 真机上量到的形态: 到点那一下先取消再 followup, 而模型**在被取消那一轮里**已经把 finish
+   * 交了 (摘要落盘), 紧跟的 followup 又交一次 —— 第二次那时 run 已经清掉, 回执是 "no exploration is
+   * running", 于是她回主人一句"报告没能交上去" (其实落过盘了)。所以这里记一份, 同一场五分钟内再交
+   * 就如实回"已经落过了" (桩摘要不算: 那种情况模型补一份真的正是我们要的)
+   */
+  lastSaved: null,
 }
 
 /**
@@ -8086,6 +8103,15 @@ async function exploreWriteSummary({ summary, candidates = [], ended = 'finish',
   if (dropped.length > 0) {
     console.warn(`luwi-channel: ${dropped.length} explore candidate card(s) were dropped - ${JSON.stringify(dropped)}`)
   }
+  // 记一份"刚落到哪" (见 [exploreState] 的 lastSaved): 同一场再交一次时如实回"已经落过了"
+  exploreState.lastSaved = {
+    session: exploreRun.session,
+    path: file,
+    chars: body.length,
+    candidates: cards,
+    stub,
+    at: Date.now(),
+  }
   exploreReset()
   await exploreStateWrite()
   return { path: file, chars: body.length, truncated, candidates: cards, dropped }
@@ -8222,8 +8248,25 @@ async function chooseExplorePreset(ctx) {
 }
 
 /** 收尾: 交摘要与候选卡 (唯一的出口) */
-async function finishExplore(_ctx, args = {}) {
+async function finishExplore(_ctx, args = {}, sessionId = '') {
   if (exploreRun.session === null) {
+    // **同一场刚交过就如实说"已经落过了"** (2026-10-17 真机上量到的形态, 见 [exploreState] 的
+    // lastSaved): 桩摘要不算, 那种情况模型补一份真的正是我们要的
+    const saved = exploreState.lastSaved
+    const fresh = saved !== null && saved.stub !== true
+      && Date.now() - Number(saved.at ?? 0) <= EXPLORE_ALREADY_SAVED_MS
+      && (String(sessionId ?? '') === '' || String(saved.session ?? '') === String(sessionId))
+    if (fresh) {
+      return {
+        saved: true,
+        already: true,
+        path: saved.path,
+        chars: saved.chars,
+        truncated: false,
+        candidates: saved.candidates,
+        dropped: [],
+      }
+    }
     return { saved: false, why: 'no exploration is running, so there is nothing to finish' }
   }
   const summary = typeof args?.summary === 'string' ? args.summary : ''
@@ -8350,6 +8393,13 @@ function exploreStartText(outcome) {
 
 /** `op=finish` 那一段回执 */
 function exploreFinishText(outcome) {
+  if (outcome.already === true) {
+    return [
+      `this exploration's summary was already saved: ${outcome.path}`,
+      `body: ${outcome.chars} characters, candidate cards: ${outcome.candidates} written`,
+      'nothing was written a second time - do not hand the same report in again',
+    ].join('\n')
+  }
   if (outcome.saved !== true) return `the summary was not saved: ${outcome.why}`
   return [
     `exploration finished: ${outcome.path}`,
