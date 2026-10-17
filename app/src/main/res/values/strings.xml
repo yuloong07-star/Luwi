@@ -404,7 +404,7 @@
     <string name="settings_explore_last_skipped">Skipped at %1$s: %2$s</string>
     <string name="settings_explore_last_failed">Could not queue it at %1$s: %2$s</string>
     <string name="settings_explore_said_title">Proactive conversations per day</string>
-    <string name="settings_explore_said_summary">%1$d said today; it skips once the limit is reached</string>
+    <string name="settings_explore_said_summary">%1$d of %2$d said today; it skips once the limit is reached</string>
     <string name="settings_explore_said_times">%1$d</string>
     <string name="settings_explore_note">For her to open a conversation on her own, turn on 允许它自己动手 in Automatic commands; a run skipped because the host was down is recorded here</string>
 

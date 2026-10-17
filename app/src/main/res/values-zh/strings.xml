@@ -404,7 +404,7 @@
     <string name="settings_explore_last_skipped">%1$s 没跑: %2$s</string>
     <string name="settings_explore_last_failed">%1$s 没投出去: %2$s</string>
     <string name="settings_explore_said_title">每天最多主动说几次</string>
-    <string name="settings_explore_said_summary">今天已经主动说了 %1$d 次 · 到上限就跳过</string>
+    <string name="settings_explore_said_summary">今天已经主动说了 %1$d / %2$d 次 · 到上限就跳过</string>
     <string name="settings_explore_said_times">%1$d 次</string>
     <string name="settings_explore_note">要让她自己开一场主动对话, 「自动指令」里的「允许它自己动手」得开着; 宿主没在跑的那一次会跳过并记在这里</string>
 
