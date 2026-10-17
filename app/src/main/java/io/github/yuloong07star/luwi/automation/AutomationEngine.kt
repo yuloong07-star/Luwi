@@ -258,11 +258,22 @@ internal object AutomationEngine {
         }
     }
 
-    /** 下一次该排的闹钟 (所有 `time` 规则里最近的那一个, 只排一个) */
+    /**
+     * 下一次该排的闹钟 (`time` 与 `once` 两类里最近的那一个, 只排一个)
+     *
+     * `once` 用一个"往前让 10 分钟"的起点: 刚错过、还在迟到窗口里的那一条也要能补排一次
+     * (宿主重启之后闹钟本来就丢过一次, 不让它补排就等于把这一条吞了)
+     */
     private fun nextAlarm(now: Long = System.currentTimeMillis()): Long? =
         rules.asSequence()
-            .filter { it.enabled && it.whenKind == "time" && settings?.monitor("time") != false }
-            .mapNotNull { it.nextFireAt(now) }
+            .filter {
+                it.enabled && (it.whenKind == "time" || it.whenKind == "once") &&
+                    settings?.monitor(it.whenKind) != false
+            }
+            .mapNotNull { rule ->
+                val from = if (rule.whenKind == "once") now - LATE_WINDOW_MINUTES * 60_000L - 1 else now
+                rule.nextFireAt(from)
+            }
             .minOrNull()
 
     private fun heartbeat(context: Context) {
@@ -281,6 +292,7 @@ internal object AutomationEngine {
             firedToday.clear()
             misses.clear()
         }
+        retireMissedOnce(context, now)
         pollWeather(context, now)
     }
 
@@ -331,6 +343,18 @@ internal object AutomationEngine {
         val application = context.applicationContext
         worker.execute {
             runCatching { evaluate(application, Trigger("time")) }.onFailure { warn("time", it) }
+        }
+    }
+
+    /**
+     * 一次性规则的时刻到了 (`once` 与 `time` 共用那个闹钟)
+     *
+     * 与 [onTime] 分开是因为判定按 kind 过滤: 同一拍里两类各判各的, 互不影响
+     */
+    fun onOnce(context: Context) {
+        val application = context.applicationContext
+        worker.execute {
+            runCatching { evaluate(application, Trigger("once")) }.onFailure { warn("once", it) }
         }
     }
 
@@ -426,6 +450,19 @@ internal object AutomationEngine {
             }
         }
 
+        "once" -> {
+            val at = rule.onceAt ?: return Outcome.Unavailable("这一条的一次性时刻读不出来")
+            val late = now - at
+            when {
+                late < 0 -> Outcome.Miss("还没到点")
+                late > LATE_WINDOW_MINUTES * 60_000L ->
+                    Outcome.Miss("晚得太多 (${late / 60_000} 分钟), 这一条不会再响")
+
+                late > 60_000L -> Outcome.Hit("到点了 (晚了 ${late / 60_000} 分钟)")
+                else -> Outcome.Hit("到点了")
+            }
+        }
+
         "place" -> {
             val name = rule.string("place").orEmpty()
             val latitude = trigger.latitude ?: return Outcome.Unavailable("这一轮没有位置")
@@ -472,18 +509,21 @@ internal object AutomationEngine {
         else -> Outcome.Miss("不认识的 condition")
     }
 
-    /** 命中了: 先过四道闸, 再决定投不投 */
+    /** 命中了: 先过五道闸, 再决定投不投 */
     private fun act(context: Context, rule: AutomationRule.Rule, now: Long, reason: String) {
         val on = settings ?: return
         val cooldownMs = rule.cooldownMinutes * 60_000L
         val last = lastFired[rule.name] ?: 0L
         val today = firedToday[rule.name] ?: 0
         val window = if (on.quietEnabled && rule.quietHours) quietWindow() else null
+        // 每日主动说 (D17): 只数 `task` 那一类, 手动「立刻跑一次」不算 (见 AutomationStore.saidToday)
+        val saidToday = if (rule.thenKind == "task") AutomationStore.saidToday(context, now) else 0
         val blocked = when {
             window != null && PowerWindow.inside(PowerWindow.minutesOfDay(now), window) -> "quiet"
             last + cooldownMs > now -> "cooldown"
             today >= rule.dailyLimit -> "limit"
             rule.thenKind == "task" && !on.allowActing -> "no_acting"
+            rule.thenKind == "task" && saidToday >= on.saidLimit -> "said"
             else -> null
         }
         if (blocked != null) {
@@ -491,9 +531,12 @@ internal object AutomationEngine {
                 "quiet" -> "现在是静默时段 (${PowerWindow.describe(window!!)})"
                 "cooldown" -> "上一条才 ${(now - last) / 60_000} 分钟, 冷却 ${rule.cooldownMinutes} 分钟"
                 "limit" -> "今天已经 $today 次, 上限 ${rule.dailyLimit} 次"
+                "said" -> "今天已经主动说了 $saidToday 次, 上限 ${on.saidLimit} 次 (设置 → 探索)"
                 else -> "这条规则要动手, 而「允许它自己动手」关着"
             }
             noteBlocked(context, rule, blocked, said, now)
+            // 一次性规则的时刻已经过去: 拦下也算它用掉了 (不会再有下一拍)
+            retireOnce(context, rule)
             return
         }
         val line = prompt(rule)
@@ -512,6 +555,52 @@ internal object AutomationEngine {
                 delivered = seq != null,
             ),
         )
+        // 一次性规则响过一次就关掉 (它的时刻已经过去, 再留着只会让主人以为它还会响)
+        retireOnce(context, rule)
+    }
+
+    /**
+     * 把一条 `once` 规则关掉 (投出去了 / 被拦下 / 错过窗口, 三种都走它)
+     *
+     * 内存里那一份也一起改: 同一拍里后面的判定不该再看见它; 顺手把闹钟重排到"下一条"
+     */
+    private fun retireOnce(context: Context, rule: AutomationRule.Rule) {
+        if (rule.whenKind != "once" || !rule.enabled) return
+        runCatching { AutomationStore.setEnabled(context, rule.name, false) }
+            .onFailure { warn("retireOnce", it) }
+        rules = rules.map { if (it.name == rule.name) it.copy(enabled = false) else it }
+        AutomationMonitors.armTimeAlarm(context, nextAlarm())
+    }
+
+    /**
+     * 心跳里那一条: 时刻早就过去、又没赶上窗口的 `once` 规则
+     *
+     * 宿主重启 / 设备关机几天之后会留下这种规则; 不关掉的话它会一直挂在设置页上, 而永远不会响
+     */
+    private fun retireMissedOnce(context: Context, now: Long) {
+        val window = LATE_WINDOW_MINUTES * 60_000L
+        val missed = rules.filter {
+            it.enabled && it.whenKind == "once" && ((it.onceAt ?: Long.MAX_VALUE) + window) < now
+        }
+        if (missed.isEmpty()) return
+        missed.forEach { rule ->
+            record(
+                context,
+                fired(
+                    rule = rule,
+                    now = now,
+                    hit = false,
+                    blocked = null,
+                    reason = "一次性时刻已经过去 (${rule.string("at")}), 不会再响",
+                ),
+            )
+            runCatching { AutomationStore.setEnabled(context, rule.name, false) }
+                .onFailure { warn("retireMissedOnce", it) }
+        }
+        rules = rules.map { rule ->
+            if (missed.any { it.name == rule.name }) rule.copy(enabled = false) else rule
+        }
+        AutomationMonitors.armTimeAlarm(context, nextAlarm(now))
     }
 
     /**
@@ -581,6 +670,7 @@ internal object AutomationEngine {
         action: String? = null,
         delivered: Boolean? = null,
         count: Int = 1,
+        manual: Boolean = false,
     ) = AutomationStore.Fired(
         at = now,
         rule = rule.name,
@@ -591,6 +681,7 @@ internal object AutomationEngine {
         action = action,
         delivered = delivered,
         count = count,
+        manual = manual,
     )
 
     private fun record(context: Context, fired: AutomationStore.Fired) {
@@ -720,7 +811,9 @@ internal object AutomationEngine {
 
             else -> "没什么拦着它"
         }
-        return "规则 $enabled 条 (共 ${rules.size} 条) · 今天响了 $fired 次 · 上一次 $said · $blocked"
+        val saidToday = AutomationStore.saidToday(context)
+        return "规则 $enabled 条 (共 ${rules.size} 条) · 今天响了 $fired 次" +
+            " · 今天主动说了 $saidToday/${on.saidLimit} 次 · 上一次 $said · $blocked"
     }
 
     /** 现在是不是静默时段 (给 `status` 与设置页那一行) */
@@ -740,6 +833,9 @@ internal object AutomationEngine {
 
     /** 今天这条动了几次 */
     fun firedTodayCount(rule: String): Int = firedToday[rule] ?: 0
+
+    /** 今天主动说了几次 (设置页「探索」段那一行读数) */
+    fun saidToday(context: Context): Int = AutomationStore.saidToday(context)
 
     /**
      * 设置页那个「立刻跑一次」: 不走条件, 也不走冷却与静默 —— 主人自己点的那一下就是"现在做"
@@ -765,6 +861,7 @@ internal object AutomationEngine {
                 reason = "手动跑了一次",
                 action = rule.thenKind,
                 delivered = seq != null,
+                manual = true,
             ),
         )
         return if (seq == null) "队列写不进去, 没投出去" else "投出去了, 它会在新开的一场会话里做"

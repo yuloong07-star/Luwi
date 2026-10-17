@@ -23,18 +23,18 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 六个监测器: 该起来的起来, 不该起来的**一个都不留**
+ * 七个监测器: 该起来的起来, 不该起来的**一个都不留**
  *
  * 低功耗那句口径落在这一层, 形状是三条:
  *
  * 1. **按需注册**: [AutomationEngine] 每拍算出"此刻有哪几类启用的规则", 只有那几类被挂上; 规则删掉
  *    或关掉, 下一拍就摘掉 —— 一条规则都没有时, 进程里没有 sensor / location / alarm 注册
  * 2. **事件优先**: 通知与前台应用是系统推过来的 (一个钩子, 零轮询); 光感是一条 `SENSOR_DELAY_NORMAL`
- *    的监听 (最省的那一档); 时间**只排一个**闹钟 —— 所有 `time` 规则里最近的那一个
+ *    的监听 (最省的那一档); 时间与一次性**共用一个**闹钟 —— 所有 `time` / `once` 规则里最近的那一个
  * 3. **轮询只剩两条**: 天气按设置页那个分钟档问一次 Open-Meteo, 位置用 `NETWORK_PROVIDER` (balanced:
  *    极少 GPS) 加"至少隔多久 / 至少移动多远"两个数; 省电生效时这两条整个不注册
  *
- * 六条各自的可用性 (权限 / 无障碍 / 有没有光感) 都在 [describe] 里说, 设置页与 `status` 读的是同一份
+ * 各条各自的可用性 (权限 / 无障碍 / 有没有光感) 都在 [describe] 里说, 设置页与 `status` 读的是同一份
  */
 internal object AutomationMonitors {
 
@@ -170,7 +170,7 @@ internal object AutomationMonitors {
     }
 
     /**
-     * 排下一次 `time` 条件的闹钟: **只排最近的那一个**
+     * 排下一次闹钟: **`time` 与 `once` 共用, 只排最近的那一个**
      *
      * 精确优先 (`setExactAndAllowWhileIdle`); 主人没给"闹钟和提醒"那条特殊访问时退
      * `setAndAllowWhileIdle` —— 它也会响, 只是可能晚几分钟, 而这件事要说得出来 ([describe])
@@ -223,7 +223,11 @@ internal object AutomationMonitors {
         if (foreground != null) add("foreground")
         if (light != null) add("light")
         if (location != null) add("place")
-        if (alarmAt != 0L) add("time")
+        // 时间与一次性共用一个闹钟: 谁在这一刻的 wanted 里就报谁
+        if (alarmAt != 0L) {
+            if ("time" in wanted) add("time")
+            if ("once" in wanted) add("once")
+        }
         // 天气没有"注册"这回事: 它由引擎的心跳按时问一次, 所以只要它还想要就算在跑
         if ("weather" in wanted) add("weather")
     }
@@ -259,6 +263,14 @@ internal object AutomationMonitors {
             }
         }
 
+        "once" -> when {
+            alarmAt == 0L -> "这一刻没有排着的一次性规则"
+            else -> {
+                val when_ = SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(alarmAt))
+                if (alarmExact) "下一个一次性时刻 $when_ (准点)" else "下一个一次性时刻 $when_ (不精确, 可能晚几分钟)"
+            }
+        }
+
         "place" -> locationRefusal
             ?: (if (location != null) {
                 val settings = AutomationStore.settings(context)
@@ -283,15 +295,18 @@ internal object AutomationMonitors {
 }
 
 /**
- * `time` 条件那个闹钟收到的广播
+ * `time` / `once` 条件那个闹钟收到的广播
  *
  * 清单里声明、`exported=false`: 它只可能被本应用自己的 `PendingIntent` 叫到, 而系统在应用进程不在
  * 的时候也会把进程拉起来送这一条 (与"动态注册的接收器只在进程活着时收得到"相比, 这一条不会丢)
+ *
+ * 一次性那条与时间那条共用这个闹钟, 所以两边各判各的 (按 kind 过滤)
  */
 class AutomationAlarmReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         AutomationEngine.ensure(context)
         AutomationEngine.onTime(context)
+        AutomationEngine.onOnce(context)
         // 响过之后要重排下一次: 这一次的账已经记完, 规则没变也要把闹钟往前挪
         AutomationEngine.invalidate()
     }

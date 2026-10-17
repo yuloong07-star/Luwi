@@ -419,13 +419,14 @@
     <string name="settings_automation_last">last %1$s</string>
     <string name="settings_automation_rule_cooldown">cooldown %1$d min</string>
     <string name="settings_automation_rule_no_cooldown">no cooldown</string>
-    <string name="settings_automation_monitors">The six watches: nothing is registered while no enabled rule needs it (that is the low-power promise)</string>
+    <string name="settings_automation_monitors">The seven watches: nothing is registered while no enabled rule needs it (that is the low-power promise)</string>
     <string name="settings_automation_monitor_notice">Notifications</string>
     <string name="settings_automation_monitor_foreground">Foreground app</string>
     <string name="settings_automation_monitor_light">Light</string>
     <string name="settings_automation_monitor_time">Time</string>
     <string name="settings_automation_monitor_place">Place</string>
     <string name="settings_automation_monitor_weather">Weather</string>
+    <string name="settings_automation_monitor_once">One-shot</string>
     <string name="settings_automation_every_minutes">Every %1$d minutes</string>
     <string name="settings_automation_every_meters">Only after %1$d metres</string>
     <string name="settings_automation_weather_every">How often the weather is asked</string>

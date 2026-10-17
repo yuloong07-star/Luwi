@@ -13,7 +13,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.time.Instant
 import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 /**
@@ -30,13 +32,17 @@ import java.time.temporal.ChronoUnit
 internal object AutomationRule {
 
     /**
-     * 六条条件
+     * 七条条件 (**2.7.8 批次 8 加了 `once`**)
      *
      * 这个名单是**两份实现的同一份真值** (`host-plugin/index.mjs` 里 `lw_automation` 的说明也念
-     * 这六个词), 漂开的样子是"说明里有一个 kind 其实没人认"; `tools/check-automations.mjs` 拿这一行
+     * 这七个词), 漂开的样子是"说明里有一个 kind 其实没人认"; `tools/check-automations.mjs` 拿这一行
      * 去比插件那一份
+     *
+     * `once` = 只响一次: 参数 `at` 是**带时区的绝对时刻** (ISO 8601, 例如 `2026-10-18T21:30:00+08:00`),
+     * 与 `time` 共用同一个闹钟, 响过 (或被拦 / 错过) 就把 `enabled` 关掉 —— 见 [Rule.nextFireAt] 与
+     * `AutomationEngine.act`
      */
-    val WHEN_KINDS = listOf("notice", "foreground", "light", "time", "place", "weather")
+    val WHEN_KINDS = listOf("notice", "foreground", "light", "time", "place", "weather", "once")
 
     /** 两种动作: 报一声, 或者真的去干活 */
     val THEN_KINDS = listOf("remind", "task")
@@ -55,6 +61,20 @@ internal object AutomationRule {
     const val MAX_DAILY_LIMIT = 200
     const val MIN_RADIUS_METERS = 50
     const val MAX_RADIUS_METERS = 5000
+
+    /**
+     * 「每天最多主动说几次」(D17, 2.7.8 批次 8)
+     *
+     * 数的是 `then.kind = "task"` 的投递 (打开一场会话说起来的那一类), 手动「立刻跑一次」不算;
+     * 那本账从 `history.jsonl` 现算 (见 `AutomationStore.saidToday`), 上限存在
+     * `automations/settings.json` 的 `saidLimit`
+     */
+    const val SAID_LIMIT_DEFAULT = 3
+    const val SAID_LIMIT_MIN = 1
+    const val SAID_LIMIT_MAX = 10
+
+    /** 把上限收进 1..10 (设置页那颗下拉与读文件都走它) */
+    fun coerceSaidLimit(value: Int): Int = value.coerceIn(SAID_LIMIT_MIN, SAID_LIMIT_MAX)
 
     /**
      * 设置页给主人挑的那几档冷却 (分钟)
@@ -116,6 +136,14 @@ internal object AutomationRule {
         /** 只给 `time` 用: `07:30` 是当天的第几分钟 */
         val atMinutes: Int? get() = string("at")?.let(::minutesOf)
 
+        /**
+         * 只给 `once` 用: 那个绝对时刻 (epoch 毫秒)
+         *
+         * 读不出来就是 null —— 正常情况 [validateWhen] 已经拦过一道, 这里是"文件在盘上被手改坏了"
+         * 那一档的兜底
+         */
+        val onceAt: Long? get() = string("at")?.let(::momentOf)
+
         /** 只给 `time` 用: 空表示每天 */
         val weekdays: List<Int>
             get() = (whenParams["weekdays"] as? JsonArray)
@@ -125,10 +153,14 @@ internal object AutomationRule {
         /**
          * 下一次该响的时刻 (epoch 毫秒), 从 [from] 之后算
          *
-         * 六个条件下只有它需要一个"未来时刻", 所以排闹钟那一件事也在这里: 只给 `time` 用, 别的
-         * kind 一律 null
+         * 只有两条需要一个"未来时刻", 所以排闹钟那一件事也在这里: `time` 按每天那个时刻算,
+         * `once` 直接就是它的绝对时刻 (过了就没有下一次, 回 null), 别的 kind 一律 null
          */
         fun nextFireAt(from: Long, zone: ZoneId = ZoneId.systemDefault()): Long? {
+            if (whenKind == "once") {
+                val at = onceAt ?: return null
+                return at.takeIf { it > from }
+            }
             if (whenKind != "time") return null
             val minutes = atMinutes ?: return null
             val today = Instant.ofEpochMilli(from).atZone(zone).toLocalDate()
@@ -145,7 +177,7 @@ internal object AutomationRule {
         }
 
         /** 条件那一半, 给人看的一句 (设置页、`list`、`status` 都用它) */
-        fun condition(): String = when (whenKind) {
+        fun condition(zone: ZoneId = ZoneId.systemDefault()): String = when (whenKind) {
             "notice" -> {
                 val who = when {
                     string("contains") != null && string("titleContains") != null ->
@@ -203,6 +235,11 @@ internal object AutomationRule {
                 "「$place」的$said"
             }
 
+            "once" -> {
+                val at = onceAt
+                "只响一次 · " + (at?.let { formatMoment(it, zone) } ?: string("at").orEmpty())
+            }
+
             else -> whenKind
         }
 
@@ -213,7 +250,7 @@ internal object AutomationRule {
         }
 
         /** 设置页与 `list` 上那一行 */
-        fun summary(): String = condition() + " → " + action()
+        fun summary(zone: ZoneId = ZoneId.systemDefault()): String = condition(zone) + " → " + action()
 
         /** 写回磁盘时的那一份 (定义键, `enabled` 也在里面) */
         fun toJson(): JsonObject = buildJsonObject {
@@ -374,6 +411,14 @@ internal object AutomationRule {
                     problems += "when needs exactly one of below, above or atLeast"
                 }
             }
+
+            "once" -> {
+                val at = when_["at"]?.jsonPrimitive?.contentOrNull
+                if (at.isNullOrBlank() || momentOf(at) == null) {
+                    problems += "when.at has to be an absolute moment with a timezone," +
+                        " like 2026-10-18T21:30:00+08:00"
+                }
+            }
         }
         return problems
     }
@@ -411,6 +456,19 @@ internal object AutomationRule {
         if (hour !in 0..23 || minute !in 0..59) return null
         return hour * 60 + minute
     }
+
+    /**
+     * 一个带时区的 ISO 8601 时刻 -> epoch 毫秒; 认不出来就是 null
+     *
+     * **必须带时区** (`Z` 或 `+08:00`): 不带时区的本机时刻不能当绝对时刻用, 所以 `LocalDateTime` 那条
+     * 路不收 (校验那一层会把它当"没写时区"拒掉)
+     */
+    fun momentOf(text: String): Long? =
+        runCatching { OffsetDateTime.parse(text.trim()).toInstant().toEpochMilli() }.getOrNull()
+
+    /** epoch 毫秒 -> `2026-10-18 21:30` (设置页那一行与 `summary` 都用它) */
+    fun formatMoment(at: Long, zone: ZoneId): String =
+        Instant.ofEpochMilli(at).atZone(zone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
 
     /** 一个整数键的边界检查, 有问题就是那一句, 没有就 null */
     private fun number(root: JsonObject, key: String, low: Int, high: Int): String? {

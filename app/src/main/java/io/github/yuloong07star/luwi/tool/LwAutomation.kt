@@ -103,6 +103,9 @@ internal object LwAutomation {
     fun monitorStates(context: Context): List<Pair<String, String>> =
         AutomationEngine.monitorStates(context)
 
+    /** 今天主动说了几次 (设置页「探索」段那一行读数) */
+    fun saidToday(context: Context): Int = AutomationEngine.saidToday(context)
+
     /* ── 六条 op ────────────────────────────────────────────────────────── */
 
     private fun list(context: Context): JsonObject {
@@ -198,6 +201,9 @@ internal object LwAutomation {
             settings.allowActing -> "allowed: a task rule may act on its own"
             else -> "off: a 'task' rule will be held back"
         }
+        rows += "proactive today" to "${AutomationEngine.saidToday(context)} / " +
+            "${settings?.saidLimit ?: AutomationRule.SAID_LIMIT_DEFAULT}" +
+            " (task rules only; a manual run does not count)"
         rows += "power save" to if (AutomationEngine.pausedNow()) {
             "on: the weather and place watches are not registered"
         } else {
@@ -208,7 +214,7 @@ internal object LwAutomation {
         val monitors = AutomationEngine.monitorStates(context)
         val text = buildString {
             append(table(rows))
-            append("\nthe six watches:\n")
+            append("\nthe seven watches:\n")
             append(monitors.joinToString("\n") { "  ${it.first}: ${it.second}" })
             if (rules.isNotEmpty()) {
                 append("\nthe rules:\n")

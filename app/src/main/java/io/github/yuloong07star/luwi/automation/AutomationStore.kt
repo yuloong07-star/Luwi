@@ -10,6 +10,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
 import java.text.SimpleDateFormat
+import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 
@@ -70,7 +71,7 @@ internal object AutomationStore {
     /** 一次最多读回多少条历史 */
     const val MAX_HISTORY = 200
 
-    /** 六个监测器 + 频率档 + 静默时段 + "允许它自己动手" */
+    /** 七个监测器 + 频率档 + 静默时段 + "允许它自己动手" + 每天最多主动说几次 */
     data class Settings(
         val monitors: Map<String, Boolean>,
         val weatherMinutes: Int,
@@ -79,6 +80,7 @@ internal object AutomationStore {
         val quietEnabled: Boolean,
         val quietWindow: String,
         val allowActing: Boolean,
+        val saidLimit: Int = AutomationRule.SAID_LIMIT_DEFAULT,
     ) {
         fun monitor(kind: String): Boolean = monitors[kind] ?: true
     }
@@ -94,6 +96,8 @@ internal object AutomationStore {
         val action: String?,
         val delivered: Boolean?,
         val count: Int,
+        /** 设置页那个「立刻跑一次」: 它不算"主动说", 也不吃每日上限 */
+        val manual: Boolean = false,
     )
 
     /** 一条规则在磁盘上的样子: 读得出来就是 [rule], 读不出来就是 [problem] */
@@ -221,6 +225,9 @@ internal object AutomationStore {
             quietEnabled = AutomationRule.boolOr(root["quiet"]?.let { (it as? JsonObject)?.get("enabled") }, true),
             quietWindow = AutomationRule.stringOr(root["quiet"]?.let { (it as? JsonObject)?.get("window") }, DEFAULT_QUIET),
             allowActing = AutomationRule.boolOr(root["allowActing"], false),
+            saidLimit = AutomationRule.coerceSaidLimit(
+                AutomationRule.intOr(root["saidLimit"], AutomationRule.SAID_LIMIT_DEFAULT),
+            ),
         )
     }
 
@@ -239,6 +246,7 @@ internal object AutomationStore {
                 put("window", settings.quietWindow)
             })
             put("allowActing", settings.allowActing)
+            put("saidLimit", settings.saidLimit)
         }
         file.writeText(AutomationJson.writer.encodeToString(JsonObject.serializer(), root) + "\n")
         return file
@@ -261,6 +269,7 @@ internal object AutomationStore {
             put("reason", fired.reason)
             fired.action?.let { put("action", it) }
             fired.delivered?.let { put("delivered", it) }
+            if (fired.manual) put("manual", true)
             if (fired.count > 1) put("count", fired.count)
         }
         file.appendText(AutomationJson.lines.encodeToString(JsonObject.serializer(), line) + "\n")
@@ -300,6 +309,36 @@ internal object AutomationStore {
         return last.keys.union(todayCount.keys).associateWith { name ->
             (last[name] ?: 0L) to (todayCount[name] ?: 0)
         }
+    }
+
+    /**
+     * 今天"主动说了几次"(D17 的每日上限, 2.7.8 批次 8)
+     *
+     * 数的是**真的投出去的 `task`**: `hit`、没有 `blocked`、`delivered` 不是 false、不是手动、
+     * `action == "task"`、且落在 [day] 这一天。`remind` 那一类不算 (它按自己规则的 `dailyLimit` 走),
+     * 手动「立刻跑一次」也不算 (那是主人自己点的那一下)
+     *
+     * 从历史现算而不是另记一本账: 历史本来就是"它响没响"的唯一真账, 而 `explore.json` 现在是
+     * 宿主的单写者文件, 不再给它加第二个写者
+     */
+    fun saidToday(
+        fired: List<Fired>,
+        day: String,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): Int = fired.count { one ->
+        one.hit && one.blocked == null && one.delivered != false && !one.manual &&
+            one.action == "task" && AutomationRule.dayKey(one.at, zone) == day
+    }
+
+    /** 读一遍历史再算今天主动说了几次 */
+    fun saidToday(
+        context: Context,
+        now: Long = System.currentTimeMillis(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): Int {
+        val file = File(directory(context), HISTORY_FILE)
+        if (!file.isFile) return 0
+        return saidToday(records(file.readText()), AutomationRule.dayKey(now, zone), zone)
     }
 
     /**
@@ -381,6 +420,7 @@ internal object AutomationStore {
             action = root["action"]?.toString()?.trim('"')?.takeIf { it.isNotEmpty() },
             delivered = root["delivered"]?.toString()?.toBooleanStrictOrNull(),
             count = root["count"]?.toString()?.toIntOrNull() ?: 1,
+            manual = root["manual"]?.toString()?.toBooleanStrictOrNull() ?: false,
         )
     }
 
@@ -392,7 +432,7 @@ internal object AutomationStore {
             fired.blocked != null -> "拦下了 (${fired.blocked})"
             else -> "做了"
         }
-        return "$when_  ${fired.rule}  $what  ${fired.reason}"
+        return "$when_  ${fired.rule}  $what  ${fired.reason}" + if (fired.manual) " (手动)" else ""
     }
 
     /** 规则文件多大 (设置页那一行与 `read` 都用) */

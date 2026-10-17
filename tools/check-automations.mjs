@@ -24,6 +24,7 @@ const read = (path) => readFile(new URL(path, root), 'utf8')
 
 const plugin = await read('host-plugin/index.mjs')
 const rule = await read('app/src/main/java/io/github/yuloong07star/luwi/automation/AutomationRule.kt')
+const engine = await read('app/src/main/java/io/github/yuloong07star/luwi/automation/AutomationEngine.kt')
 const store = await read('app/src/main/java/io/github/yuloong07star/luwi/automation/AutomationStore.kt')
 const tool = await read('app/src/main/java/io/github/yuloong07star/luwi/tool/LwAutomation.kt')
 const bridge = await read('app/src/main/java/io/github/yuloong07star/luwi/channel/PrivilegedBridge.kt')
@@ -115,10 +116,12 @@ const automation = pluginBody('lw_automation')
 const kinds = kotlinList(rule, 'WHEN_KINDS')
 const thenKinds = kotlinList(rule, 'THEN_KINDS')
 
-check('六个监测器是那六个', kinds, ['notice', 'foreground', 'light', 'time', 'place', 'weather'])
+check('七个监测器是那七个 (批次 8 加了 once)', kinds, [
+  'notice', 'foreground', 'light', 'time', 'place', 'weather', 'once',
+])
 
 check(
-  '六个 kind 在插件说明里逐个念到 (写成 `notice {` 这样)',
+  '七个 kind 在插件说明里逐个念到 (写成 `notice {` 这样)',
   kinds.map((kind) => automation.includes(`${kind} {`)),
   kinds.map(() => true),
 )
@@ -169,7 +172,7 @@ check(
   [
     /const automated = line\.source === 'automation'/.test(plugin),
     /const command = automated \? null : matchVoiceCommand/.test(plugin),
-    /automated\s*\n?\s*\? \{ sessionId: null/.test(plugin),
+    /const candidates = automated \? \[\] : await voiceTargetCandidates/.test(plugin),
   ],
   [true, true, true],
 )
@@ -243,6 +246,66 @@ check(
   ],
   [true, true],
 )
+
+/* ── 七、一次性 once (2.7.8 批次 8) ─────────────────────────────────────── */
+
+check('once 在 Kotlin 名单里, 而且只有这一处多出来', [kinds.length, kinds.at(-1)], [7, 'once'])
+
+check('插件说明里念到 once 与带时区的例子', [
+  automation.includes('once {at:"2026-10-18T21:30:00+08:00"}'),
+  automation.includes('fires once and then turns itself off'),
+], [true, true])
+
+check('once 的时刻必须带时区 (OffsetDateTime 解析)', [
+  /OffsetDateTime\.parse/.test(rule),
+  /absolute moment with a timezone/.test(rule),
+], [true, true])
+
+check('once 的排闹钟与自关都在引擎里', [
+  /if \(whenKind == "once"\)/.test(rule),
+  /private fun retireOnce\(/.test(engine),
+  /retireMissedOnce/.test(engine),
+  /AutomationEngine\.onOnce\(context\)/.test(await read('app/src/main/java/io/github/yuloong07star/luwi/automation/AutomationMonitors.kt')),
+], [true, true, true, true])
+
+check('设置页那一行念「只响一次 · 时刻」', /"只响一次 · "/.test(rule), true)
+
+check('监测器那一行也进设置页 (两份 strings 都有)', [
+  zh.includes('name="settings_automation_monitor_once"'),
+  en.includes('name="settings_automation_monitor_once"'),
+], [true, true])
+
+/* ── 八、每天最多主动说几次 (D17) ─────────────────────────────────────── */
+
+check('上限那三个数: 3 / 1 / 10', [
+  kotlinNumber(rule, 'SAID_LIMIT_DEFAULT'),
+  kotlinNumber(rule, 'SAID_LIMIT_MIN'),
+  kotlinNumber(rule, 'SAID_LIMIT_MAX'),
+], [3, 1, 10])
+
+check('上限落在 settings.json 的 saidLimit, 读时夹进 1..10', [
+  /put\("saidLimit", settings\.saidLimit\)/.test(store),
+  /root\["saidLimit"\]/.test(store),
+  /coerceSaidLimit/.test(store),
+], [true, true, true])
+
+check('引擎那条闸: task 且已达上限就 blocked = said', [
+  /saidToday >= on\.saidLimit -> "said"/.test(engine),
+  /"said" -> "今天已经主动说了/.test(engine),
+], [true, true])
+
+check('手动「立刻跑一次」不算进那一本账', [
+  /manual = true,/.test(engine),
+  /put\("manual", true\)/.test(store),
+  /manual = root\["manual"\]/.test(store),
+], [true, true, true])
+
+check('那本账从 history.jsonl 现算 (只数 task / 投出去的 / 非手动)', [
+  /one\.action == "task"/.test(store),
+  /!one\.manual/.test(store),
+  /one\.delivered != false/.test(store),
+  /fun saidToday\(/.test(store),
+], [true, true, true, true])
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
 if (failures > 0) process.exit(1)

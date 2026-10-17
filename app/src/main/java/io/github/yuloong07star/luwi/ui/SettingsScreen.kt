@@ -3041,6 +3041,7 @@ private val AutomationMonitorTitles = linkedMapOf(
     "time" to R.string.settings_automation_monitor_time,
     "place" to R.string.settings_automation_monitor_place,
     "weather" to R.string.settings_automation_monitor_weather,
+    "once" to R.string.settings_automation_monitor_once,
 )
 
 /**
