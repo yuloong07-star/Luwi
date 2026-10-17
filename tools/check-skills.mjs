@@ -127,18 +127,25 @@ const en = await read('app/src/main/res/values/strings.xml')
 const zh = await read('app/src/main/res/values-zh/strings.xml')
 
 // 主人 2026-10-17: 技能不再直接摆在技能段下面, 而是分两页 (已装 / 可用)
-check('技能那一段只剩两颗入口, 各自推到一页', [
+check('技能那一段是三颗入口 (两页 + 原来那份弹窗), 不再摆清单', [
   settings.includes('navigator.push(Screen.SkillsInstalled)'),
   settings.includes('navigator.push(Screen.SkillsAvailable)'),
+  settings.includes('SkillBrowseDialog('),
   settings.includes('R.string.settings_skills_installed'),
   settings.includes('R.string.settings_skills_available'),
   !settings.includes('AppSkills.scan('),
-], [true, true, true, true, true])
+], [true, true, true, true, true, true])
 
 check('两页都注册在导航上', [
   nav.includes('data object SkillsInstalled : Screen'),
   nav.includes('data object SkillsAvailable : Screen'),
   nav.includes('entry<Screen.SkillsInstalled>') || nav.includes('entry<Screen.SkillsInstalled>'),
+], [true, true, true])
+
+check('原来那份「浏览 app-skill 仓库」弹窗还在 (点行选中 / 底部按钮随选中变话)', [
+  screens.includes('fun SkillBrowseDialog('),
+  screens.includes('val shown = if (selected?.id == skill.id)'),
+  screens.includes('R.string.settings_skills_browse_close'),
 ], [true, true, true])
 
 check('已装那一页: 检测更新 / 一键升级 / 卸载 三件都在', [
@@ -152,7 +159,7 @@ check('可用那一页: 刷新技能 / 全部安装 / 挑一条装 (或升级) �
   screens.includes('fun SkillsAvailableScreen('),
   screens.includes('AppSkills.refresh(context)'),
   screens.includes('AppSkills.installAll(context'),
-  screens.includes('if (skill.id in installed) upgrade(skill, false) else install(skill)'),
+  screens.includes('asking = skill') || screens.includes('asking = skill,'),
 ], [true, true, true, true])
 
 check('升级时"本地改过"那一问有两个选择 (留我的 / 连它们一起盖)', [

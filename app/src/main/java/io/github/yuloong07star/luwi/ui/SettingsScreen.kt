@@ -1293,7 +1293,12 @@ private fun SkillItems() {
     val haptic = LocalHapticFeedback.current
     // 这一页不再直接把技能摆出来 (2.7.8 批次 5, 主人 2026-10-17): 技能分两页 —— 已装的进第一页
     // (检测更新 / 一键升级 / 卸载), 可用的进第二页 (刷新技能 / 全部安装 / 挑一条装)。这里只报个数
-    val installed: List<AppSkills.Installed> = remember { AppSkills.installed(context) }
+    var revision by remember { mutableIntStateOf(0) }
+    val installed: List<AppSkills.Installed> = remember(revision) { AppSkills.installed(context) }
+    // 「浏览 app-skill 仓库」这一颗是原来那份**弹窗** (主人 2026-10-17: 保留原来的), 与第二页是同一份
+    // 数据的两种走法: 弹窗里点行只选中, 底下那颗按钮随选中项变话
+    var browsing by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
     ArrowPreference(
         title = stringResource(R.string.settings_skills_installed),
         summary = stringResource(R.string.settings_skills_installed_summary, installed.size),
@@ -1310,10 +1315,27 @@ private fun SkillItems() {
             navigator.push(Screen.SkillsAvailable)
         },
     )
-    PlaceholderItems(stringResource(R.string.settings_skills_note))
+    ArrowPreference(
+        title = stringResource(R.string.settings_skills_browse),
+        summary = stringResource(R.string.settings_skills_browse_summary, AppSkills.REPO),
+        onClick = {
+            haptic.contextClick()
+            browsing = true
+        },
+    )
+    if (message.isNotBlank()) PlaceholderItems(message)
+    else PlaceholderItems(stringResource(R.string.settings_skills_note))
+    if (browsing) {
+        SkillBrowseDialog(
+            onDismiss = { browsing = false },
+            onMessage = { message = it },
+            onChanged = { revision += 1 },
+        )
+    }
 }
 @Composable
-private fun PlaceholderItems(text: String) {    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
+private fun PlaceholderItems(text: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
         Text(text = text, color = colorScheme.onSurfaceVariantActions)
     }
 }

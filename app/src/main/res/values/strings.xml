@@ -491,7 +491,7 @@
     <string name="settings_skills_delete_summary">Removes the %1$s folder under the dsh home (there is no trash: anything you edited by hand is gone for good; "add" can only copy the bundled copy back)</string>
     <string name="settings_skills_deleted">Deleted %1$d skill(s)</string>
     <string name="settings_skills_delete_failed">%1$d skill(s) could not be deleted</string>
-    <string name="settings_skills_note">Skills are plain prompt material: they land in the dsh home as SKILL.md files and change nothing about permissions. Editing one is expected - this button never overwrites an existing one. Tap a skill that is already installed to delete that folder (it asks once first)</string>
+    <string name="settings_skills_note">Skills are plain prompt material: they land in the dsh home as SKILL.md files and change nothing about permissions. Editing one is expected - installing never overwrites an existing one; the installed page has check-for-updates, upgrade-all and remove, the available page has refresh, install-all and one-by-one install</string>
     <string name="settings_skills_browse">Browse the skill repository</string>
     <string name="settings_skills_browse_summary">Lists every skill in %1$s with its version: pick one to install, or upgrade an installed one</string>
     <string name="settings_skills_browse_query">Search by name or what it does</string>
