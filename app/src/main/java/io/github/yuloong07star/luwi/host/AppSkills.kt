@@ -137,8 +137,8 @@ internal object AppSkills {
         }
     }
 
-    /** 取一份远端文件; null = 没取到 (状态码不是 200 / 网络问题), 由调用方决定怎么兜 */
-    private fun fetch(path: String): String? = runCatching {
+    /** 取一份远端文件的字节; null = 没取到 (状态码不是 200 / 网络问题), 由调用方决定怎么兜 */
+    private fun fetchBytes(path: String): ByteArray? = runCatching {
         val connection = (URL(CONTENTS + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = TIMEOUT_MS
@@ -150,11 +150,14 @@ internal object AppSkills {
         }
         try {
             if (connection.responseCode != 200) null
-            else connection.inputStream.bufferedReader().use { it.readText() }
+            else connection.inputStream.use { it.readBytes() }
         } finally {
             runCatching { connection.disconnect() }
         }
     }.getOrNull()
+
+    /** 取一份远端文件当文本 (技能正文都是文本; 真取到二进制也按 UTF-8 解, 写回去的还是原字节) */
+    private fun fetch(path: String): String? = fetchBytes(path)?.toString(Charsets.UTF_8)
 
     /** 随包那份清单一: 远端没缓存 (或取不到) 时用它兜底 */
     private fun bundled(context: Context): List<Entry> {
@@ -306,6 +309,346 @@ internal object AppSkills {
     internal fun String.isSafeSkillName(): Boolean =
         isNotEmpty() && this != "." && this != ".." && !contains('/') && !contains('\\')
 
+    /* ── 2.7.8 批次 5: 按索引装 / 升级 (带逐文件摘要) ──────────────────────────── */
+
+    /**
+     * 一个技能装/升级的结论
+     *
+     * 与 [Report] 分开是因为这一条要多说三件事: 装的是哪个版本、哪几个文件**被本地改过所以没盖**、
+     * 哪几个文件取不到或摘要不对 —— 这三条正是"升级会不会吃掉主人改动"的全部证据
+     */
+    data class InstallReport(
+        val skill: String,
+        val version: String,
+        val wrote: List<String> = emptyList(),
+        val unchanged: List<String> = emptyList(),
+        val skipped: List<String> = emptyList(),
+        val failed: List<String> = emptyList(),
+        val error: String = "",
+    )
+
+    /** 技能目录 (`$DSH_HOME/skills`) */
+    private fun skillsDirectory(context: Context): File = File(File(context.filesDir, DshHost.HOME_DIR), SKILLS)
+
+    /** 缓存下来那份索引 → 技能表 (不发网络请求: 设置页那一段是同步跑的) */
+    fun index(context: Context): List<RemoteSkill> {
+        val cached = File(File(context.filesDir, DshHost.HOME_DIR), CACHE)
+            .takeIf { it.isFile }
+            ?.let { runCatching { it.readText() }.getOrNull() }
+        val parsed = cached?.let { parseIndex(it) }.orEmpty()
+        if (parsed.isNotEmpty()) return parsed
+        return bundled(context).map { entry ->
+            RemoteSkill(entry.skill, entry.title, "", "", entry.apps, listOf(RemoteFile(SKILL_FILE, "")), "")
+        }
+    }
+
+    /**
+     * 按索引装一条 (新落点: 一个技能可以有多个文件)
+     *
+     * 三条规矩与"一键装"一致, 外加一条: **索引说得出摘要就核摘要** —— 取回来的字节与它写的那一份
+     * 对不上时这一个文件不落地 (而不是"装个半新半旧的技能")
+     */
+    fun installFrom(context: Context, skill: RemoteSkill, force: Boolean = false): InstallReport {
+        if (!skill.id.isSafeSkillName()) {
+            return InstallReport(skill.id, skill.version, error = "名字不是目录名: ${skill.id}")
+        }
+        val directory = File(skillsDirectory(context), skill.id)
+        if (File(directory, SKILL_FILE).isFile && !force) {
+            return InstallReport(skill.id, skill.version, error = "${skill.id} 已经在技能目录里 (要换先删)")
+        }
+        val wrote = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        val digests = mutableMapOf<String, String>()
+        skill.files.forEach { file ->
+            if (!file.path.isSafeRelativePath()) {
+                failed += file.path
+                return@forEach
+            }
+            val bytes = fetchBytes("skills/${skill.id}/${file.path}")
+            if (bytes == null) {
+                failed += file.path
+                return@forEach
+            }
+            val digest = sha256Of(bytes)
+            if (file.sha256.isNotEmpty() && digest != file.sha256) {
+                failed += file.path
+                return@forEach
+            }
+            val target = File(directory, file.path)
+            val written = runCatching {
+                target.parentFile?.mkdirs()
+                target.writeBytes(bytes)
+            }.isSuccess
+            if (written) {
+                wrote += file.path
+                digests[file.path] = digest
+            } else {
+                failed += file.path
+            }
+        }
+        if (wrote.isNotEmpty()) writeMeta(directory, LocalMeta(skill.id, skill.version, digests))
+        return InstallReport(skill.id, skill.version, wrote = wrote, failed = failed)
+    }
+
+    /**
+     * 按索引**升级**一条: 只盖"没被本地改过"的那几个文件
+     *
+     * 判据只有一个: 本地文件的摘要与 `.lw-meta.json` 上那一份相等 → 是上游装上来的原样, 可以盖;
+     * 不等或账上压根没有这一项 → **当成主人改过**, 不盖, 记进 skipped 让调用方去问
+     * (`force = true` 才盖: 那个"确认覆盖"的对话框就是这一条)
+     */
+    fun upgradeFrom(context: Context, skill: RemoteSkill, force: Boolean = false): InstallReport {
+        if (!skill.id.isSafeSkillName()) {
+            return InstallReport(skill.id, skill.version, error = "名字不是目录名: ${skill.id}")
+        }
+        val directory = File(skillsDirectory(context), skill.id)
+        if (!File(directory, SKILL_FILE).isFile) {
+            return InstallReport(skill.id, skill.version, error = "${skill.id} 还没装过, 没有可升级的")
+        }
+        val meta = readMeta(directory)
+        val wrote = mutableListOf<String>()
+        val unchanged = mutableListOf<String>()
+        val skipped = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        val digests = meta?.files.orEmpty().toMutableMap()
+        skill.files.forEach { file ->
+            if (!file.path.isSafeRelativePath()) {
+                failed += file.path
+                return@forEach
+            }
+            val target = File(directory, file.path)
+            val local = target.takeIf { it.isFile }?.let { sha256Of(it) }
+            val known = meta?.files?.get(file.path)
+            if (!force && local != null && known != null && local != known) {
+                // 主人改过 → 保留本地那一份, 账上继续记它的本地摘要 (下一次还是"改过")
+                skipped += file.path
+                return@forEach
+            }
+            val bytes = fetchBytes("skills/${skill.id}/${file.path}")
+            if (bytes == null) {
+                failed += file.path
+                return@forEach
+            }
+            val digest = sha256Of(bytes)
+            if (file.sha256.isNotEmpty() && digest != file.sha256) {
+                failed += file.path
+                return@forEach
+            }
+            if (local == digest) {
+                unchanged += file.path
+                digests[file.path] = digest
+                return@forEach
+            }
+            val written = runCatching {
+                target.parentFile?.mkdirs()
+                target.writeBytes(bytes)
+            }.isSuccess
+            if (written) {
+                wrote += file.path
+                digests[file.path] = digest
+            } else {
+                failed += file.path
+            }
+        }
+        if (wrote.isNotEmpty()) writeMeta(directory, LocalMeta(skill.id, skill.version, digests))
+        return InstallReport(skill.id, skill.version, wrote, unchanged, skipped, failed)
+    }
+
+    /** 装/升级那一句人话: 写了几个、跳过几个 (为什么跳)、坏在哪 */
+    fun sentenceOf(report: InstallReport, op: String): String {
+        if (report.error.isNotEmpty()) return report.error
+        val version = if (report.version.isEmpty()) "" else " ${report.version}"
+        val head = when (op) {
+            "upgrade" -> if (report.wrote.isEmpty() && report.skipped.isEmpty()) {
+                "${report.skill}$version 已经是最新的"
+            } else {
+                "${report.skill}$version 升级: 写了 ${report.wrote.size} 个文件" +
+                    (if (report.unchanged.isEmpty()) "" else ", ${report.unchanged.size} 个没变") +
+                    (if (report.skipped.isEmpty()) "" else ", ${report.skipped.size} 个被本地改过没盖 (" + report.skipped.joinToString(", ") + ")") +
+                    (if (report.failed.isEmpty()) "" else ", ${report.failed.size} 个没取到 (" + report.failed.joinToString(", ") + ")")
+            }
+            else -> if (report.wrote.isEmpty()) {
+                "${report.skill} 没装成" + (if (report.failed.isEmpty()) "" else ": " + report.failed.joinToString(", "))
+            } else {
+                "装了 ${report.skill}$version (${report.wrote.size} 个文件)" +
+                    (if (report.failed.isEmpty()) "" else ", 有 ${report.failed.size} 个没取到 (" + report.failed.joinToString(", ") + ")")
+            }
+        }
+        return head
+    }
+
+
+    /* ── 2.7.8 批次 5: 索引的第二种形状 + 版本与逐文件摘要 ───────────────────────── */
+
+    /**
+     * 索引里**一个文件**: 仓库里的相对路径, 与它的 sha256 (空串 = 索引没说, 那就只按内容写)
+     *
+     * 路径必须是**相对**的、不含 `..` —— 索引是外部数据, 它指到技能目录外面去这件事不能靠"应该不会"
+     */
+    data class RemoteFile(val path: String, val sha256: String)
+
+    /**
+     * 远端索引里的一条技能 (新形状 `skills[]`)
+     *
+     * 老形状 (`apps[]`, 一个包一条) 仍然收着: [remoteEntries] 那一条路一个字没改, 于是**旧的 Luwi
+     * 与新的索引能并存**, 而新版只是多了 `version` / `description` / `files[]` 这几栏
+     */
+    data class RemoteSkill(
+        val id: String,
+        val title: String,
+        val description: String,
+        val version: String,
+        val apps: List<String>,
+        val files: List<RemoteFile>,
+        val risk: String,
+    )
+
+    /**
+     * 本地那一本账 (`$DSH_HOME/skills/<id>/.lw-meta.json`)
+     *
+     * 记的是"装上那一刻每个文件是什么摘要"。升级时它给出**唯一**能分辨"上游改了"与"主人改过"的
+     * 判据: 本地文件的摘要 == 账上的 → 没被本地改过, 可以覆盖; 不等 → 主人动过, 不许悄悄盖掉
+     */
+    data class LocalMeta(val skill: String, val version: String, val files: Map<String, String>)
+
+    private const val META = ".lw-meta.json"
+
+    /**
+     * 索引文本 → 技能表: **先认新形状 `skills[]`, 没有再退回老的 `apps[]`**
+     *
+     * 两条路都给同一份 [RemoteSkill], 于是上面那些 op 不必知道索引是哪一版。老形状没有版本与文件
+     * 清单, 于是 version 是空串、files 只有 `SKILL.md` 一个 (摘要留空 = 不校验)
+     */
+    internal fun parseIndex(text: String): List<RemoteSkill> {
+        val root = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return emptyList()
+        val skills = root["skills"] as? JsonArray
+        if (skills != null) {
+            return skills.mapNotNull { element ->
+                val item = element as? JsonObject ?: return@mapNotNull null
+                val id = item["id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                if (!id.isSafeSkillName()) return@mapNotNull null
+                val files = (item["files"] as? JsonArray).orEmpty().mapNotNull { one ->
+                    val file = one as? JsonObject ?: return@mapNotNull null
+                    val path = file["path"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                    if (!path.isSafeRelativePath()) return@mapNotNull null
+                    RemoteFile(path, file["sha256"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase().orEmpty())
+                }.ifEmpty { listOf(RemoteFile(SKILL_FILE, "")) }
+                RemoteSkill(
+                    id = id,
+                    title = item["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty { id },
+                    description = item["description"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                    version = item["version"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                    apps = jsonStrings(item["apps"]),
+                    files = files,
+                    risk = item["risk"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                )
+            }
+        }
+        return remoteEntries(text).map { entry ->
+            RemoteSkill(
+                id = entry.skill,
+                title = entry.title,
+                description = "",
+                version = "",
+                apps = entry.apps,
+                files = listOf(RemoteFile(SKILL_FILE, "")),
+                risk = "",
+            )
+        }
+    }
+
+    private fun jsonStrings(element: kotlinx.serialization.json.JsonElement?): List<String> =
+        (element as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull?.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+
+    /** 文件路径能不能落进技能目录 (纯函数): 相对、不含 `..`、不是绝对路径、不是那个账本自己 */
+    internal fun String.isSafeRelativePath(): Boolean =
+        isNotEmpty() &&
+            !startsWith("/") &&
+            !startsWith("\\") &&
+            !contains('\\') &&
+            !contains("..") &&
+            split('/').none { it == "." || it.isEmpty() } &&
+            this != META
+
+    /** 搜一条技能: 空串给全部, 否则 id / 显示名 / 描述里有一个包含就算中 (纯函数, 不分大小写) */
+    internal fun search(skills: List<RemoteSkill>, query: String): List<RemoteSkill> {
+        val needle = query.trim().lowercase()
+        if (needle.isEmpty()) return skills
+        return skills.filter { skill ->
+            skill.id.lowercase().contains(needle) ||
+                skill.title.lowercase().contains(needle) ||
+                skill.description.lowercase().contains(needle)
+        }
+    }
+
+    /** 字节的 sha256, 小写十六进制 —— 与索引里那一栏同一个写法 */
+    internal fun sha256Of(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+
+    /** 一个文件的 sha256 (读不出来给 null: 调用方要能分清"没有这个文件"与"摘要是空") */
+    internal fun sha256Of(file: File): String? =
+        runCatching { sha256Of(file.readBytes()) }.getOrNull()
+
+    /**
+     * 技能正文的 frontmatter (`---` 夹着的那一段) → 键值表 (纯函数)
+     *
+     * 只认 `key: value` 这一层 (与 dsh 自己读技能时同一个颗粒度): 装之前核一次"它有名字与描述吗",
+     * 坏的那一份当场拒, 而不是等下一轮模型加载技能时才发现
+     */
+    internal fun frontmatterOf(body: String): Map<String, String> {
+        val lines = body.replace("\r\n", "\n").lines()
+        if (lines.firstOrNull()?.trim() != "---") return emptyMap()
+        val end = lines.drop(1).indexOfFirst { it.trim() == "---" }
+        if (end < 0) return emptyMap()
+        val found = mutableMapOf<String, String>()
+        lines.subList(1, end + 1).forEach { line ->
+            val at = line.indexOf(':')
+            if (at <= 0) return@forEach
+            val key = line.substring(0, at).trim()
+            val value = line.substring(at + 1).trim().trim('"', '\'')
+            if (key.isNotEmpty() && value.isNotEmpty()) found[key] = value
+        }
+        return found
+    }
+
+    /** 本地那一本账 (没有 / 坏了都给 null: 升级时按"不知道有没有改过"处理) */
+    internal fun readMeta(directory: File): LocalMeta? = runCatching {
+        val text = File(directory, META).readText()
+        val root = Json.parseToJsonElement(text).jsonObject
+        val files = (root["files"] as? JsonObject).orEmpty().mapNotNull { (path, value) ->
+            val digest = value.jsonPrimitive.contentOrNull?.trim().orEmpty()
+            if (digest.isEmpty()) null else path to digest
+        }.toMap()
+        LocalMeta(
+            skill = root["skill"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+            version = root["version"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+            files = files,
+        )
+    }.getOrNull()
+
+    /** 把那一本账写下来 (原子写: 先写 `.tmp` 再改名, 半份账比没有账更难查) */
+    internal fun writeMeta(directory: File, meta: LocalMeta): Boolean = runCatching {
+        directory.mkdirs()
+        val json = buildJsonObject {
+            put("skill", meta.skill)
+            put("version", meta.version)
+            put("at", System.currentTimeMillis())
+            put("files", buildJsonObject { meta.files.forEach { (path, digest) -> put(path, digest) } })
+        }
+        val file = File(directory, META)
+        val temp = File(directory, "$META.tmp")
+        temp.writeText(json.toString())
+        if (!temp.renameTo(file)) {
+            temp.delete()
+            return@runCatching false
+        }
+        true
+    }.getOrDefault(false)
+
     /**
      * 桥上那两个 op
      *
@@ -335,9 +678,72 @@ internal object AppSkills {
                 }
                 remove(context, only)
             }
+            // **索引那两条只读**: 一个网络请求都不发, 读的是缓存 (随包那份兜底)
+            "index", "search" -> {
+                val query = request["query"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val skills = search(index(context), query)
+                val have = present(context)
+                return buildJsonObject {
+                    put("op", op)
+                    put("ok", true)
+                    put("count", skills.size)
+                    putJsonArray("skills") {
+                        skills.forEach { skill ->
+                            add(
+                                buildJsonObject {
+                                    put("id", skill.id)
+                                    put("name", skill.title)
+                                    put("description", skill.description)
+                                    put("version", skill.version)
+                                    put("risk", skill.risk)
+                                    put("installed", skill.id in have)
+                                    put("localVersion", readMeta(File(skillsDirectory(context), skill.id))?.version.orEmpty())
+                                    putJsonArray("apps") { skill.apps.forEach { add(it) } }
+                                    putJsonArray("files") { skill.files.forEach { add(it.path) } }
+                                },
+                            )
+                        }
+                    }
+                    put("text", if (skills.isEmpty()) "索引里没有匹配的技能" else "索引 ${skills.size} 条, 其中 ${skills.count { it.id !in have }} 条还没装")
+                }
+            }
+            // **升级**: 只盖没被本地改过的那几个文件, 见 [upgradeFrom]
+            "upgrade" -> {
+                val known = index(context).associateBy { it.id }
+                val unknown = only.filterNot { it in known }
+                if (only.isEmpty() || unknown.isNotEmpty()) {
+                    throw IllegalArgumentException("索引里没有这几个技能: ${unknown.joinToString(", ")}")
+                }
+                val force = request["force"]?.jsonPrimitive?.contentOrNull == "true"
+                val reports = only.map { upgradeFrom(context, known.getValue(it), force) }
+                return buildJsonObject {
+                    put("op", op)
+                    put("ok", reports.all { it.error.isEmpty() })
+                    putJsonArray("skills") {
+                        reports.forEach { report ->
+                            add(
+                                buildJsonObject {
+                                    put("id", report.skill)
+                                    put("version", report.version)
+                                    putJsonArray("wrote") { report.wrote.forEach { add(it) } }
+                                    putJsonArray("unchanged") { report.unchanged.forEach { add(it) } }
+                                    putJsonArray("skipped") { report.skipped.forEach { add(it) } }
+                                    putJsonArray("failed") { report.failed.forEach { add(it) } }
+                                    put("error", report.error)
+                                },
+                            )
+                        }
+                    }
+                    put("text", reports.joinToString("\n") { sentenceOf(it, "upgrade") })
+                }
+            }
             else -> return buildJsonObject {
                 put("ok", false)
-                put("error", "skill 这个桥方法只有三个 op: scan (看会装什么) / install (装) / remove (删)")
+                put(
+                    "error",
+                    "skill 这个桥方法的 op 是这些: scan (看会装什么) / install (装) / remove (删)" +
+                        " / index (索引) / search (搜索引) / upgrade (升级)",
+                )
             }
         }
         return buildJsonObject {
