@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.view.View
 import android.widget.RemoteViews
+import android.util.Log
 import android.widget.RemoteViewsService
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.overlay.DesktopChatFile
@@ -28,11 +29,15 @@ import kotlinx.serialization.json.longOrNull
  */
 class WidgetChatListService : RemoteViewsService() {
 
-    override fun onGetViewFactory(intent: Intent): RemoteViewsFactory =
-        Factory(applicationContext, intent.getStringExtra(EXTRA_ID).orEmpty())
+    override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
+        // 排障那一行 (2.7.8 批次 6 之九): 桌面到底有没有来要工厂、id 是不是空 —— 一次装机就能分辨
+        Log.i(TAG, "the launcher asked for the factory: id=${intent.getStringExtra(EXTRA_ID)}")
+        return Factory(applicationContext, intent.getStringExtra(EXTRA_ID).orEmpty())
+    }
 
     companion object {
         const val EXTRA_ID = "id"
+        private const val TAG = "LwWidgetChatList"
     }
 
     /** 给桌面那一侧递"第几条"的那个工厂 */
@@ -47,6 +52,7 @@ class WidgetChatListService : RemoteViewsService() {
 
         override fun onDataSetChanged() {
             lines = DesktopChatFile.snapshot(context).lines.reversed()
+            Log.i(TAG, "data set changed: ${lines.size} line(s), id=$pluginId, sp=$DEFAULT_BUBBLE_SP")
             // 字号跟着插件设置走: 组装那一刻的那一份与这里读的是同一个文件
             bubbleSp = PluginStore.manifest(context, pluginId)
                 ?.let { manifest ->
@@ -61,7 +67,10 @@ class WidgetChatListService : RemoteViewsService() {
             lines = emptyList()
         }
 
-        override fun getCount(): Int = lines.size
+        override fun getCount(): Int {
+            Log.i(TAG, "getCount -> ${lines.size}")
+            return lines.size
+        }
 
         override fun getViewAt(position: Int): RemoteViews? {
             val line = lines.getOrNull(position) ?: return null
@@ -91,5 +100,6 @@ class WidgetChatListService : RemoteViewsService() {
         }
     }
 }
+
 
 

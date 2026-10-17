@@ -200,7 +200,7 @@ internal object WidgetChat {
      * @param cellWidthDp / @param cellHeightDp 这一格现在多大 (来自 `AppWidgetManager` 的 options);
      *   读不到就传 0, 立绘落回缺省
      */
-    fun views(context: Context, cellWidthDp: Int, cellHeightDp: Int): RemoteViews {
+    fun views(context: Context, cellWidthDp: Int, cellHeightDp: Int, widgetId: Int = 0): RemoteViews {
         val holder = WidgetSlots.holder(context, WidgetSlot.CHAT)
         val manifest = holder?.let { PluginStore.manifest(context, it) }
         val spec = manifest?.widget?.takeIf { it.slot == WidgetSlot.CHAT }
@@ -229,6 +229,17 @@ internal object WidgetChat {
         view.setViewLayoutHeight(R.id.lw_chat_bubbles, areaHeight.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
         view.setViewLayoutWidth(R.id.lw_chat_flipper, faceDp.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
         view.setViewLayoutHeight(R.id.lw_chat_flipper, faceDp.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
+
+        // ② 气泡区是 ListView: **必须把 adapter 挂上** —— 少了这一句列表永远是空的 (2.7.8 批次 6 之九),
+        // 而且要用**带 widgetId 的那个重载**: 只有 viewId+intent 的老重载桌面拿不到 adapter,
+        // 现象是 factory 一次都没被要过
+        view.setRemoteAdapter(
+            widgetId,
+            R.id.lw_chat_bubbles,
+            Intent(context, WidgetChatListService::class.java)
+                .putExtra(WidgetChatListService.EXTRA_ID, holder),
+        )
+        view.setEmptyView(R.id.lw_chat_bubbles, R.id.lw_chat_empty)
 
         // ② 气泡由 ListView 画 (见 WidgetChatListService), 空态那一格由 setEmptyView 顶上来
         val empty = snapshot.note.ifBlank { context.getString(R.string.widget_chat_empty) }

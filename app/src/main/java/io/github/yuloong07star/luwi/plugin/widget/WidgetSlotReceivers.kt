@@ -21,7 +21,7 @@ open class WidgetSlotBase internal constructor(private val slot: String) : AppWi
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         ids.forEach { id ->
             val (width, height) = WidgetHost.cellSize(context, id)
-            manager.updateAppWidget(id, WidgetHost.views(context, slot, width, height))
+            manager.updateAppWidget(id, WidgetHost.views(context, slot, width, height, id))
             if (slot == WidgetSlot.CHAT) {
                 runCatching { manager.notifyAppWidgetViewDataChanged(id, R.id.lw_chat_bubbles) }
             }

@@ -69,10 +69,10 @@ internal object WidgetHost {
      * 只有对话槽用它 (立绘要随格子等比放大, 见 `WidgetChat.Face`); 另外两个槽的版式与尺寸无关,
      * 多传两个数不用管
      */
-    fun views(context: Context, slot: String, cellWidthDp: Int, cellHeightDp: Int): RemoteViews {
+    fun views(context: Context, slot: String, cellWidthDp: Int, cellHeightDp: Int, widgetId: Int = 0): RemoteViews {
         // 对话槽**不问"挂着谁"**: 内容一半是当前浮标外观、一半是那份 desktop-chat.json, 两个都不在
         // 插件目录里 (见 WidgetChat) —— 于是它排在任何"插件还在不在"的判据之前
-        if (slot == WidgetSlot.CHAT) return WidgetChat.views(context, cellWidthDp, cellHeightDp)
+        if (slot == WidgetSlot.CHAT) return WidgetChat.views(context, cellWidthDp, cellHeightDp, widgetId)
         val holder = WidgetSlots.holder(context, slot)
         val manifest = holder?.let { PluginStore.manifest(context, it) }
         val directory = holder?.let { PluginStore.packageDir(context, it) }
@@ -112,7 +112,7 @@ internal object WidgetHost {
         val ids = manager.getAppWidgetIds(ComponentName(context, receiverOf(slot)))
         ids.forEach { id ->
             val (width, height) = cellSize(context, id)
-            manager.updateAppWidget(id, views(context, slot, width, height))
+            manager.updateAppWidget(id, views(context, slot, width, height, id))
             // **集合型组件的数据集要单独叫一次** (2.7.8 批次 6): 只 updateAppWidget 不会让桌面重读
             // ListView 里的条目 —— 现象正是"发了一句, 组件上什么都不出现"。这一条漏了, 列表永远是空的
             if (slot == WidgetSlot.CHAT) {
