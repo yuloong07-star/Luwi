@@ -19,12 +19,13 @@
     android:orientation="vertical"
     android:padding="8dp">
 
-            <ListView
+        <ListView
             android:id="@+id/lw_chat_bubbles"
             android:layout_width="match_parent"
             android:layout_height="72dp"
             android:divider="@null"
-            android:scrollbars="none" />
+            android:scrollbars="none"
+            android:stackFromBottom="true" />
 
     <TextView
         android:id="@+id/lw_chat_empty"
@@ -86,5 +87,6 @@
     </FrameLayout>
 
 </LinearLayout>
+
 
 

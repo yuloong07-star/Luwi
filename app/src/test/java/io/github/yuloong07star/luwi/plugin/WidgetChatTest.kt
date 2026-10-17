@@ -73,12 +73,13 @@ class WidgetChatTest {
         // 高度取 max(下限, 内容)
         val line = WidgetChat.Face.oneLineDp(11)
         // 一条都没有: 只剩那条下限
-        assertEquals(64 + line, WidgetChat.Face.areaDp(64, 11, 0))
+        assertEquals(64 + line, WidgetChat.Face.bubbleAreaDp(64, 11, 0))
         // 三行还不到下限 (25*3=75 < 89), 所以仍是下限 —— 行数要多到超过它才往上长
-        assertEquals(64 + line, WidgetChat.Face.areaDp(64, 11, 3))
+        assertEquals(3 * line, WidgetChat.Face.areaDp(64, 11, 3))
         assertEquals(6 * line, WidgetChat.Face.areaDp(64, 11, 6))
     }
 }
+
 
 
 

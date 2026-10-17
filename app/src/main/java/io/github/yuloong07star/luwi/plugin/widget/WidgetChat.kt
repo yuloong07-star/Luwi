@@ -160,10 +160,11 @@ internal object WidgetChat {
          * 所以它是 `max(下限, 行数 × 行高)`: 一条都没有时也留着"人物 + 一行"那么高的底, 而气泡多时
          * 一路长到这一格放不下为止 (再多的由那份文件自己的上限管)
          */
-        fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int {
-            val line = oneLineDp(bubbleSp)
-            return maxOf(minAreaDp(faceDp, bubbleSp), rows * line)
-        }
+fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int = rows * oneLineDp(bubbleSp)
+
+        /** 旧口径 (人物 + 一行) 留着给"一条都没有"的空态用, 免得空态塌成一条细线 */
+        fun bubbleAreaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int =
+            maxOf(faceDp + oneLineDp(bubbleSp), rows * oneLineDp(bubbleSp))
 
         /** 那条下限: 人物高度 + 一行 (人物变大它就跟着变高, 主人 2026-10-17 的第二条) */
         fun minAreaDp(faceDp: Int, bubbleSp: Long): Int = faceDp + oneLineDp(bubbleSp)
@@ -222,7 +223,8 @@ internal object WidgetChat {
         val total = snapshot.lines.size
         // 气泡区: 高度 = 下限 (人物 + 一行) 与"这一格放得下几行"里大的那个
         val rows = Face.rowsFor(cellHeightDp, faceDp, bubbleSp)
-        // 高度按**实际有几条**算 (不是"能放几行"): 两条就两行高, 下面不留半块空白
+        // 高度按**实际有几条**算, 下限只有"一行" —— 之前那条下限是「人物 + 一行」, 而两条气泡
+        // 只占两行, 剩下的空就在列表下半截, 看着像"只占一半" (主人 2026-10-17)
         val areaHeight = Face.areaDp(faceDp, bubbleSp, minOf(rows, total).coerceAtLeast(1))
 
         // ① 气泡区的尺寸: 高度按上面那个数, 而人物那一块是正方形:
@@ -428,6 +430,8 @@ internal object WidgetChat {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 }
+
+
 
 
 
