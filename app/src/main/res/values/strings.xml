@@ -492,6 +492,25 @@
     <string name="settings_skills_deleted">Deleted %1$d skill(s)</string>
     <string name="settings_skills_delete_failed">%1$d skill(s) could not be deleted</string>
     <string name="settings_skills_note">Skills are plain prompt material: they land in the dsh home as SKILL.md files and change nothing about permissions. Editing one is expected - this button never overwrites an existing one. Tap a skill that is already installed to delete that folder (it asks once first)</string>
+    <string name="settings_skills_browse">Browse the skill repository</string>
+    <string name="settings_skills_browse_summary">Lists every skill in %1$s with its version: pick one to install, or upgrade an installed one</string>
+    <string name="settings_skills_browse_query">Search by name or what it does</string>
+    <string name="settings_skills_browse_loading">Reading the cached index…</string>
+    <string name="settings_skills_browse_empty">No index yet: refresh once and try again</string>
+    <string name="settings_skills_browse_none">Nothing matches "%1$s"</string>
+    <string name="settings_skills_browse_installed">installed %1$s · repository %2$s</string>
+    <string name="settings_skills_browse_fresh">not installed · repository %1$s</string>
+    <string name="settings_skills_browse_refresh">Refresh</string>
+    <string name="settings_skills_browse_refreshing">Refreshing…</string>
+    <string name="settings_skills_browse_close">Done</string>
+    <string name="settings_skills_browse_install">Install</string>
+    <string name="settings_skills_browse_upgrade">Upgrade</string>
+    <string name="settings_skills_browse_working">Working…</string>
+    <string name="settings_skills_browse_risk">risk %1$s</string>
+    <string name="settings_skills_browse_edited_title">Some of these files were edited here</string>
+    <string name="settings_skills_browse_edited_summary">%1$s changed by hand after the last install. Upgrading would overwrite them; the rest of the skill is written either way</string>
+    <string name="settings_skills_browse_edited_overwrite">Overwrite them</string>
+    <string name="settings_skills_browse_edited_keep">Keep mine</string>
 
     <string name="settings_section_linux">Linux sandbox</string>
     <string name="settings_section_linux_summary">An Alpine userland that runs commands, installs packages and compiles</string>

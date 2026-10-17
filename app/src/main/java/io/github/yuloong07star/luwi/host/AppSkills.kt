@@ -50,6 +50,14 @@ internal object AppSkills {
     /** 取回来那份 `index.json` 原样存的名字 (落在 `$DSH_HOME/` 下, 与技能目录挨着) */
     private const val CACHE = "app-skills-index.json"
 
+    /**
+     * 索引的固定地址 (仓库把它写在 index_url 里, 而第一次取的时候本机还没有那份索引)
+     *
+     * **主址用 `fastly` 而不是 `cdn`**: `cdn.jsdelivr.net` 在本机网络上 SSL 直接失败 (插件索引那边
+     * 2026-10-13 就量到过, 所以它那张表也是多镜像的); `fastly` / `gcore` 两条实测都是 200
+     */
+    private const val DEFAULT_INDEX = "https://fastly.jsdelivr.net/gh/yuloong07-star/app-skills@index-1/index.json"
+
     /** 一次取文件的超时: 设置页那颗按钮不能把人晾在那儿 */
     private const val TIMEOUT_MS = 8_000
 
@@ -121,7 +129,25 @@ internal object AppSkills {
      *   是最难查的那种
      */
     fun refresh(context: Context): Pair<Int, String> {
-        val text = fetch("index.json")
+        // 索引自己就写着它该从哪儿取 (`index_url` / `index_mirrors`, 都是 jsDelivr), 而那份缓存在本机;
+        // 缓存没有时先试那个固定地址, 最后才是 GitHub 的 contents API —— 这台机器的网络里 jsDelivr 通,
+        // 而 api.github.com 不一定
+        val cached = File(File(context.filesDir, DshHost.HOME_DIR), CACHE)
+            .takeIf { it.isFile }
+            ?.let { runCatching { it.readText() }.getOrNull() }
+        val addresses = buildList {
+            add(DEFAULT_INDEX)
+            add("https://cdn.jsdelivr.net/gh/yuloong07-star/app-skills@index-1/index.json")
+            cached?.let { text ->
+                val root = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull()
+                if (root != null) {
+                    root["index_url"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it) }
+                    addAll(jsonStrings(root["index_mirrors"]))
+                }
+            }
+            add(CONTENTS + "index.json")
+        }.distinct()
+        val text = addresses.firstNotNullOfOrNull { address -> fetchUrl(address)?.toString(Charsets.UTF_8) }
             ?: return 0 to "没取到 $REPO 的 index.json (网络不通, 或者仓库改了)"
         val entries = remoteEntries(text)
         if (entries.isEmpty()) return 0 to "取回来的 index.json 里一条应用都没有"
@@ -158,6 +184,55 @@ internal object AppSkills {
 
     /** 取一份远端文件当文本 (技能正文都是文本; 真取到二进制也按 UTF-8 解, 写回去的还是原字节) */
     private fun fetch(path: String): String? = fetchBytes(path)?.toString(Charsets.UTF_8)
+
+    /** 取一个任意的 https 地址 (镜像与 contents API 共用一条路) */
+    private fun fetchUrl(url: String): ByteArray? = runCatching {
+        if (!url.startsWith("https://")) return null
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = TIMEOUT_MS
+            readTimeout = TIMEOUT_MS
+            setRequestProperty("Accept", "application/vnd.github.raw")
+            setRequestProperty("User-Agent", "Luwi")
+        }
+        try {
+            if (connection.responseCode != 200) null else connection.inputStream.use { it.readBytes() }
+        } finally {
+            runCatching { connection.disconnect() }
+        }
+    }.getOrNull()
+
+    /**
+     * 一个文件按什么顺序去取 (纯函数, 见 AppSkillsTest)
+     *
+     * 索引自己就给了主地址与镜像 (jsDelivr 那几条), 而**那几条在这台机器的网络里通, GitHub 的
+     * contents API 不一定** —— 所以先走索引给的, 最后才落到 API。多文件那种 (skills[]) 只有 API 一条
+     */
+    internal fun sourcesFor(skill: RemoteSkill, path: String): List<String> = buildList {
+        if (path == SKILL_FILE) {
+            if (skill.url.isNotBlank()) add(skill.url)
+            skill.mirrors.filter { it.isNotBlank() }.forEach { add(it) }
+        }
+        add(CONTENTS + "skills/${skill.id}/$path")
+    }.distinct()
+
+    /**
+     * 取回来的字节对不对得上索引说的那几条 (纯函数, 见 AppSkillsTest)
+     *
+     * 单文件那种 (`SKILL.md`) 除了逐文件摘要, 还要核**条目级**的 `sha256` 与 `size` —— 索引里那两栏
+     * 就是给"下载被截断 / 中间人换了内容"这一档准备的; 多文件那种只核它自己那一行的摘要
+     */
+    internal fun matchesIndex(skill: RemoteSkill, file: RemoteFile, bytes: ByteArray): Boolean {
+        val single = file.path == SKILL_FILE
+        val expected = file.sha256.ifEmpty { if (single) skill.sha256 else "" }
+        if (expected.isNotEmpty() && sha256Of(bytes) != expected) return false
+        if (single && skill.size > 0 && bytes.size.toLong() != skill.size) return false
+        return true
+    }
+
+    /** 按 [sourcesFor] 的顺序取一个文件, 取到就用 (每个地址都有超时, 不会把人晾在那儿) */
+    private fun fetchFile(skill: RemoteSkill, path: String): ByteArray? =
+        sourcesFor(skill, path).firstNotNullOfOrNull { url -> fetchUrl(url) }
 
     /** 随包那份清单一: 远端没缓存 (或取不到) 时用它兜底 */
     private fun bundled(context: Context): List<Entry> {
@@ -330,6 +405,14 @@ internal object AppSkills {
     /** 技能目录 (`$DSH_HOME/skills`) */
     private fun skillsDirectory(context: Context): File = File(File(context.filesDir, DshHost.HOME_DIR), SKILLS)
 
+    /**
+     * 已经装着的那个技能是哪个版本 (面板上那句「已装 x.y.z · 远端 a.b.c」的前一半)
+     *
+     * 老安装里没有 `.lw-meta.json` (那时还不记版本), 于是给空串: 面板上只写「已装」, 不编一个版号
+     */
+    fun installedVersion(context: Context, skill: String): String =
+        if (!skill.isSafeSkillName()) "" else readMeta(File(skillsDirectory(context), skill))?.version.orEmpty()
+
     /** 缓存下来那份索引 → 技能表 (不发网络请求: 设置页那一段是同步跑的) */
     fun index(context: Context): List<RemoteSkill> {
         val cached = File(File(context.filesDir, DshHost.HOME_DIR), CACHE)
@@ -364,16 +447,12 @@ internal object AppSkills {
                 failed += file.path
                 return@forEach
             }
-            val bytes = fetchBytes("skills/${skill.id}/${file.path}")
-            if (bytes == null) {
+            val bytes = fetchFile(skill, file.path)
+            if (bytes == null || !matchesIndex(skill, file, bytes)) {
                 failed += file.path
                 return@forEach
             }
             val digest = sha256Of(bytes)
-            if (file.sha256.isNotEmpty() && digest != file.sha256) {
-                failed += file.path
-                return@forEach
-            }
             val target = File(directory, file.path)
             val written = runCatching {
                 target.parentFile?.mkdirs()
@@ -424,16 +503,12 @@ internal object AppSkills {
                 skipped += file.path
                 return@forEach
             }
-            val bytes = fetchBytes("skills/${skill.id}/${file.path}")
-            if (bytes == null) {
+            val bytes = fetchFile(skill, file.path)
+            if (bytes == null || !matchesIndex(skill, file, bytes)) {
                 failed += file.path
                 return@forEach
             }
             val digest = sha256Of(bytes)
-            if (file.sha256.isNotEmpty() && digest != file.sha256) {
-                failed += file.path
-                return@forEach
-            }
             if (local == digest) {
                 unchanged += file.path
                 digests[file.path] = digest
@@ -488,10 +563,15 @@ internal object AppSkills {
     data class RemoteFile(val path: String, val sha256: String)
 
     /**
-     * 远端索引里的一条技能 (新形状 `skills[]`)
+     * 远端索引里的一条技能
      *
-     * 老形状 (`apps[]`, 一个包一条) 仍然收着: [remoteEntries] 那一条路一个字没改, 于是**旧的 Luwi
-     * 与新的索引能并存**, 而新版只是多了 `version` / `description` / `files[]` 这几栏
+     * **仓库那一侧其实早就给得比计划书以为的多** (2026-10-17 取回真索引量的, 格式名
+     * `app-skills-index/1`): 一条 `apps[]` 里除了 `id` / `name` / `package` 还有 `description` /
+     * `risk` / `status` / `tools_used` / `danger_steps`, 以及**正文的** `url` / `mirrors` /
+     * `sha256` / `size` —— 于是"装一条要能核摘要""正文不必走 api.github.com"这两件事都不用改仓库
+     *
+     * `skills[]` 那一种形状仍然收着 (`version` / `files[]` 在那里), 但那是给"一个技能多个文件"留的
+     * 后路: 现在仓库里 20 条都是单文件, 走 `apps[]` 那条路就够
      */
     data class RemoteSkill(
         val id: String,
@@ -501,6 +581,14 @@ internal object AppSkills {
         val apps: List<String>,
         val files: List<RemoteFile>,
         val risk: String,
+        /** 正文的摘要 (索引里带 `sha256:` 前缀, 这里已经剥掉了; 空 = 索引没说) */
+        val sha256: String = "",
+        /** 正文有多大 (索引说的; 0 = 没说) */
+        val size: Long = 0,
+        /** 正文的主地址 (索引里那条 `url`) */
+        val url: String = "",
+        /** 同一份正文的镜像 (`mirrors[]`) */
+        val mirrors: List<String> = emptyList(),
     )
 
     /**
@@ -544,15 +632,26 @@ internal object AppSkills {
                 )
             }
         }
-        return remoteEntries(text).map { entry ->
+        val apps = root["apps"] as? JsonArray ?: return emptyList()
+        return apps.mapNotNull { element ->
+            val item = element as? JsonObject ?: return@mapNotNull null
+            val id = item["id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            if (!id.isSafeSkillName()) return@mapNotNull null
+            val packageName = item["package"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
             RemoteSkill(
-                id = entry.skill,
-                title = entry.title,
-                description = "",
-                version = "",
-                apps = entry.apps,
+                id = id,
+                title = item["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty { id },
+                description = item["description"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                version = item["version"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                apps = if (packageName.isEmpty()) emptyList() else listOf(packageName),
                 files = listOf(RemoteFile(SKILL_FILE, "")),
-                risk = "",
+                risk = item["risk"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                // 索引里那个前缀写成 `sha256:...`, 我们只比十六进制那一半
+                sha256 = item["sha256"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                    .removePrefix("sha256:").lowercase(),
+                size = item["size"]?.jsonPrimitive?.contentOrNull?.trim()?.toLongOrNull() ?: 0,
+                url = item["url"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+                mirrors = jsonStrings(item["mirrors"]),
             )
         }
     }
@@ -663,12 +762,29 @@ internal object AppSkills {
         val report = when (op) {
             "scan" -> scan(context)
             "install" -> {
-                // 点名的那几个得真的在包里: 拼错一个名字就什么也不装, 而不是"装了另外几个"
-                val unknown = only.filterNot { packaged(context, it) }
-                if (unknown.isNotEmpty()) {
-                    throw IllegalArgumentException("包里没有这几个技能: ${unknown.joinToString(", ")}")
+                // 点名的那几个得真的在包 / 索引里: 拼错一个名字就什么也不装, 而不是"装了另外几个"
+                val known = index(context).associateBy { it.id }
+                val unknown = only.filterNot { it in known || packaged(context, it) }
+                if (only.isEmpty() || unknown.isNotEmpty()) {
+                    throw IllegalArgumentException("索引与包里都没有这几个技能: ${unknown.joinToString(", ")}")
                 }
-                install(context, only)
+                // **索引里有的走 installFrom**: 它按 files 逐个写并记 `.lw-meta.json` —— 少了那本账,
+                // 下一次升级会把每个文件都当成"主人改过", 于是永远升不动 (2026-10-17 在模拟器上量到的)
+                var failed = emptyList<String>()
+                val wrote = only.mapNotNull { id ->
+                    val skill = known[id] ?: return@mapNotNull null
+                    val report = installFrom(context, skill)
+                    failed = failed + report.failed
+                    if (report.wrote.isNotEmpty()) id else null
+                }
+                val legacy = only.filterNot { it in known }
+                val older = if (legacy.isEmpty()) Report(scan(context).matches, emptyList(), emptyList(), "") else install(context, legacy)
+                Report(
+                    matches = scan(context).matches,
+                    wrote = wrote + older.wrote,
+                    failed = failed + older.failed,
+                    error = "",
+                )
             }
             // **删**: 点名的那几个必须在 `$DSH_HOME/skills/` 里真的在 (与 install 同一套"不许糊弄")
             "remove" -> {
@@ -677,6 +793,16 @@ internal object AppSkills {
                     throw IllegalArgumentException("这几个技能不在技能目录里, 没删: ${missing.joinToString(", ")}")
                 }
                 remove(context, only)
+            }
+            // **刷新索引**: 与设置页那颗按钮同一条路 (多镜像 + 旧地址兜底), 只是也能从会话里点
+            "refresh" -> {
+                val (count, said) = refresh(context)
+                return buildJsonObject {
+                    put("op", op)
+                    put("ok", count > 0)
+                    put("count", count)
+                    put("text", said)
+                }
             }
             // **索引那两条只读**: 一个网络请求都不发, 读的是缓存 (随包那份兜底)
             "index", "search" -> {

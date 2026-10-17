@@ -1296,6 +1296,8 @@ private fun SkillItems() {
     var message by remember { mutableStateOf<String?>(null) }
     // 点哪一条要问"删不删" (null = 没在问): 与「快捷指令」那一段同一个做法 —— 那个对话框就是确认
     var asking by remember { mutableStateOf<AppSkills.Match?>(null) }
+    // 「浏览技能仓库」那一页开着吗 (2.7.8 批次 5): 它自己读索引 / 装 / 升级, 关掉之后这一页重扫一遍
+    var browsing by remember { mutableStateOf(false) }
     // 扫一次就够: 这一页开着的时候"装了哪些应用"不会变 (点完按钮再扫一次, 那是另一回事)
     val scanned = remember(revision) { AppSkills.scan(context) }
 
@@ -1356,7 +1358,25 @@ private fun SkillItems() {
             }
         },
     )
+    // **浏览技能仓库** (2.7.8 批次 5): 上面那两颗是"按已装的应用一把装", 这一颗是"我自己挑一条"
+    ArrowPreference(
+        title = stringResource(R.string.settings_skills_browse),
+        summary = stringResource(R.string.settings_skills_browse_summary, AppSkills.REPO),
+        onClick = {
+            if (busy) return@ArrowPreference
+            haptic.contextClick()
+            browsing = true
+        },
+    )
     PlaceholderItems(message ?: stringResource(R.string.settings_skills_note))
+
+    if (browsing) {
+        SkillIndexDialog(
+            onDismiss = { browsing = false },
+            onMessage = { message = it },
+            onChanged = { revision += 1 },
+        )
+    }
 
     asking?.let { match ->
         SkillDeleteDialog(
@@ -1421,9 +1441,243 @@ private fun SkillDeleteDialog(
     }
 }
 
+/**
+ * 「浏览技能仓库」(2.7.8 批次 5, 主人 2026-10-17: "技能改成像插件那样浏览技能仓库进行安装")
+ *
+ * 与 [PluginIndexDialog] 同一套骨架 (搜索框 / 点行只选中 / 底部那颗按钮随选中项变话), 差别在三处:
+ *
+ * - 每行多一段**版本读数**: 「已装 x.y.z · 远端 a.b.c」。已装但账上没有版本 (老安装) 时前半截写
+ *   「已装 ? · ...」, 不编一个版号
+ * - 已经在的那条点它 = **升级**, 不是再装一遍 ([AppSkills.upgradeFrom] 只盖没被本地改过的文件)
+ * - 升级回来带着 `skipped` 时**先问一句**「这几个文件本地改过」, 选「保留我的」就什么都不盖
+ */
 @Composable
-private fun PlaceholderItems(text: String) {
-    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
+private fun SkillIndexDialog(
+    onDismiss: () -> Unit,
+    onMessage: (String) -> Unit,
+    onChanged: () -> Unit,
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    var index by remember { mutableStateOf<List<AppSkills.RemoteSkill>>(emptyList()) }
+    var installed by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var localVersions by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var selected by remember { mutableStateOf<AppSkills.RemoteSkill?>(null) }
+    // 升级时"被本地改过"的那几个文件: 先问一句再决定 force (那一句就是覆盖面确认)
+    var edited by remember { mutableStateOf<Pair<AppSkills.RemoteSkill, List<String>>?>(null) }
+
+    val reload: () -> Unit = {
+        scope.launch {
+            val next = withContext(Dispatchers.IO) { AppSkills.index(context) }
+            val have = withContext(Dispatchers.IO) { AppSkills.present(context) }
+            val versions = withContext(Dispatchers.IO) {
+                have.associateWith { AppSkills.installedVersion(context, it) }
+            }
+            index = next
+            installed = have
+            localVersions = versions
+            loading = false
+        }
+    }
+    LaunchedEffect(Unit) { reload() }
+
+    val refresh: () -> Unit = {
+        if (!refreshing) {
+            refreshing = true
+            scope.launch {
+                val said = withContext(Dispatchers.IO) { AppSkills.refresh(context) }
+                refreshing = false
+                onMessage(said.second)
+                reload()
+            }
+        }
+    }
+    val install: (AppSkills.RemoteSkill) -> Unit = { skill ->
+        if (!working) {
+            working = true
+            haptic.confirm()
+            scope.launch {
+                val report = withContext(Dispatchers.IO) { AppSkills.installFrom(context, skill) }
+                working = false
+                onMessage(AppSkills.sentenceOf(report, "install"))
+                reload()
+                onChanged()
+            }
+        }
+    }
+    val upgrade: (AppSkills.RemoteSkill, Boolean) -> Unit = { skill, force ->
+        if (!working) {
+            working = true
+            haptic.confirm()
+            scope.launch {
+                val report = withContext(Dispatchers.IO) { AppSkills.upgradeFrom(context, skill, force) }
+                working = false
+                // 有被本地改过的那几个 -> 先问; 否则直接把结论念出来
+                if (report.skipped.isNotEmpty() && !force) {
+                    edited = skill to report.skipped
+                } else {
+                    onMessage(AppSkills.sentenceOf(report, "upgrade"))
+                }
+                reload()
+                onChanged()
+            }
+        }
+    }
+
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_skills_browse),
+        summary = stringResource(R.string.settings_skills_browse_summary, AppSkills.REPO),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        SuperTextField(
+            modifier = Modifier.padding(bottom = 12.dp),
+            value = query,
+            onValueChange = { query = it },
+            label = stringResource(R.string.settings_skills_browse_query),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        )
+        val screenHeight = LocalConfiguration.current.screenHeightDp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = (screenHeight * 0.5f).dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            val candidates = remember(index, query) { AppSkills.search(index, query) }
+            when {
+                loading -> PlaceholderItems(stringResource(R.string.settings_skills_browse_loading))
+                index.isEmpty() -> PlaceholderItems(stringResource(R.string.settings_skills_browse_empty))
+                candidates.isEmpty() -> PlaceholderItems(stringResource(R.string.settings_skills_browse_none, query))
+            }
+            candidates.forEach { skill ->
+                val have = skill.id in installed
+                val remote = skill.version.ifBlank { "?" }
+                val versions = if (have) {
+                    stringResource(
+                        R.string.settings_skills_browse_installed,
+                        localVersions[skill.id].orEmpty().ifBlank { "?" },
+                        remote,
+                    )
+                } else {
+                    stringResource(R.string.settings_skills_browse_fresh, remote)
+                }
+                val risk = if (skill.risk.isBlank()) {
+                    ""
+                } else {
+                    " · " + stringResource(R.string.settings_skills_browse_risk, skill.risk)
+                }
+                val summary = listOf(versions + risk, skill.description)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
+                val shown = if (selected?.id == skill.id) "\u2713 " else ""
+                ArrowPreference(
+                    title = shown + listOf(skill.title, skill.version).filter { it.isNotBlank() }.joinToString(" "),
+                    summary = summary,
+                    onClick = {
+                        haptic.contextClick()
+                        selected = skill
+                    },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.padding(top = 12.dp)) {
+            TextButton(
+                text = if (refreshing) {
+                    stringResource(R.string.settings_skills_browse_refreshing)
+                } else {
+                    stringResource(R.string.settings_skills_browse_refresh)
+                },
+                onClick = refresh,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(20.dp))
+            val picked = selected
+            // 按钮随选中项变话: 没选 -> 完成; 选中的已经装着 -> 升级; 否则 -> 安装
+            val action = when {
+                working -> stringResource(R.string.settings_skills_browse_working)
+                picked == null -> stringResource(R.string.settings_skills_browse_close)
+                picked.id in installed -> stringResource(R.string.settings_skills_browse_upgrade)
+                else -> stringResource(R.string.settings_skills_browse_install)
+            }
+            TextButton(
+                text = action,
+                onClick = {
+                    haptic.contextClick()
+                    if (!working) {
+                        when {
+                            picked == null -> onDismiss()
+                            picked.id in installed -> upgrade(picked, false)
+                            else -> install(picked)
+                        }
+                    }
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+    }
+
+    edited?.let { (skill, files) ->
+        SkillOverwriteDialog(
+            name = skill.id,
+            files = files,
+            onDismiss = {
+                edited = null
+                onMessage(AppSkills.sentenceOf(AppSkills.InstallReport(skill.id, skill.version), "upgrade"))
+            },
+            onOverwrite = {
+                edited = null
+                upgrade(skill, true)
+            },
+        )
+    }
+}
+
+/** 升级时"这几个文件本地改过"那一问: 盖掉 (force) 还是留着 */
+@Composable
+private fun SkillOverwriteDialog(
+    name: String,
+    files: List<String>,
+    onDismiss: () -> Unit,
+    onOverwrite: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_skills_browse_edited_title),
+        summary = stringResource(R.string.settings_skills_browse_edited_summary, files.joinToString(", ")),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        TextButton(
+            text = stringResource(R.string.settings_skills_browse_edited_keep),
+            onClick = {
+                haptic.contextClick()
+                onDismiss()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(
+            text = stringResource(R.string.settings_skills_browse_edited_overwrite),
+            onClick = {
+                haptic.confirm()
+                onOverwrite()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.textButtonColorsPrimary(),
+        )
+    }
+}
+
+@Composable
+private fun PlaceholderItems(text: String) {    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
         Text(text = text, color = colorScheme.onSurfaceVariantActions)
     }
 }

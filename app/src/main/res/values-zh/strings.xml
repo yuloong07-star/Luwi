@@ -492,6 +492,25 @@
     <string name="settings_skills_deleted">删了 %1$d 条技能</string>
     <string name="settings_skills_delete_failed">有 %1$d 条没删掉</string>
     <string name="settings_skills_note">技能只是提示词材料: 它落在 dsh 家里那份 SKILL.md, 不动任何权限。改它是正常的 —— 这个按钮从不覆盖已经在的那一份。点一条**已经在**的技能可以删掉那一份目录 (先问一句)</string>
+    <string name="settings_skills_browse">浏览技能仓库</string>
+    <string name="settings_skills_browse_summary">列出 %1$s 里全部技能与它们的版本: 点一条装, 已经在的那条点它是升级</string>
+    <string name="settings_skills_browse_query">按名字或用途搜</string>
+    <string name="settings_skills_browse_loading">正在读本机缓存的那份索引…</string>
+    <string name="settings_skills_browse_empty">本机还没有索引: 先刷新一次</string>
+    <string name="settings_skills_browse_none">没有匹配 "%1$s" 的</string>
+    <string name="settings_skills_browse_installed">已装 %1$s · 远端 %2$s</string>
+    <string name="settings_skills_browse_fresh">没装 · 远端 %1$s</string>
+    <string name="settings_skills_browse_refresh">刷新</string>
+    <string name="settings_skills_browse_refreshing">刷新中…</string>
+    <string name="settings_skills_browse_close">完成</string>
+    <string name="settings_skills_browse_install">安装</string>
+    <string name="settings_skills_browse_upgrade">升级</string>
+    <string name="settings_skills_browse_working">正在处理…</string>
+    <string name="settings_skills_browse_risk">风险 %1$s</string>
+    <string name="settings_skills_browse_edited_title">这几个文件本地改过</string>
+    <string name="settings_skills_browse_edited_summary">%1$s 在上次装完之后被手改过。升级会把它们盖掉; 不管选哪个, 这个技能其余的文件照常写</string>
+    <string name="settings_skills_browse_edited_overwrite">连它们一起盖</string>
+    <string name="settings_skills_browse_edited_keep">保留我的</string>
 
     <string name="settings_section_linux">Linux 沙盒</string>
     <string name="settings_section_linux_summary">一个 Alpine 环境, 能装包能编译, 命令从它里面跑</string>

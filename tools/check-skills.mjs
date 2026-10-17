@@ -42,7 +42,7 @@ function check(name, got, want) {
 
 check('解析先认 skills[], 认不到再退回 apps[]', [
   skills.includes('val skills = root["skills"] as? JsonArray'),
-  skills.includes('return remoteEntries(text).map { entry ->'),
+  skills.includes('val apps = root["apps"] as? JsonArray ?: return emptyList()'),
 ], [true, true])
 
 check('新形状的字段逐个读到 (id/name/description/version/apps/files/risk)', [
@@ -69,7 +69,7 @@ check('老形状的映射一个字没改 (remoteEntries 还在, 单测还在用�
 const bridgeOp = /"skill" -> appContext \{ AppSkills\.dispatch\(it, request\) \}/.test(bridge)
 check('桥把 skill 这一条交给 AppSkills.dispatch', bridgeOp, true)
 
-const handled = ['scan', 'install', 'remove', 'index', 'search', 'upgrade']
+const handled = ['scan', 'install', 'remove', 'index', 'search', 'upgrade', 'refresh']
 check(
   'dispatch 认这六个 op',
   handled.map((op) => skills.includes(`"${op}"`) || skills.includes(`"${op}",`)),
@@ -107,15 +107,63 @@ check('账本原子写 (tmp 再改名)', [
 
 /* ── 四、索引说得出摘要就核摘要, 路径不许跑出去 ────────────────────────── */
 
-check('装的时候核 sha256', [
-  skills.includes('if (file.sha256.isNotEmpty() && digest != file.sha256)'),
-  (skills.match(/digest != file\.sha256/g) ?? []).length,
+check('装的时候核摘要与大小 (两个调用点都走同一个判据)', [
+  skills.includes('internal fun matchesIndex('),
+  (skills.match(/matchesIndex\(skill, file, bytes\)/g) ?? []).length,
 ], [true, 2])
 
 check('相对路径的护栏 (不绝对 / 不含 .. / 不是账本自己)', [
   skills.includes('internal fun String.isSafeRelativePath(): Boolean'),
   skills.includes('!contains("..")'),
   skills.includes('this != META'),
+], [true, true, true])
+
+/* ── 五、设置页那一页与两份 strings ────────────────────────────────────── */
+
+const settings = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/SettingsScreen.kt')
+const en = await read('app/src/main/res/values/strings.xml')
+const zh = await read('app/src/main/res/values-zh/strings.xml')
+
+check('技能那一段多了一颗「浏览技能仓库」并挂上对话框', [
+  settings.includes('R.string.settings_skills_browse'),
+  settings.includes('private fun SkillIndexDialog('),
+  settings.includes('onChanged = { revision += 1 }'),
+], [true, true, true])
+
+check('升级时"本地改过"那一问有两个选择 (留我的 / 连它们一起盖)', [
+  settings.includes('R.string.settings_skills_browse_edited_keep'),
+  settings.includes('R.string.settings_skills_browse_edited_overwrite'),
+  settings.includes('upgrade(skill, true)'),
+], [true, true, true])
+
+/** 两份 strings 里 `settings_skills_browse` 那一组的键与顺序 */
+const group = (text) => [...text.matchAll(/<string name="(settings_skills_browse[a-z_]*)"/g)].map((one) => one[1])
+check('新增的键在两份 strings 里都有, 而且顺序一致', [group(en).length, group(en).join(','), group(zh).join(',')], [group(en).length, group(zh).join(','), group(zh).join(',')])
+
+/* ── 六、索引自己给的那几条正文信息 (2026-10-17 取回真索引之后加的) ────────── */
+
+check('老形状那条也读 description / risk / sha256(剥前缀) / size / url / mirrors', [
+  skills.includes('description = item["description"]'),
+  skills.includes('removePrefix("sha256:")'),
+  skills.includes('size = item["size"]'),
+  skills.includes('url = item["url"]'),
+  skills.includes('mirrors = jsonStrings(item["mirrors"])'),
+], [true, true, true, true, true])
+
+check('取正文的顺序是 主地址 -> 镜像 -> contents API, 而且只认 https', [
+  skills.includes('internal fun sourcesFor(skill: RemoteSkill, path: String): List<String>'),
+  skills.includes('if (!url.startsWith("https://")) return null'),
+], [true, true])
+
+check('摘要与大小两道闸都在 (单文件时才核大小)', [
+  skills.includes('internal fun matchesIndex(skill: RemoteSkill, file: RemoteFile, bytes: ByteArray): Boolean'),
+  skills.includes('bytes.size.toLong() != skill.size'),
+], [true, true])
+
+check('刷新先试索引自己写的 index_url / index_mirrors, 再落到 API', [
+  skills.includes('private const val DEFAULT_INDEX = "https://fastly.jsdelivr.net/gh/yuloong07-star/app-skills@index-1/index.json"'),
+  skills.includes('root["index_url"]'),
+  skills.includes('addAll(jsonStrings(root["index_mirrors"]))'),
 ], [true, true, true])
 
 console.log(`\n${checks - failures} / ${checks} 通过`)

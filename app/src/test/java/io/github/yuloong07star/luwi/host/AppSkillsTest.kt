@@ -166,4 +166,56 @@ class AppSkillsTest {
         }
         directory.deleteRecursively()
     }
+
+    @Test
+    fun `老形状里那几栏正文信息也要读进来`() {
+        val text = """
+            {"format":"app-skills-index/1","index_url":"https://cdn.example/index.json",
+             "apps":[{"id":"wechat","name":"微信","package":"com.tencent.mm","description":"发消息",
+                      "risk":"medium","sha256":"sha256:aa11bb22","size":1321,
+                      "url":"https://cdn.example/skills/wechat/SKILL.md",
+                      "mirrors":["https://m1.example/wechat.md","https://m2.example/wechat.md"]}]}
+        """.trimIndent()
+        val skill = AppSkills.parseIndex(text).single()
+        assertTrue("描述", skill.description == "发消息")
+        assertTrue("风险", skill.risk == "medium")
+        assertTrue("sha256 前缀要剥掉", skill.sha256 == "aa11bb22")
+        assertTrue("大小", skill.size == 1321L)
+        assertTrue("主地址", skill.url.endsWith("/skills/wechat/SKILL.md"))
+        assertTrue("两个镜像", skill.mirrors.size == 2)
+    }
+
+    @Test
+    fun `正文的取法顺序是 主地址 再镜像 最后 API`() {
+        val skill = AppSkills.RemoteSkill(
+            "wechat", "微信", "", "", listOf("com.tencent.mm"), listOf(AppSkills.RemoteFile("SKILL.md", "")),
+            "", url = "https://cdn.example/a.md", mirrors = listOf("https://m1.example/a.md"),
+        )
+        val single = AppSkills.sourcesFor(skill, "SKILL.md")
+        assertTrue("主地址第一", single.first() == "https://cdn.example/a.md")
+        assertTrue("镜像第二", single[1] == "https://m1.example/a.md")
+        assertTrue("API 兜底", single.last().startsWith("https://api.github.com/"))
+        // 多文件那种没有镜像可抄, 只剩 API
+        val nested = AppSkills.sourcesFor(skill, "scripts/tap.sh")
+        assertTrue("别的文件只走 API", nested.size == 1 && nested[0].startsWith("https://api.github.com/"))
+    }
+
+    @Test
+    fun `摘要与大小对不上就不认`() {
+        val body = "hello".toByteArray()
+        val digest = AppSkills.sha256Of(body)
+        val good = AppSkills.RemoteSkill(
+            "wechat", "微信", "", "", emptyList(), listOf(AppSkills.RemoteFile("SKILL.md", "")),
+            "", sha256 = digest, size = 5,
+        )
+        assertTrue("都对得上", AppSkills.matchesIndex(good, good.files[0], body))
+        assertTrue("摘要不对", AppSkills.matchesIndex(good.copy(sha256 = "deadbeef"), good.files[0], body).not())
+        assertTrue("大小不对", AppSkills.matchesIndex(good.copy(size = 9), good.files[0], body).not())
+        // 逐文件那一栏优先于条目级那一栏
+        val perFile = AppSkills.RemoteFile("SKILL.md", "deadbeef")
+        assertTrue("逐文件摘要说不对就是不对", AppSkills.matchesIndex(good, perFile, body).not())
+        // 索引什么都没说时 (老数据) 就不核
+        val bare = good.copy(sha256 = "", size = 0)
+        assertTrue("索引没说就放过去", AppSkills.matchesIndex(bare, bare.files[0], body))
+    }
 }

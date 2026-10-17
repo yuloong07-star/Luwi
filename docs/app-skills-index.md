@@ -1,69 +1,45 @@
-# 技能仓库的索引格式 (app-skills 那一侧要照着改的那一份)
+# 技能仓库的索引格式 (app-skills 那一侧)
 
 2026-10-17, 2.7.8 批次 5 定下来的形状。写在 Luwi 仓库里是因为**改的是另一个仓库**
-(`yuloong07-star/app-skills` 的根下 `index.json`), 而那一份不在这个工作区里 —— 这一段就是拿过去
-照着改的唯一依据。
+(`yuloong07-star/app-skills` 的根下 `index.json`)。
 
-## 一句话
+## 先说结论: 现在**不改也能用**
 
-**保留老的 `apps[]` 一个字不动, 另加一段 `skills[]`**。老的 Luwi 只读 `apps[]`, 新的先读 `skills[]`,
-读不到才退回 `apps[]` —— 于是仓库换成新格式的那一刻, 老版本的人不会坏。
+把远端那份真索引取回来量过 (2026-10-17, 34,486 字节, `format: app-skills-index/1`, 20 条):
 
-## 长什么样
+| 索引里已经有的 | 客户端已经怎么用 |
+| :-- | :-- |
+| 每条 `description` / `risk` / `status` / `tools_used` / `danger_steps` | 面板上的描述、搜索的第三个字段、风险那一行 |
+| 每条 `url` + `mirrors[]` + `sha256` (`sha256:` 前缀) + `size` | 正文去 jsDelivr 取 (不必走 api.github.com); 装之前核**摘要与大小** |
+| 顶层 `index_url` + `index_mirrors` | 刷新索引时按这几条挨个试 (`cdn` 在主址名单里排第二, 它在本机网络上 SSL 会失败) |
+| **没有**逐技能的 `version` | 面板上「已装 x · 远端 a」两边都写 `?`; 要真版本号得加下面那一栏 |
+
+所以**只有一件事值得改**: 给每一条加一个 `version`。加了之后面板能显示真实的版本对比,
+升级那一颗也就有了判据; 不加也不会坏, 只是"已装 / 远端"两半永远是问号。
+
+## 只加一栏的话: `version`
 
 ```json
 {
-  "repo": "app-skills",
-  "updated": "2026-10-18",
-  "apps": [
-    { "id": "wechat", "name": "微信", "package": "com.tencent.mm", "path": "skills/wechat/SKILL.md" }
-  ],
-  "skills": [
-    {
-      "id": "wechat",
-      "name": "微信",
-      "description": "发消息、看朋友圈、收付款",
-      "version": "1.2.0",
-      "apps": ["com.tencent.mm"],
-      "risk": "low",
-      "danger_steps": [],
-      "tools_used": ["lw_ui", "lw_tap", "lw_type"],
-      "status": "verified",
-      "files": [
-        { "path": "SKILL.md", "sha256": "6f1e…" },
-        { "path": "scripts/tap-send.sh", "sha256": "aa11…" }
-      ]
-    }
-  ]
+  "id": "android-vivo-calculator",
+  "name": "计算器",
+  "package": "com.android.calculator2",
+  "version": "1.1.0",
+  "...": "其余各栏原样不动"
 }
 ```
 
-## 每一栏的规矩
+**改内容就要抬 version**: 面板那句「已装 1.1.0 · 远端 1.2.0」是主人点「升级」的唯一理由;
+内容改了而不抬版本, 面板上永远显示"已经是最新的"。
 
-| 栏 | 必填 | 用途 |
-| :-- | :-- | :-- |
-| `id` | 是 | 技能目录名 (`$DSH_HOME/skills/<id>/`)。**只许是目录名**: 不带 `/` `\`, 不是 `.` / `..` |
-| `name` | 否 | 显示名, 缺了用 `id` |
-| `description` | 建议 | 面板那一行的一句话与搜索的第三个字段 |
-| `version` | 建议 | 升级判据的一半: 面板上写「已装 x.y.z · 远端 a.b.c」就是靠它 |
-| `apps` | 否 | 包名列表; 与老 `apps[]` 一个口径 (命中才算"这台机器上有这个应用") |
-| `files[]` | 建议 | 每个文件一条: `path` (相对技能目录, 不许 `..` 与绝对路径) + `sha256` (小写十六进制) |
-| `risk` / `danger_steps` / `tools_used` / `status` | 否 | 沿用仓库里已有的那几栏, 客户端现在只显示 `risk` |
-
-## 摘要要真算
-
-`files[].sha256` **不是装饰**: 装的时候取回来的字节与它不一致, 那一个文件就不落地 (而不是装个
-半新半旧的技能); 升级的时候它又是"上游到底改没改"的判据之一。算的时候是对**文件原文的字节**算:
-
-```bash
-sha256sum SKILL.md            # 十六进制那个, 小写
-```
-
-## 与本地那一本账的关系
+## 客户端怎么判断"要不要盖"
 
 装上之后客户端在 `$DSH_HOME/skills/<id>/.lw-meta.json` 里记一份 `{skill, version, at, files:{路径:摘要}}`。
-升级只盖"本地文件摘要 == 账上摘要"的那几个; 主人改过的文件不盖, 面板上会单独问一句
-(「本地改过的那几个文件」), 确认之后才用 `force` 覆盖。
+升级只盖"本地文件摘要 == 账上摘要"的那几个; 主人改过的文件不盖, 面板上单独问一句, 确认之后才用
+`force` 覆盖 (`AppSkills.upgradeFrom`)。
 
-所以**同一个技能改了内容就要抬 `version`**, 否则面板上那句「已装 1.2.0 · 远端 1.2.0」永远不变,
-主人也就没有理由点升级。
+## 多文件 (`skills[]`) —— 现在用不上, 留着后路
+
+索引另一种形状 (`skills[]` + `files[]`) 客户端也认: 一个技能可以带多个文件 (脚本之类), 每个文件
+一条 `{path, sha256}`, `path` 必须是相对技能目录、不含 `..`。现在仓库里 20 条都是单文件 (`SKILL.md`),
+走 `apps[]` 那条路就够; 哪天某个技能需要一个脚本, 再把它挪进 `skills[]`。
