@@ -118,28 +118,64 @@ check('相对路径的护栏 (不绝对 / 不含 .. / 不是账本自己)', [
   skills.includes('this != META'),
 ], [true, true, true])
 
-/* ── 五、设置页那一页与两份 strings ────────────────────────────────────── */
+/* ── 五、设置页那两页与两份 strings ────────────────────────────────────── */
 
 const settings = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/SettingsScreen.kt')
+const screens = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/SkillsScreens.kt')
+const nav = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/AppNav.kt')
 const en = await read('app/src/main/res/values/strings.xml')
 const zh = await read('app/src/main/res/values-zh/strings.xml')
 
-check('技能那一段多了一颗「浏览技能仓库」并挂上对话框', [
-  settings.includes('R.string.settings_skills_browse'),
-  settings.includes('private fun SkillIndexDialog('),
-  settings.includes('onChanged = { revision += 1 }'),
+// 主人 2026-10-17: 技能不再直接摆在技能段下面, 而是分两页 (已装 / 可用)
+check('技能那一段只剩两颗入口, 各自推到一页', [
+  settings.includes('navigator.push(Screen.SkillsInstalled)'),
+  settings.includes('navigator.push(Screen.SkillsAvailable)'),
+  settings.includes('R.string.settings_skills_installed'),
+  settings.includes('R.string.settings_skills_available'),
+  !settings.includes('AppSkills.scan('),
+], [true, true, true, true, true])
+
+check('两页都注册在导航上', [
+  nav.includes('data object SkillsInstalled : Screen'),
+  nav.includes('data object SkillsAvailable : Screen'),
+  nav.includes('entry<Screen.SkillsInstalled>') || nav.includes('entry<Screen.SkillsInstalled>'),
 ], [true, true, true])
+
+check('已装那一页: 检测更新 / 一键升级 / 卸载 三件都在', [
+  screens.includes('fun SkillsInstalledScreen('),
+  screens.includes('AppSkills.updates(context'),
+  screens.includes('AppSkills.upgradeAll(context'),
+  screens.includes('AppSkills.remove(context, listOf(skill.id))'),
+], [true, true, true, true])
+
+check('可用那一页: 刷新技能 / 全部安装 / 挑一条装 (或升级) 三件都在', [
+  screens.includes('fun SkillsAvailableScreen('),
+  screens.includes('AppSkills.refresh(context)'),
+  screens.includes('AppSkills.installAll(context'),
+  screens.includes('if (skill.id in installed) upgrade(skill, false) else install(skill)'),
+], [true, true, true, true])
 
 check('升级时"本地改过"那一问有两个选择 (留我的 / 连它们一起盖)', [
-  settings.includes('R.string.settings_skills_browse_edited_keep'),
-  settings.includes('R.string.settings_skills_browse_edited_overwrite'),
-  settings.includes('upgrade(skill, true)'),
+  screens.includes('R.string.settings_skills_browse_edited_keep'),
+  screens.includes('R.string.settings_skills_browse_edited_overwrite'),
+  screens.includes('upgrade(skill, true)'),
 ], [true, true, true])
 
-/** 两份 strings 里 `settings_skills_browse` 那一组的键与顺序 */
-const group = (text) => [...text.matchAll(/<string name="(settings_skills_browse[a-z_]*)"/g)].map((one) => one[1])
-check('新增的键在两份 strings 里都有, 而且顺序一致', [group(en).length, group(en).join(','), group(zh).join(',')], [group(en).length, group(zh).join(','), group(zh).join(',')])
+check('AppSkills 这一侧补了那四件 (列表 / 更新 / 一键升级 / 全部安装)', [
+  skills.includes('data class Installed('),
+  skills.includes('fun installed(context: Context): List<Installed>'),
+  skills.includes('fun updates(context: Context, index: List<RemoteSkill>): List<Update>'),
+  skills.includes('fun upgradeAll(context: Context, index: List<RemoteSkill>): List<InstallReport>'),
+  skills.includes('fun installAll(context: Context, index: List<RemoteSkill>): List<InstallReport>'),
+], [true, true, true, true, true])
 
+/** 两份 strings 里同一组键的个数与顺序必须一致 */
+const groupOf = (text, prefix) => [...text.matchAll(new RegExp(`<string name="(${prefix}[a-z_]*)`, 'g'))].map((one) => one[1])
+for (const prefix of ['settings_skills_', 'skills_']) {
+  const left = groupOf(en, prefix)
+  const right = groupOf(zh, prefix)
+  check(`两份 strings 里 ${prefix}* 那一组的键与顺序一致`, [left.length > 0, left.join(',')], [true, right.join(',')])
+}
 /* ── 六、索引自己给的那几条正文信息 (2026-10-17 取回真索引之后加的) ────────── */
 
 check('老形状那条也读 description / risk / sha256(剥前缀) / size / url / mirrors', [

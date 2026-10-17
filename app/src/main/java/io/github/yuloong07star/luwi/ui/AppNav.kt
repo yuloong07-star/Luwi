@@ -41,6 +41,14 @@ sealed interface Screen : NavKey {
     /** 捐赠那一页: 随包发进来的 `assets/donate.html` (见 [DonateScreen]) */
     @Serializable
     data object Donate : Screen
+
+    /** 设置 → 技能 → 已装的那一页 (2.7.8 批次 5): 检测更新 / 一键升级 / 卸载 */
+    @Serializable
+    data object SkillsInstalled : Screen
+
+    /** 设置 → 技能 → 可用的那一页: 索引里全部技能, 刷新与全部安装都在那儿 */
+    @Serializable
+    data object SkillsAvailable : Screen
 }
 
 /** 谁想换页就问它, 页面自己不持有返回栈 */
@@ -147,6 +155,8 @@ fun LuwiApp() {
                 entry<Screen.Home>(swipeDismiss = swipe) { HostScreen() }
                 entry<Screen.Settings>(swipeDismiss = swipe) { SettingsScreen() }
                 entry<Screen.Donate>(swipeDismiss = swipe) { DonateScreen() }
+                entry<Screen.SkillsInstalled>(swipeDismiss = swipe) { SkillsInstalledScreen() }
+                entry<Screen.SkillsAvailable>(swipeDismiss = swipe) { SkillsAvailableScreen() }
             }
             // **返回键的最后一道**: 没被接住的那一下是平台的默认行为 —— 把这个 activity 关掉, 于是
             // host 与虚拟屏一起没了。所以这里兜底: 要么弹提示, 要么把任务放到后台, 两者都不结束任何

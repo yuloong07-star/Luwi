@@ -405,6 +405,62 @@ internal object AppSkills {
     /** 技能目录 (`$DSH_HOME/skills`) */
     private fun skillsDirectory(context: Context): File = File(File(context.filesDir, DshHost.HOME_DIR), SKILLS)
 
+    /** 已经装在本机的一个技能 (设置页那个「查看已装」列表的一行) */
+    data class Installed(
+        val id: String,
+        /** 账上记的版本; 老安装没这本账时是空串 */
+        val version: String,
+        val files: Int,
+        /** 装完之后被手改过的文件个数 (本地摘要 != 账上摘要) */
+        val edited: Int,
+    )
+
+    /** 技能目录里现在装着哪些 (按名字排, 与 [present] 同一个判据) */
+    fun installed(context: Context): List<Installed> = skillsDirectory(context).listFiles().orEmpty()
+        .filter { it.isDirectory && File(it, SKILL_FILE).isFile && it.name.isSafeSkillName() }
+        .sortedBy { it.name }
+        .map { directory ->
+            val meta = readMeta(directory)
+            val edited = meta?.files.orEmpty().count { (path, digest) ->
+                val local = File(directory, path).takeIf { it.isFile }?.let { sha256Of(it) }
+                local != null && local != digest
+            }
+            Installed(directory.name, meta?.version.orEmpty(), meta?.files?.size ?: 1, edited)
+        }
+
+    /** 一条"能升级": 本地版本与远端不同, 或者正文摘要不同 (索引说得出哪一条就用哪一条) */
+    data class Update(val id: String, val localVersion: String, val remoteVersion: String)
+
+    /**
+     * 拿索引挨个比一遍"哪些能升级" (**不联网**: 索引用的是本机缓存的那一份)
+     *
+     * 两条判据都只是线索, 真正的"盖不盖"还是 [upgradeFrom] 说了算: 它按逐文件摘要决定, 于是
+     * "版本号没变但内容改了"这种情况也升得动 (索引里没有 version 时全靠摘要)
+     */
+    fun updates(context: Context, index: List<RemoteSkill>): List<Update> {
+        val have = installed(context).associateBy { it.id }
+        return index.mapNotNull { skill ->
+            val local = have[skill.id] ?: return@mapNotNull null
+            val directory = File(skillsDirectory(context), skill.id)
+            val localDigest = File(directory, SKILL_FILE).takeIf { it.isFile }?.let { sha256Of(it) }
+            val versionChanged = skill.version.isNotEmpty() && skill.version != local.version
+            val digestChanged = skill.sha256.isNotEmpty() && localDigest != null && localDigest != skill.sha256
+            if (versionChanged || digestChanged) Update(skill.id, local.version, skill.version) else null
+        }
+    }
+
+    /** 一键升级: 把 [updates] 里那几条逐个走 [upgradeFrom] (被本地改过的文件照旧不盖) */
+    fun upgradeAll(context: Context, index: List<RemoteSkill>): List<InstallReport> {
+        val want = updates(context, index).map { it.id }.toSet()
+        return index.filter { it.id in want }.map { upgradeFrom(context, it) }
+    }
+
+    /** 全部安装: 索引里还没装的那几条 (已经在的一个字节都不动) */
+    fun installAll(context: Context, index: List<RemoteSkill>): List<InstallReport> {
+        val have = present(context)
+        return index.filterNot { it.id in have }.map { installFrom(context, it) }
+    }
+
     /**
      * 已经装着的那个技能是哪个版本 (面板上那句「已装 x.y.z · 远端 a.b.c」的前一半)
      *
