@@ -255,17 +255,31 @@ function cleanBuildOutputs(root) {
   console.log(`pack-host: removed ${String(removed)} stale build output(s) under ${root}`)
 }
 
-/** Every tarball under one directory, keyed by the package name it declares */
+/** Every tarball under one directory, keyed by the package name it declares, plus the exact
+ * dependency pins those manifests repeat. The pins let the install reuse one hoisted copy where
+ * npm would otherwise nest a copy under every dependent (see the zod note below). */
 function packedDependencies(directory) {
   const packages = new Map()
+  const pins = new Map()
+  const tally = new Map()
   for (const filename of readdirSync(directory).filter(name => name.endsWith('.tgz')).sort()) {
     const manifest = execFileSync('tar', ['-xOzf', join(directory, filename), 'package/package.json'], {
       encoding: 'utf8',
     })
-    const { name, version } = JSON.parse(manifest)
+    const { name, version, dependencies = {} } = JSON.parse(manifest)
     packages.set(name, { url: pathToFileURL(join(directory, filename)).href, version })
+    for (const [member, range] of Object.entries(dependencies)) {
+      if (!/^\d+\.\d+\.\d+$/.test(range)) continue
+      const counts = tally.get(member) ?? new Map()
+      counts.set(range, (counts.get(range) ?? 0) + 1)
+      tally.set(member, counts)
+    }
   }
-  return packages
+  for (const [member, counts] of tally) {
+    const [range, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+    if (count > 1) pins.set(member, range)
+  }
+  return { packages, pins }
 }
 
 /** Recursive file count and byte total, for the size report */
@@ -336,9 +350,16 @@ for (const family of ['dsh', 'vendor']) {
   packs[family] = packedDependencies(directory)
 }
 
-const packed = new Map([...packs.vendor, ...packs.dsh])
+const packed = new Map([...packs.vendor.packages, ...packs.dsh.packages])
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
+// **`zod` 的顶层钉版是"别让 npm 给 57 个包各塞一份"那件事** (2026-10-17): dsh 0.2.1-rc.2 里
+// 57 个包把 `zod` **精确**钉在 `4.4.3`, 而另外几条依赖是 `^4.4.3`; npm 把最新的 4.6.7 提到顶层,
+// 再给每个精确要求的包塞一份 4.4.3 —— 实测 58 份、约 285 MB、5 万个文件 (解压后从 3.2 万变 7 万,
+// 树从 325 MB 变 589 MB)。顶层钉成 dsh 自己重复的那个精确版本, 所有 range 都满足, 只剩一份。
+// 版本从 pack 出来的 manifest 里现取, dsh 以后换版本这里跟着换 (取不到就退回原行为并说一句)
+const zodPin = packs.dsh.pins.get('zod')
+if (zodPin === undefined) console.log('pack-host: no repeated exact zod pin found; leaving it to npm')
 writeFileSync(join(out, 'package.json'), `${JSON.stringify({
   name: 'luwi-host',
   version: '0.0.0',
@@ -346,6 +367,7 @@ writeFileSync(join(out, 'package.json'), `${JSON.stringify({
   dependencies: {
     ...Object.fromEntries([...packed].map(([name, entry]) => [name, entry.url])),
     ...IMAGE_BACKEND,
+    ...zodPin === undefined ? {} : { zod: zodPin },
   },
 }, null, 2)}\n`)
 

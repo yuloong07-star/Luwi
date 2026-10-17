@@ -39,13 +39,14 @@ host 树 330 个 tarball / 32,814 个文件 / 324.8 MiB, `host.zip` 94.3 MB。�
 
 ## 仓库形态
 
-dsh 以 **git submodule** 挂在 `third_party/deepseek-harness/`, 指向 `https://github.com/Miuzarte/deepseek-harness.git` (Miuzarte 的 fork, 不是上游)
+dsh 以 **git submodule** 挂在 `third_party/deepseek-harness/`, 指向 `https://github.com/yuloong07-star/deepseek-harness.git` (自己的可写 fork; `Miuzarte/deepseek-harness` 是上游来源, 当前账号对它只读, 在 submodule 里配成远程 `upstream`)
 
 **dsh 的构建产物不进 git**: submodule 里只有源码, `pnpm install` 与 `build:official` 都在**构建 APK 时**跑 (Gradle task), 产物直接喂给打包步骤, 这样 submodule 保持干净、能跟上游 rebase
 
 构建机需要 Node + pnpm, 升级 dsh 就是 `git submodule update --remote` 之后重新构建。**pin 必须是 fork 上推过的提交**: 只活在 submodule 工作区里的改动, 克隆本仓的人看不见
 
-**当前基座 (2026-10-17)**: 分支 `lw-sync-rc2` = 上游 **`dsh-v0.2.1-rc.2`** 的树 + fork 那批安卓补丁 (原来的 `lw-sync-alpha1` 是 0.2.1-alpha.1)。本机 `github.com:443` 不通, 所以那一跳的基座是**从 GitHub 的 tag 归档 (codeload) 重建出来的本地提交** (`upstream-rc2`, 只有树、没有上游历史), 再把 fork 提交 rebase 上去; 逐条做法与两条丢掉的提交见 submodule 的 `patch.md`。**这个 pin 还没推到 fork**: 推之前克隆本仓的人拿到的是一条不存在的提交, 别把这一版当发布基线
+**当前基座 (2026-10-17)**: 分支 `lw-sync-rc2` = 上游 **`dsh-v0.2.1-rc.2`** 的树 + fork 那批安卓补丁 (原来的 `lw-sync-alpha1` 是 0.2.1-alpha.1)。本机 `github.com:443` 连 git 协议不通, 所以那一跳的基座是**从 GitHub 的 tag 归档 (codeload) 重建出来的提交** —— 树取自 rc.2 的归档, 父提交接在本地的 `dsh-v0.2.1-alpha.1` 上, 于是历史仍然是连的; 17 条 fork 提交 rebase 在它上面, 逐条做法与两条丢掉的提交见 submodule 的 `patch.md`。**pin 已推到 `origin` (自己的 fork)**: `040c22512546aaf445c19afb38eff947f42561b9` 在 `lw-sync-rc2`, 克隆本仓能取到这一条; 往 Miuzarte 那份推是推不动的 (当前账号只读), 别把 `origin` 改回去
+
 
 **rc.2 删掉了 `{{cwd}}` 这个提示词变量** (上游把工作目录改成一条 required 的 context 段, `Current working directory: …`), 而本仓的 `prompts`/`prompt.md` 模板、`presets/explore` 的 persona suffix、以及设备上用户自己写过的提示词都还在引用它 —— 组装时直接抛 `unknown prompt variable "{{cwd}}"`, 自动化那条 `wind-down` 就是这么失败过一次。现在由 `host-plugin` 的 `systemPrompt.variable('cwd', …)` 按原名字补回来 (值取 `workingDirectory.get(agent.session)`, 那个服务不在时退回 `header.cwd`), 老模板一个字都不用改; 设备上量到的判据是"这一轮走到 `llm-deepseek: no API key` 才停", 而不是停在提示词组装
 
