@@ -7169,6 +7169,67 @@ function startReadAloud(ctx) {
   })
 }
 
+/* ── 桌面对话那一格 (2.7.8 批次 6) ────────────────────────────────────────── */
+
+/** 那份文件: `$DSH_HOME/lw/desktop-chat.json` (与应用那侧的 `DesktopChatFile` 是同一个约定) */
+function desktopChatPath() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', 'desktop-chat.json') : null
+}
+
+/**
+ * 与应用那侧同一对数: 留几条 / 一条最多多少字 (谁都不许单边改)
+ *
+ * `MAX_LINES` 是"手里留几条", 而组件那一格画得下的是更少的几条 (`DesktopChatFile.SHOW_LINES`) ——
+ * 两个数归应用管, 这一侧只需要别把它撑大
+ */
+const DESKTOP_CHAT_LINES = 6
+const DESKTOP_CHAT_CHARS = 240
+
+/** 截一道 (带 `…`), 顺带把换行压成空格: 组件上那两行气泡装不下换行 */
+function clipDesktopChat(text) {
+  const line = String(text ?? '').trim().replace(/\s*\n+\s*/g, ' ')
+  return line.length <= DESKTOP_CHAT_CHARS ? line : `${line.slice(0, DESKTOP_CHAT_CHARS - 1)}…`
+}
+
+/**
+ * 把一句回答写进 `desktop-chat.json` 的 `assistant` 那一笔
+ *
+ * 这一格是**桌面组件**, 它没有进程也没有推送通道 —— 它每次重画都是"读这份文件"。所以宿主这一侧
+ * 只做一件事: 把刚说的那句接在账尾。应用那侧用 inotify 盯着这个目录, 一改就重画 (零轮询)
+ *
+ * 三条与应用那侧逐字对齐的约定: `who` 只有 `user` / `assistant`; 只留最近
+ * [DESKTOP_CHAT_LINES] 条; **原子写** (`.tmp` + rename), 于是读的一侧永远不会看到半份文件。
+ * 读-改-写, 读不懂就当成空表 (应用下一次写会整份换掉它)
+ *
+ * 写不进去只记一行日志: 没装应用 / 目录还没建 (宿主起来了而应用一次都没跑过) 都不是要报给模型的错
+ */
+async function writeDesktopChat(who, text) {
+  const path = desktopChatPath()
+  if (path === null) return
+  const line = clipDesktopChat(text)
+  if (!line) return
+  let lines = []
+  try {
+    const root = JSON.parse(await readFile(path, 'utf8'))
+    if (Array.isArray(root?.lines)) lines = root.lines
+  } catch {
+    // 文件不在 / 读不懂: 从空表开始, 这一笔照样要落下去
+  }
+  const last = lines.at(-1)
+  if (last?.who === who && last?.text === line) return
+  const kept = [...lines, { who, text: line, at: Date.now() }].slice(-DESKTOP_CHAT_LINES)
+  const payload = { v: 1, at: Date.now(), lines: kept }
+  const temporary = `${path}.tmp`
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(temporary, `${JSON.stringify(payload)}\n`)
+    await rename(temporary, path)
+  } catch (error) {
+    console.warn(`luwi-channel: the desktop chat file was not written: ${error?.message ?? error}`)
+  }
+}
+
 /**
  * 推给浮标那块框的正文
  *
@@ -7200,6 +7261,9 @@ function reportReply(text, session) {
   const line = String(text ?? '').trim()
   if (!line) return
   const from = String(session ?? '').trim()
+  // 桌面上那一格也要看得见这一句 (2.7.8 批次 6): 与推给浮标那块框是**同一句**, 只是去向不同 ——
+  // 写不进去不影响下面那一跳, 所以两条互不等待
+  void writeDesktopChat('assistant', line)
   void call('overlay', { op: 'reply', text: line, ...(from ? { session: from } : {}) })
     .then((answer) => {
       voiceReading.reply = { at: Date.now(), characters: line.length, channel: answer?.channel === true }

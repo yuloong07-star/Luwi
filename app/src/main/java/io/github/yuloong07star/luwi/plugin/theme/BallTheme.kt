@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import io.github.yuloong07star.luwi.plugin.PluginManager
 import io.github.yuloong07star.luwi.plugin.PluginPaths
 import io.github.yuloong07star.luwi.plugin.PluginStore
+import io.github.yuloong07star.luwi.plugin.widget.WidgetHost
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -118,6 +119,9 @@ internal object BallTheme {
 
     fun choose(context: Context, id: String?) {
         File(PluginStore.root(context), CHOICE).writeText(json.encodeToString(Choice(id.orEmpty())) + "\n")
+        // 桌面上那块立绘跟着换 (2.7.8 批次 6): 对话组件里的脸就是"当前这一套", 换完不重画的话它会一直
+        // 停在换之前那一张, 而球上已经换了 —— 那种"两处对不上"最难说清
+        runCatching { WidgetHost.refreshChat(context) }
     }
 
     /** 现在生效的那一份; 读不出来 (插件被删 / JSON 坏了 / 图不在) 就是 null = 回内置 */
@@ -156,6 +160,25 @@ internal object BallTheme {
                 file
             }
         }.getOrNull()
+    }
+
+    /**
+     * 一帧序列里的**某一张** (2.7.8 批次 6)
+     *
+     * 桌面对话组件那块立绘走 `content://` 一帧一图交出去 (位图过 binder 会撞 1 MB 上限), 而它在
+     * 另一个进程里按名字要, 所以这里是"要哪一张解哪一张" —— 不必为了第 3 帧先把 128 个路径都解一遍
+     *
+     * 名字先过一遍 [Frames.frameNames] (它只认 `frame-01.png` 这一种拼法), 于是 `../` 那种写法
+     * 在进 [PluginPaths.resolve] 之前就被挡掉
+     */
+    fun frameFile(context: Context, state: String, name: String): File? {
+        val active = active(context) ?: return null
+        val frames = active.spec.frames[state] ?: return null
+        if (name !in frames.frameNames()) return null
+        val file = runCatching {
+            PluginPaths.resolve(active.directory, "${frames.dir}/$name", "theme/ball.json 的 frames.$state")
+        }.getOrNull() ?: return null
+        return file.takeIf { it.isFile }
     }
 
     /**

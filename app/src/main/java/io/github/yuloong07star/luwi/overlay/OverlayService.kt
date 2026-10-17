@@ -42,6 +42,7 @@ import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.channel.CameraOwner
 import io.github.yuloong07star.luwi.channel.LwModes
 import io.github.yuloong07star.luwi.plugin.theme.BallTheme
+import io.github.yuloong07star.luwi.plugin.widget.WidgetHost
 import io.github.yuloong07star.luwi.host.BallReturn
 import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
@@ -850,6 +851,9 @@ class OverlayService : Service() {
         startPhaseWatch()
         // 余额那份文件同一个盯法 (2026-10-16): 宿主一刷, 框里那条「正在取」就地换成真数
         startBalanceWatch()
+        // 桌面对话那本账 (2.7.8 批次 6): 宿主写完 `assistant` 那一笔要有人重画桌面那一格 ——
+        // 而这里起来的服务是"应用还活着"最可靠的那个标志
+        runCatching { DesktopChatFile.ensure(this) { WidgetHost.refreshChat(this) } }
     }
 
     /**
@@ -2639,6 +2643,12 @@ class OverlayService : Service() {
             note("the box will return to $it, the conversation this line went to")
         }
         note("channel line queued as #$seq: $text")
+        // **桌面对话那本账上的 `user` 那一笔** (2.7.8 批次 6): 从这块框里发出去的话, 桌面上那一格也要
+        // 看得见 —— 于是"点组件说一句"与"点浮标说一句"在那一格里长得一样。写失败只记一行: 组件那一格
+        // 少一条气泡不该把"这句话已经排上了"这件事实搅乱
+        if (runCatching { DesktopChatFile.append(this, DesktopChatFile.WHO_USER, text) }.getOrDefault(false)) {
+            runCatching { WidgetHost.refreshChat(this) }
+        }
         return true
     }
 

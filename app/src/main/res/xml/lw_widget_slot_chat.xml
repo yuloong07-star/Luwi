@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 对话槽登记表: 最小 2×2, 可调大小, 更新周期 0 (重画由应用与宿主那两条链触发, 不靠系统轮询) -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/settings_widget_slot_chat_desc"
+    android:initialLayout="@layout/lw_widget_slot_chat"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

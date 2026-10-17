@@ -1907,12 +1907,15 @@ private fun PluginItems() {
         }
     }
 
-    // 桌面那两个槽 (方案 3.1): 一个槽一行 —— 它现在挂着谁, 点开可以换 / 清空 / 直接放到桌面。
-    // 同槽互斥那一件事在这里看得见: 换一只只重画, 另一只仍然留在上面那份列表里
+    // 桌面那几个槽里**由插件填内容**的那两个 (方案 3.1): 一个槽一行 —— 它现在挂着谁, 点开可以换 /
+    // 清空 / 直接放到桌面。同槽互斥那一件事在这里看得见: 换一只只重画, 另一只仍然留在上面那份列表里
+    //
+    // 对话槽不在这里 (2.7.8 批次 6): 它不由插件填内容, 于是"挂哪一只"对它没有意义 —— 它那一行在
+    // 「浮标」段末尾 (见 [BallItems])
     PlaceholderItems(
         stringResource(R.string.settings_widget_section) + " · " + stringResource(R.string.settings_widget_section_summary),
     )
-    WidgetSlot.ALL.forEach { slot ->
+    WidgetSlot.PLUGIN_FILLED.forEach { slot ->
         val holder = remember(revision) { WidgetSlots.holder(context, slot) }
         val holderName = holder?.let { id ->
             entries.firstOrNull { it.id == id }?.name ?: id
@@ -4690,6 +4693,7 @@ private fun voiceLabel(voice: Voice): String = "${voice.name} (${voice.locale.to
 @Composable
 private fun BallItems() {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     var on by remember { mutableStateOf(BallSpot.on(context)) }
     var permission by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var showing by remember { mutableStateOf(OverlayState.showing) }
@@ -4804,6 +4808,17 @@ private fun BallItems() {
         onCheckedChange = { wanted ->
             autoPeekNow = wanted
             BallSpot.setAutoPeek(context, wanted)
+        },
+    )
+    // 桌面对话组件那一行 (2.7.8 批次 6, 主人第 3 条): 它是**宿主槽里的第三个**, 但不挂插件 ——
+    // 立绘取当前浮标外观, 气泡取 $DSH_HOME/lw/desktop-chat.json, 所以这一行只有"放上桌面"这一半;
+    // "拿下"没有编程接口 (谁都不许替桌面移除一格), 那一半只能如实说: 长按桌面那一格
+    ArrowPreference(
+        title = stringResource(R.string.settings_widget_chat_row),
+        summary = stringResource(R.string.settings_widget_chat_summary),
+        onClick = {
+            haptic.contextClick()
+            Toast.makeText(context, WidgetPin.request(context, WidgetSlot.CHAT), Toast.LENGTH_LONG).show()
         },
     )
     // 拖球那条经验 (主人 2026-10-06 让写在这儿): 球贴在屏幕最左/最右时, 直接往中间拖会先经过系统的

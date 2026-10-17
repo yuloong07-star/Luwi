@@ -1,10 +1,12 @@
 package io.github.yuloong07star.luwi.plugin
 
 import io.github.yuloong07star.luwi.plugin.theme.BallTheme
+import io.github.yuloong07star.luwi.plugin.widget.WidgetSlot
 import io.github.yuloong07star.luwi.plugin.widget.WidgetSpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,6 +117,24 @@ class PluginV2Test {
                 ).jsonObject,
             )
         }
+    }
+
+    @Test
+    fun chatSlotIsNotForPlugins() {
+        // 2.7.8 批次 6: 对话那一格由应用自己画 (当前浮标立绘 + desktop-chat.json), 插件往里填不了
+        // 任何东西 —— 于是那一份 widget.json 要**当场拒**, 而不是装上了却什么都不显示
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            WidgetSpec.parse(
+                Json.parseToJsonElement(
+                    """{"slot":"chat","name":"想占对话格的插件","title":"x"}""",
+                ).jsonObject,
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("chat"))
+        // 而"挂哪一只插件"这件事对它没有意义: 它不在插件填的那一份名单里
+        assertFalse(WidgetSlot.pluginFilled(WidgetSlot.CHAT))
+        assertTrue(WidgetSlot.known(WidgetSlot.CHAT))
+        assertEquals(listOf(WidgetSlot.ANIM, WidgetSlot.IMAGE), WidgetSlot.PLUGIN_FILLED)
     }
 
     @Test

@@ -14,6 +14,7 @@ import io.github.yuloong07star.luwi.overlay.BallSpot
 import io.github.yuloong07star.luwi.overlay.OverlayService
 import io.github.yuloong07star.luwi.overlay.OverlayState
 import io.github.yuloong07star.luwi.plugin.theme.BallTheme
+import io.github.yuloong07star.luwi.plugin.widget.WidgetChat
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -361,6 +362,31 @@ internal object LwOverlay {
                 },
             )
         }
+    }
+
+    /**
+     * 桌面对话组件上那颗「说一句」(2.7.8 批次 6, D5 = 走法 A)
+     *
+     * 三件事按顺序**看清再动手**, 而不是点下去才发现少了什么:
+     *
+     * 1. 浮标权限没给 → 回 `permission` (那一格这时候指向的是"打开 Luwi", 见 `WidgetChat.sayIntent`,
+     *    所以这个分支基本不会走到; 它挡的是"权限在组装之后被改掉"那一档)
+     * 2. 开关位是走法 B (`WidgetChat.input == activity`) → 回 `activity`; 透明页这一档**还没写**
+     *    (批次 6 先只留开关位), 于是如实说"这一档还没有", 不含糊地当成走法 A 做了
+     * 3. 其余就是走法 A: 一条 `ACTION_CHANNEL` 交给浮标服务, 它把那块输入窗挂在右下角 ——
+     *    **不出 Activity**, 于是没有 Android 12+ 那条后台启动限制要绕, 也不新造任何协议
+     *
+     * @return 一句读数 (`overlay` / `activity` / `permission` / `failed`), 接收器把它记进日志
+     */
+    internal fun chatFromWidget(context: Context): String {
+        if (WidgetChat.input(context) == WidgetChat.INPUT_ACTIVITY) return "activity"
+        refusal(context)?.let { return "permission" }
+        val intent = Intent(context, OverlayService::class.java)
+            .setAction(OverlayService.ACTION_CHANNEL)
+        val started = runCatching { ContextCompat.startForegroundService(context, intent) }.isSuccess
+        if (!started) return "failed"
+        BallSpot.setOn(context, true)
+        return "overlay"
     }
 
     /**

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 对话组件那一格的底板 (2.7.8 批次 6): 半透明深色, 圆角, 一条细描边 —— 与浮标那块输入框同一个色系 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#B30C0F14" />
+    <corners android:radius="16dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#26FFFFFF" />
+</shape>

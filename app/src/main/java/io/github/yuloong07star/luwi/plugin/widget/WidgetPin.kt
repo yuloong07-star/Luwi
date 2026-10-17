@@ -37,6 +37,10 @@ internal object WidgetPin {
     }
 
     fun slotLabel(context: Context, slot: String): String = context.getString(
-        if (slot == WidgetSlot.ANIM) R.string.settings_widget_slot_anim_name else R.string.settings_widget_slot_image_name,
+        when (slot) {
+            WidgetSlot.ANIM -> R.string.settings_widget_slot_anim_name
+            WidgetSlot.CHAT -> R.string.settings_widget_slot_chat_name
+            else -> R.string.settings_widget_slot_image_name
+        },
     )
 }

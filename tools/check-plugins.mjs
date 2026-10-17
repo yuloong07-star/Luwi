@@ -523,6 +523,146 @@ check(
   [widgetPin.includes('requestPinAppWidget'), settings.includes('WidgetPin.request')],
   [true, true],
 )
+
+/* ── 七、桌面对话组件 (2.7.8 批次 6) ─────────────────────────────────────── */
+
+// 这一批里有几处**漂开了也不会当场报错**: 组件那一格没有自己的进程, 少一条清单声明它就不出现在
+// 组件选择器里 (而设置页那一行照样说"放上桌面"); 两侧那条 `desktop-chat.json` 的上限漂开之后,
+// 一侧写六条一侧只画三条 —— 看着像"丢了一句"。所以这几条逐字对
+const widgetSlotKt = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSlot.kt')
+const widgetChat = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetChat.kt')
+const chatReceivers = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSlotChat.kt')
+const chatFile = await read('app/src/main/java/io/github/yuloong07star/luwi/overlay/DesktopChatFile.kt')
+const chatLayout = await read('app/src/main/res/layout/lw_widget_slot_chat.xml')
+const chatProviderXml = await read('app/src/main/res/xml/lw_widget_slot_chat.xml')
+const chatBubbleUser = await read('app/src/main/res/layout/lw_widget_slot_chat_bubble_user.xml')
+const chatBubbleAssistant = await read('app/src/main/res/layout/lw_widget_slot_chat_bubble_assistant.xml')
+const widgetSpecKt = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSpec.kt')
+const slotReceivers = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSlotReceivers.kt')
+
+check(
+  '清单里声明了对话槽与那颗「说一句」的接收器',
+  [
+    manifest.includes('.plugin.widget.WidgetSlotChat'),
+    manifest.includes('.plugin.widget.WidgetChatActionReceiver'),
+    manifest.includes('@xml/lw_widget_slot_chat'),
+    manifest.includes('.plugin.widget.WidgetSlotAnim'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '对话槽那一格: 登记表 2×2 / 上下两块 / 两种气泡版式都在',
+  [
+    chatProviderXml.includes('android:initialLayout="@layout/lw_widget_slot_chat"'),
+    chatProviderXml.includes('android:targetCellWidth="2"'),
+    chatProviderXml.includes('android:targetCellHeight="2"'),
+    // 更新周期 0: 重画由应用与宿主那两条链触发, 不靠系统轮询
+    chatProviderXml.includes('android:updatePeriodMillis="0"'),
+    chatLayout.includes('@+id/lw_chat_bubbles'),
+    chatLayout.includes('@+id/lw_chat_flipper'),
+    chatLayout.includes('@+id/lw_chat_say'),
+    chatLayout.includes('@+id/lw_chat_empty'),
+    // 会动的那条唯一的做法: ViewFlipper + autoStart (setImageViewResource / AnimationDrawable 都不动)
+    chatLayout.includes('android:autoStart="true"'),
+    chatBubbleUser.includes('@drawable/lw_chat_bubble_user'),
+    chatBubbleAssistant.includes('@drawable/lw_chat_bubble_assistant'),
+    chatBubbleUser.includes('android:maxLines="2"'),
+    chatBubbleAssistant.includes('android:ellipsize="end"'),
+  ],
+  [true, true, true, true, true, true, true, true, true, true, true, true, true],
+)
+check(
+  '对话槽不挂插件: 它在 ALL 里, 但不在插件填的那一份名单里',
+  [
+    widgetSlotKt.includes('const val CHAT = "chat"'),
+    widgetSlotKt.includes('val ALL = listOf(ANIM, IMAGE, CHAT)'),
+    widgetSlotKt.includes('val PLUGIN_FILLED = listOf(ANIM, IMAGE)'),
+    // 设置页那几行只列插件填得的槽 (对话槽那一行在「浮标」段)
+    settings.includes('WidgetSlot.PLUGIN_FILLED.forEach'),
+    // 一份写 slot=chat 的 widget.json 当场拒
+    widgetSpecKt.includes('if (slot == WidgetSlot.CHAT)') && widgetSpecKt.includes('那一格由应用自己画'),
+    chatReceivers.includes('class WidgetSlotChat : WidgetSlotBase(WidgetSlot.CHAT)'),
+  ],
+  [true, true, true, true, true, true],
+)
+
+check(
+  '那份账两侧同一对数 (6 条 / 240 字), 而且两边都原子写',
+  [
+    chatFile.includes('const val MAX_LINES = 6'),
+    chatFile.includes('const val MAX_CHARS = 240'),
+    chatFile.includes('renameTo(target)'),
+    chatFile.includes('FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE'),
+    host.includes('const DESKTOP_CHAT_LINES = 6'),
+    host.includes('const DESKTOP_CHAT_CHARS = 240'),
+    host.includes("join(home, 'lw', 'desktop-chat.json')"),
+    host.includes('await rename(temporary, path)'),
+    // 两个来源都写: 应用写 user (从框里发出去那一句), 宿主写 assistant (一轮回答)
+    chatFile.includes('const val WHO_USER = "user"'),
+    host.includes("void writeDesktopChat('assistant', line)"),
+  ],
+  [true, true, true, true, true, true, true, true, true, true],
+)
+check(
+  '立绘取当前浮标外观 (与球同一个来源), 图走 content:// 而不是 binder',
+  [
+    widgetChat.includes('BallTheme.face(context, FACE_STATE)'),
+    widgetChat.includes('BallTheme.framesOf(context, FACE_STATE, spec)'),
+    widgetChat.includes('WidgetFramesProvider.themeFrameUri(FACE_STATE, it)'),
+    widgetChat.includes('setImageViewUri(R.id.lw_slot_frame_image, uri)'),
+    widgetProvider.includes('BallTheme.frameFile'),
+    widgetProvider.includes('segments.size == 3 && segments[0] == "theme"'),
+  ],
+  [true, true, true, true, true, true],
+)
+check(
+  '那颗「说一句」: 走法 A 是广播 (不出 Activity), 权限没给时如实退回打开应用',
+  [
+    chatReceivers.includes('LwOverlay.chatFromWidget(context)'),
+    widgetChat.includes('PendingIntent.getBroadcast('),
+    widgetChat.includes('Settings.canDrawOverlays(context)'),
+    // 走法 B 那一档只留开关位, 这一版不写透明页
+    widgetChat.includes('const val INPUT_ACTIVITY = "activity"'),
+  ],
+  [true, true, true, true],
+)
+check(
+  '立绘左下 / 「说一句」右下, 而点气泡或空白处什么都不做 (主人 2026-10-17 的两条口径)',
+  [
+    chatLayout.includes('android:id="@+id/lw_chat_flipper"'),
+    // 两块的位置: flipper 左下, say 右下 (换过来之后的样子)
+    /android:id="@\+id\/lw_chat_flipper"[\s\S]{0,400}?layout_gravity="bottom\|start"/.test(chatLayout),
+    /android:id="@\+id\/lw_chat_say"[\s\S]{0,300}?layout_gravity="bottom\|end"/.test(chatLayout),
+    // 只有那颗按钮挂了点击: 整格不再"一点就跳回应用"
+    widgetChat.includes('setOnClickPendingIntent(R.id.lw_chat_say'),
+    !widgetChat.includes('setOnClickPendingIntent(R.id.lw_chat_root'),
+  ],
+  [true, true, true, true, true],
+)
+check(
+  '立绘随格子等比变大 (正方形 + fitCenter, 不变形)',
+  [
+    widgetChat.includes('setViewLayoutWidth(R.id.lw_chat_flipper'),
+    widgetChat.includes('setViewLayoutHeight(R.id.lw_chat_flipper'),
+    widgetChat.includes('TypedValue.COMPLEX_UNIT_DIP'),
+    // 一道按宽、一道按高, 取小的那个: 两个方向于是永远是同一个数 (正方形)
+    widgetChat.includes('usableWidth * WIDTH_PERCENT / 100'),
+    widgetChat.includes('usableHeight * HEIGHT_PERCENT / 100'),
+    // 格子尺寸来自 AppWidgetManager 的 options, 而且拉大那一刻会重画
+    slotReceivers.includes('onAppWidgetOptionsChanged'),
+    widgetHost.includes('OPTION_APPWIDGET_MIN_WIDTH'),
+    widgetHost.includes('OPTION_APPWIDGET_MAX_HEIGHT'),
+  ],
+  [true, true, true, true, true, true, true, true],
+)
+check(
+  '中英 strings 都齐 (组件名 / 那一行 / 组件上的两句)',
+  ['settings_widget_slot_chat_name', 'settings_widget_slot_chat_desc', 'settings_widget_chat_row',
+    'settings_widget_chat_summary', 'widget_chat_say', 'widget_chat_empty'].map(
+    (key) => [stringsEn.includes(`name="${key}"`), stringsZh.includes(`name="${key}"`)],
+  ),
+  Array.from({ length: 6 }, () => [true, true]),
+)
 check(
   'art / inline 两域在 Kotlin 那一份清单里 (dex 当 inline 的别名收)',
   [

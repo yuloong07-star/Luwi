@@ -18,7 +18,26 @@ import io.github.yuloong07star.luwi.plugin.PluginManager
 open class WidgetSlotBase internal constructor(private val slot: String) : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-        ids.forEach { manager.updateAppWidget(it, WidgetHost.views(context, slot)) }
+        ids.forEach { id ->
+            val (width, height) = WidgetHost.cellSize(context, id)
+            manager.updateAppWidget(id, WidgetHost.views(context, slot, width, height))
+        }
+    }
+
+    /**
+     * 这一格被拉大 / 拉小了 (2.7.8 批次 6)
+     *
+     * 对话槽的立绘要跟着格子等比变大 (`WidgetChat.Face`), 而"现在多大"只在这一次回调的参数里 ——
+     * 不接这一条的话, 拉大之后人物还是原尺寸, 要等下一次别的原因重画才跟上
+     */
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        manager: AppWidgetManager,
+        id: Int,
+        newOptions: Bundle,
+    ) {
+        val (width, height) = WidgetHost.cellSize(context, id)
+        manager.updateAppWidget(id, WidgetHost.views(context, slot, width, height))
     }
 
     override fun onReceive(context: Context, intent: Intent) {

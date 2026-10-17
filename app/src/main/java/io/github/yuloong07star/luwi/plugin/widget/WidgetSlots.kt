@@ -48,6 +48,9 @@ internal object WidgetSlots {
 
     /** 挂上 / 清掉一个槽 (id = null 就是清掉); 回一句给人看的话 */
     fun assign(context: Context, slot: String, id: String?): String {
+        // 对话槽不由插件填 (见 [WidgetSlot.PLUGIN_FILLED]), 于是"挂哪一只"对它没有意义 ——
+        // 如实回一句, 而不是写一份谁都不读的映射进去
+        if (!WidgetSlot.pluginFilled(slot)) return "${slotName(slot)}不由插件填内容, 换不了"
         val current = read(context)
         if (current.get(slot) == id) return "这个槽上没有变化"
         File(PluginStore.root(context), FILE).writeText(json.encodeToString(current.with(slot, id)) + "\n")
@@ -75,6 +78,7 @@ internal object WidgetSlots {
     fun slotName(slot: String): String = when (slot) {
         WidgetSlot.ANIM -> "动画组件"
         WidgetSlot.IMAGE -> "图文组件"
+        WidgetSlot.CHAT -> "对话组件"
         else -> slot
     }
 }

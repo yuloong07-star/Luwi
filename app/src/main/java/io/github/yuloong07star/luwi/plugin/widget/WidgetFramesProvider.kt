@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import io.github.yuloong07star.luwi.plugin.PluginPaths
 import io.github.yuloong07star.luwi.plugin.PluginStore
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -29,10 +30,36 @@ class WidgetFramesProvider : ContentProvider() {
         val context = context ?: throw FileNotFoundException("no context")
         val file = when {
             segments.size == 4 && segments[0] == "frame" -> frame(context, segments[1], segments[2], segments[3])
+            segments.size == 3 && segments[0] == "theme" -> themeFrame(context, segments[1], segments[2])
+            segments.size == 2 && segments[0] == "theme" -> themeFace(context, segments[1])
             segments.size == 2 && segments[0] == "image" -> image(context, segments[1])
             else -> throw FileNotFoundException("refusing $uri")
         }
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+
+    /**
+     * 浮标外观那一套的某一帧 (2.7.8 批次 6, 对话槽那块立绘)
+     *
+     * 对话槽的立绘**不是插件 widget 的帧**, 而是主人挑的那套外观 (`theme/ball.json` 的 `frames`
+     * 那一段) —— 于是它要单独一条路由, 解路径仍然走 `BallTheme` (它自己再兜一次 [PluginPaths])
+     */
+    private fun themeFrame(context: android.content.Context, state: String, name: String): File {
+        if (!STATE_RULE.matches(state) || !FRAME_RULE.matches(name)) {
+            throw FileNotFoundException("refusing theme frame $state/$name")
+        }
+        val file = BallTheme.frameFile(context, state, name)
+            ?: throw FileNotFoundException("nothing at theme/$state/$name")
+        return file
+    }
+
+    /** 浮标外观那一套的静态那一张 (`states.<state>`) */
+    private fun themeFace(context: android.content.Context, state: String): File {
+        if (!STATE_RULE.matches(state)) throw FileNotFoundException("refusing theme face $state")
+        val file = BallTheme.face(context, state)?.file
+            ?: throw FileNotFoundException("nothing at theme/$state")
+        if (!file.isFile) throw FileNotFoundException("nothing at $file")
+        return file
     }
 
     private fun frame(context: android.content.Context, id: String, set: String, name: String): File {
@@ -105,9 +132,19 @@ class WidgetFramesProvider : ContentProvider() {
         private val SET_RULE = Regex("^[a-z0-9][a-z0-9-]{0,31}$")
         private val FRAME_RULE = Regex("^frame-\\d{2,4}\\.png$")
 
+        /** 浮标外观那五个状态名 (`idle` / `listening` / `thinking` / `speaking` / `failed`) */
+        private val STATE_RULE = Regex("^[a-z]{2,16}$")
+
         fun uri(id: String, set: String, frame: Int): Uri =
             Uri.parse("content://$AUTHORITY/frame/$id/$set/frame-%02d.png".format(frame))
 
         fun imageUri(id: String): Uri = Uri.parse("content://$AUTHORITY/image/$id")
+
+        /** 当前浮标外观里 `state` 那一张静态图 */
+        fun themeFaceUri(state: String): Uri = Uri.parse("content://$AUTHORITY/theme/$state")
+
+        /** 当前浮标外观里 `state` 那一串帧的第 [frame] 张 */
+        fun themeFrameUri(state: String, frame: Int): Uri =
+            Uri.parse("content://$AUTHORITY/theme/$state/frame-%02d.png".format(frame))
     }
 }

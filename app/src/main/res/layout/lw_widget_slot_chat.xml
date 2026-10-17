@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  宿主的第三个槽: 桌面对话组件 (2.7.8 批次 6)
+
+  版式照 `2.3` 定下的那一份, 而**两块的位置在 2026-10-17 由主人对换过一次**: 立绘在**左下**, 那颗
+  「说一句」在**右下**, 气泡区仍在顶部 (改成 ViewFlipper 帧序列, 与动画槽同一条路 ——
+  `setImageViewResource` 与 `AnimationDrawable` 在桌面上都不动)
+
+  **气泡是 `addView` 逐条加进去的** (每条的版式见 `lw_widget_slot_chat_bubble_*.xml`): RemoteViews 里
+  不能在预置布局里写死"最多几条", 而这一格本来就只显示最近三条
+
+  立绘那一块**故意用 `fitCenter`**: 浮标外观有两档 `fit` (`cover` 球型与 `contain` 全身立绘),
+  而 RemoteViews 不能给 ImageView 换 scaleType —— 方窗里按比例装进去对两档都是"看得见整个人"
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/lw_chat_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/lw_chat_panel"
+    android:padding="8dp">
+
+    <LinearLayout
+        android:id="@+id/lw_chat_bubbles"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:orientation="vertical" />
+
+    <TextView
+        android:id="@+id/lw_chat_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:maxLines="3"
+        android:textColor="#99EDEDED"
+        android:textSize="11sp" />
+
+    <TextView
+        android:id="@+id/lw_chat_say"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:background="@drawable/lw_chat_say"
+        android:paddingStart="10dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="4dp"
+        android:text="@string/widget_chat_say"
+        android:textColor="#FFEDEDED"
+        android:textSize="11sp" />
+
+    <ViewFlipper
+        android:id="@+id/lw_chat_flipper"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_gravity="bottom|start"
+        android:autoStart="true"
+        android:flipInterval="100" />
+
+</FrameLayout>

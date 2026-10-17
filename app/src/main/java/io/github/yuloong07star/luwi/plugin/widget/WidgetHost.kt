@@ -10,6 +10,7 @@ import android.util.Log
 import android.widget.RemoteViews
 import io.github.yuloong07star.luwi.MainActivity
 import io.github.yuloong07star.luwi.R
+import io.github.yuloong07star.luwi.overlay.DesktopChatFile
 import io.github.yuloong07star.luwi.plugin.PluginPaths
 import io.github.yuloong07star.luwi.plugin.PluginStore
 import java.io.File
@@ -60,7 +61,18 @@ internal object WidgetHost {
     }
 
     /** 一次组装: 谁挂在这个槽上、它现在长什么样 */
-    fun views(context: Context, slot: String): RemoteViews {
+    fun views(context: Context, slot: String): RemoteViews = views(context, slot, 0, 0)
+
+    /**
+     * 一次组装, 而**这一格多大**也一起给下去 (2.7.8 批次 6)
+     *
+     * 只有对话槽用它 (立绘要随格子等比放大, 见 `WidgetChat.Face`); 另外两个槽的版式与尺寸无关,
+     * 多传两个数不用管
+     */
+    fun views(context: Context, slot: String, cellWidthDp: Int, cellHeightDp: Int): RemoteViews {
+        // 对话槽**不问"挂着谁"**: 内容一半是当前浮标外观、一半是那份 desktop-chat.json, 两个都不在
+        // 插件目录里 (见 WidgetChat) —— 于是它排在任何"插件还在不在"的判据之前
+        if (slot == WidgetSlot.CHAT) return WidgetChat.views(context, cellWidthDp, cellHeightDp)
         val holder = WidgetSlots.holder(context, slot)
         val manifest = holder?.let { PluginStore.manifest(context, it) }
         val directory = holder?.let { PluginStore.packageDir(context, it) }
@@ -80,11 +92,44 @@ internal object WidgetHost {
         }
     }
 
-    /** 重画一个槽现在挂着的每一格 */
+    /**
+     * 这一格现在多大 (dp); 读不到就是 0 对 0
+     *
+     * **竖屏用 `MIN_WIDTH` 与 `MAX_HEIGHT`** 是 Android 那份 options 的老口径 (横屏时反过来), 而桌面
+     * 只在 resize 之后才写它 —— 读不到不猜, 让调用方落回缺省那一个数
+     */
+    internal fun cellSize(context: Context, id: Int): Pair<Int, Int> {
+        val manager = AppWidgetManager.getInstance(context) ?: return 0 to 0
+        val options = runCatching { manager.getAppWidgetOptions(id) }.getOrNull() ?: return 0 to 0
+        val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
+        val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)
+        return width to height
+    }
+
+    /** 重画一个槽现在挂着的每一格 (每一格按**它自己**的大小组装: 拉大之后立绘跟着变大) */
     fun refresh(context: Context, slot: String) {
         val manager = AppWidgetManager.getInstance(context) ?: return
         val ids = manager.getAppWidgetIds(ComponentName(context, receiverOf(slot)))
-        ids.forEach { manager.updateAppWidget(it, views(context, slot)) }
+        ids.forEach { id ->
+            val (width, height) = cellSize(context, id)
+            manager.updateAppWidget(id, views(context, slot, width, height))
+        }
+    }
+
+    /**
+     * 重画对话那一格, 顺手把"那份文件一变就重画"挂上
+     *
+     * 三个地方走它: 组件每一趟 `onUpdate`、宿主写完 `assistant` 那一笔之后的 inotify 回调、
+     * 以及换了浮标外观那一刻 (那一格的立绘就是"当前那一套")
+     */
+    fun refreshChat(context: Context) {
+        DesktopChatFile.ensure(context) { refreshChatNow(context) }
+        refreshChatNow(context)
+    }
+
+    /** 真重画一次 (inotify 回调里直接用它, 免得每唤一次都再挂一遍 watcher) */
+    private fun refreshChatNow(context: Context) {
+        runCatching { refresh(context, WidgetSlot.CHAT) }
     }
 
     /** 全部槽重画一遍 (装 / 卸 / 开机 / 插件推内容之后都走它) */
@@ -101,6 +146,7 @@ internal object WidgetHost {
 
     fun receiverOf(slot: String): Class<*> = when (slot) {
         WidgetSlot.ANIM -> WidgetSlotAnim::class.java
+        WidgetSlot.CHAT -> WidgetSlotChat::class.java
         else -> WidgetSlotImage::class.java
     }
 
@@ -266,7 +312,7 @@ internal object WidgetHost {
      * 找"谁是桌面"这一步需要清单里那段 `<queries>` (`MAIN` + `HOME`): targetSdk 33 起不声明
      * 就看不见别的包, 而那是一种静默失败
      */
-    private fun grantToHomes(context: Context, uris: List<Uri>) {
+    internal fun grantToHomes(context: Context, uris: List<Uri>) {
         if (uris.isEmpty()) return
         val homes = try {
             @Suppress("DEPRECATION")

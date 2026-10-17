@@ -61,7 +61,18 @@ internal data class WidgetSpec(
         fun parse(raw: JsonObject, where: String = "widget/widget.json"): WidgetSpec {
             val slot = raw.string("slot")
             if (!WidgetSlot.known(slot)) {
-                throw IllegalArgumentException("$where 的 slot 只能是 ${WidgetSlot.ALL.joinToString(" / ")}, 这一份写的是 \"$slot\"")
+                throw IllegalArgumentException(
+                    "$where 的 slot 只能是 ${WidgetSlot.PLUGIN_FILLED.joinToString(" / ")}, 这一份写的是 \"$slot\"",
+                )
+            }
+            // chat 那一格**不收插件内容** (2.7.8 批次 6): 立绘取当前浮标外观, 气泡取那份
+            // `lw/desktop-chat.json`, 而这两样都不在插件目录里 —— 收下一份 widget.json 也无处可画,
+            // 于是当场说清楚, 而不是留一个"装上了但什么都不显示"的槽
+            if (slot == WidgetSlot.CHAT) {
+                throw IllegalArgumentException(
+                    "$where 的 slot 不能是 chat: 那一格由应用自己画 (立绘取当前浮标外观, 气泡取" +
+                        " lw/desktop-chat.json), 插件不往这一格填内容, 能填的是 ${WidgetSlot.PLUGIN_FILLED.joinToString(" / ")}",
+                )
             }
             val name = raw.string("name")
             if (name.length > 40) throw IllegalArgumentException("$where 的 name 最多 40 个字, 这一份是 ${name.length} 个")
@@ -120,6 +131,7 @@ internal data class WidgetSpec(
             if (slot == WidgetSlot.ANIM) {
                 if (frames == null) throw IllegalArgumentException("$where 是 anim 槽, frames 那一段是必填的")
             } else {
+                // 走到这里的只剩 image 槽 (chat 上面已经拒了)
                 if (frames != null || sets.isNotEmpty()) {
                     throw IllegalArgumentException("$where 是 image 槽, frames / sets 那两段是 anim 槽用的")
                 }

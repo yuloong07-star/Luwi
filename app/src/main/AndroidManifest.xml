@@ -309,6 +309,25 @@
                 android:resource="@xml/lw_widget_slot_image" />
         </receiver>
 
+        <!-- 对话槽 (2.7.8 批次 6): 右下角立绘 + 最近几句气泡 + 一颗「说一句」。它**不挂插件** ——
+             立绘取当前浮标外观, 气泡取 $DSH_HOME/lw/desktop-chat.json, 两个来源都不在插件目录里 -->
+        <receiver
+            android:name=".plugin.widget.WidgetSlotChat"
+            android:exported="false"
+            android:label="@string/settings_widget_slot_chat_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/lw_widget_slot_chat" />
+        </receiver>
+
+        <!-- 对话组件上那颗「说一句」: 走法 A —— 广播给浮标服务, 把右下角那块输入窗挂出来 (不出 Activity) -->
+        <receiver
+            android:name=".plugin.widget.WidgetChatActionReceiver"
+            android:exported="false" />
+
         <!-- 图文槽那两颗按钮里 action: "tool" 那一支: 从桌面点出来, 调插件自己的一条工具 -->
         <receiver
             android:name=".plugin.widget.WidgetActionReceiver"
