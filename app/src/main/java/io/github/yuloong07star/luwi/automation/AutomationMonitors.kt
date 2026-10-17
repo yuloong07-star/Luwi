@@ -100,19 +100,34 @@ internal object AutomationMonitors {
             foreground = null
         }
         // 解锁: 系统广播, 动态注册即可 (清单里声明的那种要 export, 这里反而更省)
+        // 注意 registerReceiver 的返回值是"粘性 Intent", 不是"成没成功" —— 非粘性广播成功时也回 null,
+        // 所以判据只能是"没抛" (2026-10-17 模拟器上量到的: 按返回值判会把一条注册好的接收器丢掉)
         if ("unlock" in wanted) {
             if (unlock == null) {
                 val receiver = object : BroadcastReceiver() {
                     override fun onReceive(from: Context, intent: Intent?) {
+                        Log.i(TAG, "unlock receiver got ${intent?.action}")
                         if (intent?.action == Intent.ACTION_USER_PRESENT) {
                             AutomationEngine.onUnlock(context)
                         }
                     }
                 }
                 val registered = runCatching {
-                    context.registerReceiver(receiver, IntentFilter(Intent.ACTION_USER_PRESENT))
-                }.getOrNull()
-                if (registered != null) unlock = receiver
+                    // EXPORTED 不是"让谁都能发": `USER_PRESENT` 是受保护的系统广播, 普通应用发不出来;
+                    // 而 NOT_EXPORTED 在 2026-10-17 那台 API 36 模拟器上收不到它 (注册成功、系统也确实
+                    // 发了, 只有系统应用收到了) —— 那一条量出来的结论定在这里
+                    context.registerReceiver(
+                        receiver,
+                        IntentFilter(Intent.ACTION_USER_PRESENT),
+                        Context.RECEIVER_EXPORTED,
+                    )
+                }.isSuccess
+                if (registered) {
+                    unlock = receiver
+                    Log.i(TAG, "unlock receiver registered")
+                } else {
+                    Log.w(TAG, "could not register the unlock receiver")
+                }
             }
         } else {
             unlock?.let { receiver -> runCatching { context.unregisterReceiver(receiver) } }

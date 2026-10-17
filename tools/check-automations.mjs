@@ -382,12 +382,28 @@ check('状态类重算用缓存, 不另开轮询', [
 
 check('两个读数源: 解锁广播 + 窗口事件链', [
   /Intent\.ACTION_USER_PRESENT/.test(monitors),
-  /registerReceiver\(receiver, IntentFilter\(Intent\.ACTION_USER_PRESENT\)\)/.test(monitors),
+  /registerReceiver\([\s\S]{0,160}ACTION_USER_PRESENT[\s\S]{0,160}\)/.test(monitors),
   /unregisterReceiver\(receiver\)/.test(monitors),
   /LwAccessibility\.watchWindows \{ _, _ -> AutomationEngine\.onInteraction\(context\) \}/.test(monitors),
   /fun onUnlock\(context: Context\)/.test(engine),
   /fun onInteraction\(context: Context\)/.test(engine),
 ], [true, true, true, true, true, true])
+
+check('注册成功与否按"没抛"判, 不看返回值 (它返回的是粘性 Intent, 非粘性也回 null)', [
+  /\.isSuccess/.test(monitors),
+  /if \(registered\)/.test(monitors),
+  !/registered != null/.test(monitors),
+], [true, true, true])
+
+check('解锁那条按 EXPORTED 注册 (NOT_EXPORTED 在 API 36 上收不到 USER_PRESENT)', [
+  /Context\.RECEIVER_EXPORTED/.test(monitors),
+  !/RECEIVER_NOT_EXPORTED/.test(monitors),
+], [true, true])
+
+check('监测器每拍再拨一次 (无障碍是异步绑上的, 只拨一次会把动手那条永远挂空)', [
+  /private fun heartbeat\(context: Context\)/.test(engine),
+  /AutomationMonitors\.apply\(context, requiredMonitors\(settings\), paused\)/.test(engine),
+], [true, true])
 
 check('firstOfDay 与"最近 N 分钟在动"都能算', [
   /firstUnlockTodayAt/.test(engine),

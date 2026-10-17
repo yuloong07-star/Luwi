@@ -339,9 +339,11 @@ internal object AutomationEngine {
         val wasPaused = paused
         refreshPowerSave(context)
         if (wasPaused != paused) {
-            AutomationMonitors.apply(context, requiredMonitors(settings), paused)
             AutomationMonitors.armTimeAlarm(context, nextAlarm())
         }
+        // 监测器每一拍再拨一次: 无障碍那条是异步绑上的, 起来那一拍常常还没绑好, 只拨一次的话
+        // 窗口事件与「动手」会一直挂不上 (2026-10-17 模拟器上量到的); apply 是幂等的, 已挂上的不重挂
+        AutomationMonitors.apply(context, requiredMonitors(settings), paused)
         val now = System.currentTimeMillis()
         val key = AutomationRule.dayKey(now)
         if (key != todayKey) {
@@ -418,6 +420,7 @@ internal object AutomationEngine {
         } else if (firstUnlockTodayAt == 0L) {
             firstUnlockTodayAt = now
         }
+        Log.i(TAG, "screen unlocked: first=${AutomationRule.formatMoment(firstUnlockTodayAt, timeZone())}")
         if (rules.none { it.enabled && it.involves("unlock") }) return
         worker.execute {
             runCatching { evaluate(application, Trigger("unlock")) }.onFailure { warn("unlock", it) }
