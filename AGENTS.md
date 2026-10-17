@@ -921,13 +921,25 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 
 **提交时直接跳过签名, 不要为这个去解锁 key**: 全局 git config 开了 `commit.gpgsign` / `tag.gpgsign` 且 `gpg.format=ssh`, 用的 key 带 passphrase, 而开发机上没有 ssh-agent, 所以非交互提交必然失败; 本仓库已经在本地 config 里关掉了 (`git config commit.gpgsign false` / `tag.gpgsign false`), **新克隆要再跑一次, 或者单次用 `git commit --no-gpg-sign`**
 
+**装机就走 `tools/lw-install.ps1` 一条命令, 别手工推** (2026-10-17 重写成"一键"): 它的顺序是
+**流式安装 → 失败才退到"推上去 + `pm install -i com.android.packageinstaller -t`"** —— HyperOS 上
+`pm install` 会被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 挡掉 (22041216C /
+OS2.0.12.0 实测), 而 `adb install` 与带 `-i` 的 pm 安装之一能过, 两条都不通才提示去开发者选项开
+「USB 安装」。装完它连着一口气把无障碍与通知使用权写回去, 然后**拉起应用并等 `dsh web: http://…`
+那一行** (host 树是首启解压的, 不拉起就只是"装了个壳"), 最后打验收读数与设备上的 versionName。
+`-Serial` 不填时**优先真机**, 只有模拟器在线才用模拟器; `-Build` 会先跑 `dev.ps1 build`
+
+**看到 APK 体积突然变大, 先怀疑"旧的还没删"**: 2026-10-17 一次 `assembleDebug` 出了 **344 MB**
+(正常 232 MB), `tools/apk-bytes.py` 一量就是上一条那种空洞 (旧 apk 还在时新包被追加写进去)。
+先 `Remove-Item app\build\outputs\apk\debug\app-debug.apk` 再 build 就回到正常体积
+
 ### 常用命令
 
 | 动作 | 命令 |
 | :-- | :-- |
 | 快速编译检查 | `.\gradlew.bat :app:compileDebugKotlin` |
 | 出 APK (**提交前必跑**) | `.\gradlew.bat :app:assembleDebug` |
-| 装到设备 | `.\gradlew.bat :app:installDebug` |
+| 装到设备 | `pwsh -File tools\lw-install.ps1` (**一键**: 自己挑设备 / 装机 / 无障碍与通知使用权回写 / 拉起应用等 host 就绪) |
 | 看当前引擎解析出的版本 | `.\gradlew.bat :app:dependencies --configuration debugRuntimeClasspath` |
 | 拉日志 | `adb logcat --pid=$(adb shell pidof -s io.github.yuloong07star.luwi)` |
 

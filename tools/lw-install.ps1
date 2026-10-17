@@ -1,30 +1,39 @@
-# Luwi 装机: 装 APK, 顺手把能给的权限给掉
+# Luwi 一键装机: 装 APK → 写回无障碍与通知使用权 → 拉起应用等 host 就绪
 #
-# 从真机上手工做这件事有两个坑, 这个脚本就是为了绕开它们:
+# 从真机上手工做这件事有几个坑, 这个脚本就是为了绕开它们:
 #
-#   1. **必须带 `-i`**: 不带 installer 身份的普通 `install -r` 会把 installerPackageName 打回
-#      null, 而 Android 13 起 installerPackageName 为 null 的应用不许开无障碍 (中间隔着
-#      ACCESS_RESTRICTED_SETTINGS 那道 app op)
+#   1. **必须带 `-i`**: 不带 installer 身份的安装会把 installerPackageName 打回 null, 而 Android 13
+#      起 installerPackageName 为 null 的应用不许开无障碍 (中间隔着 ACCESS_RESTRICTED_SETTINGS 那道 app op)
 #   2. **重装会把无障碍配置清掉**: 装完要重新把我们的组件写回 enabled_accessibility_services,
 #      **而且要读出来改** (设备上还有别人的无障碍服务)。vivo 那台机器上还多一条: secure settings
 #      的写入只在重装之后很短的一段时间里被接受, 所以"装"与"写回"要连着做, 中间不要插别的事
+#   3. **HyperOS 上 `pm install` 会被挡, `adb install` 能过** (2026-10-17 在 22041216C / OS2.0.12.0
+#      上实测: 推上去再 `pm install -r` 一律 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by
+#      user`, 而 `adb -s <串> install -r` 的流式安装直接 Success)。所以这里**先试流式**, 不行才退
+#      回"推上去就地装"那条老路
+#   4. **装完要拉起一次应用**: host 树是首启解压的, 不拉起来, 设备上只有 2.7.x 的壳而没有 host
 #
 # 用法:
-#   pwsh -File tools\lw-install.ps1                                  # 默认机型与 APK, 装完写回无障碍
-#   pwsh -File tools\lw-install.ps1 -Serial emulator-5554            # 模拟器
-#   pwsh -File tools\lw-install.ps1 -Perms                           # 顺带批量授权 (见下)
-#   pwsh -File tools\lw-install.ps1 -SkipInstall                     # 只重跑权限与无障碍那几步
+#   pwsh -File tools/lw-install.ps1                       # 一键: 自动挑设备 (优先真机), 装完拉起等就绪
+#   pwsh -File tools/lw-install.ps1 -Build                # 先出包再装 (等价于 dev.ps1 build + install)
+#   pwsh -File tools/lw-install.ps1 -Serial emulator-5554 # 点名设备
+#   pwsh -File tools/lw-install.ps1 -Perms                # 顺带批量授权 (见下)
+#   pwsh -File tools/lw-install.ps1 -SkipInstall          # 只重跑权限与无障碍那几步
+#   pwsh -File tools/lw-install.ps1 -NoLaunch             # 装完不拉起 (调试用)
 #
 # 权限那一步给的是两类东西, 都只能从 adb 给:
 #   - 运行时权限 (`pm grant`): 相机 / 定位 / 媒体读取 / 蓝牙 / 麦克风 / 日历
 #   - 特殊访问 (`appops set`): 修改系统设置 / 使用情况访问 / 悬浮窗 / 忽略电池优化
 # **失败不报错**: 有的 ROM 不认某条 op, 有的权限在这一版里本来就没声明, 所以逐条打印结果
 param(
-    [string]$Serial = '10CEB40568000ZB',
+    [string]$Serial = '',
     [string]$Apk = "$PSScriptRoot\..\app\build\outputs\apk\debug\app-debug.apk",
     [string]$Package = 'io.github.yuloong07star.luwi',
     [switch]$Perms,
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [switch]$Build,
+    [switch]$NoLaunch,
+    [int]$WaitSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,38 +47,94 @@ function Adb {
     return ($output | Out-String).Trim()
 }
 
-# 设备必须在, 而且必须是 device 状态 (unauthorized 会在这里就停下, 而不是等到 install 才失败)
-$state = Adb get-state
-if ($state -ne 'device') { throw "device $Serial is $state, not device" }
-Write-Host "device $Serial is up" -ForegroundColor Green
+# 在线设备 (只要状态是 device 的): 输出一串序列号
+function Get-OnlineDevices {
+    $lines = & $adb devices 2>&1
+    return @($lines | Where-Object { $_ -match '\sdevice$' } | ForEach-Object { ($_ -split '\s+')[0] })
+}
 
-# 装 : 带 installer 身份, 允许测试包, 覆盖安装
+# 设备怎么挑 (不填 -Serial 时): 真机优先, 只有模拟器就用模拟器
+#
+# 为什么不是"唯一在线才算": 开发机上模拟器常年开着, 于是每次装真机都要多点一个 -Serial ——
+# 一键那条路必须自己挑对
+if (-not $Serial) {
+    if ($env:ANDROID_SERIAL) {
+        $Serial = $env:ANDROID_SERIAL
+    } else {
+        $online = @(Get-OnlineDevices)
+        if ($online.Count -eq 0) {
+            throw "没有设备在线: 先 adb connect <手机> 或用 dev.ps1 emu 起模拟器"
+        }
+        if ($online.Count -eq 1) {
+            $Serial = $online[0]
+        } else {
+            $phones = @($online | Where-Object { $_ -notmatch '^emulator-' })
+            if ($phones.Count -eq 1) {
+                $Serial = $phones[0]
+            } else {
+                throw "有 $($online.Count) 台设备在线 ($($online -join ', ')): 用 -Serial 指定, 或设 `$env:ANDROID_SERIAL"
+            }
+        }
+    }
+}
+
+# 设备必须在, 而且必须是 device 状态 (unauthorized 会在这里就停下, 而不是等到 install 才失败)
+$state = (& $adb -s $Serial get-state 2>&1 | Out-String).Trim()
+if ($state -ne 'device') { throw "device $Serial is $state, not device" }
+$named = (& $adb -s $Serial shell getprop ro.product.model 2>&1 | Out-String).Trim()
+Write-Host "device $Serial is up ($named)" -ForegroundColor Green
+
+# 要出包就先出包: `-Build` 走 dev.ps1 (它会激活环境并把日志落进 logs\build)
+if ($Build) {
+    Write-Host "building first (dev.ps1 build) ..." -ForegroundColor Cyan
+    & pwsh -NoProfile -File 'D:\apk\dev.ps1' build -Name "install-$(Get-Date -Format 'HHmm')" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "the build failed (see logs\build)" }
+}
+
+if (-not (Test-Path $Apk)) { throw "no APK at ${Apk}: 先跑 dev.ps1 build 或加 -Build" }
+$full = (Resolve-Path $Apk).Path
+$apkAge = [int]((Get-Date) - (Get-Item $full).LastWriteTime).TotalMinutes
+Write-Host "APK $([math]::Round((Get-Item $full).Length / 1MB, 1)) MB, built $apkAge min ago" -ForegroundColor Cyan
+
+# 装 : 两条路, 先流式 (HyperOS 只认这一条), 再退"推上去就地装"
 $component = "$Package/$Package.channel.LwAccessibility"
 $listener = "$Package/$Package.channel.LwNotificationListener"
 $wrote = $false
 if (-not $SkipInstall) {
-    # **先 push 再本地装**: 351 MB 的流式安装要几十秒, 而 `pm install` 在设备上就地装只要几秒。
-    # 所以 APK 先送到 /data/local/tmp, 之后"装 + 写回"在同一次 adb shell 里连着一口气做完,
-    # 中间不插任何往返
-    $remote = '/data/local/tmp/lw-install.apk'
-    # 路径要先解析出来再 push: 上一轮改这段时把这一句弄丢了, 于是 push 收到空路径、装了个寂寞
-    $full = (Resolve-Path $Apk).Path
-    Write-Host "pushing $full" -ForegroundColor Cyan
-    $pushed = (& $adb -s $Serial push $full $remote 2>&1 | Out-String).Trim()
-    if ($pushed -notmatch '1 file pushed') { throw "push failed: $pushed" }
-
-    $component = "$Package/$Package.channel.LwAccessibility"
-    $pkg = $Package
     # 判"到底装上了没有"的基准: 设备现在记的 lastUpdateTime。装完它必须变新, 否则就是没装成功 ——
     # `pm install` 失败时会把异常栈打到 stderr, 只匹配 "Failure" 会漏掉 (实测真机上一次就是漏了,
     # 脚本还报了成功)
-    $before = (& $adb -s $Serial shell "dumpsys package $pkg | grep lastUpdateTime" 2>&1 | Out-String).Trim()
+    $before = (& $adb -s $Serial shell "dumpsys package $Package | grep lastUpdateTime" 2>&1 | Out-String).Trim()
 
-    # 两条授权都在这一个 shell 里写完: 无障碍与通知使用权都是 `Settings.Secure` 里的一条名单,
-    # 都**读出来改** (设备上还有别人的服务/监听)。无障碍那一条写进去还可能被当场摘掉, 见下面
-    # 「验收」那一段 —— 所以"写完"与"留在名单里"是两件事
+    Write-Host "installing (streamed, with the package-installer identity)" -ForegroundColor Cyan
+    $streamed = (& $adb -s $Serial install -r -t -i com.android.packageinstaller $full 2>&1 | Out-String).Trim()
+    $okInstall = $streamed -match 'Success'
+    if (-not $okInstall) {
+        Write-Host "  streamed install did not go through: $($streamed -split "`n" | Select-Object -Last 1)" -ForegroundColor Yellow
+        # 次选: 先 push 到设备上再就地装 (大包在慢链路上更快, 而且有些 ROM 只认这一条)
+        $remote = '/data/local/tmp/lw-install.apk'
+        Write-Host "  falling back to: push + pm install" -ForegroundColor Yellow
+        $pushed = (& $adb -s $Serial push $full $remote 2>&1 | Out-String).Trim()
+        if ($pushed -match '1 file pushed') {
+            $inPlace = (& $adb -s $Serial shell "pm install -r -i com.android.packageinstaller -t $remote" 2>&1 | Out-String).Trim()
+            Write-Host "  $inPlace"
+            $okInstall = $inPlace -match 'Success'
+            & $adb -s $Serial shell "rm -f $remote" | Out-Null
+        } else {
+            Write-Host "  push failed: $pushed" -ForegroundColor Red
+        }
+    }
+    if (-not $okInstall) {
+        Write-Host ""
+        Write-Host "装不进去。HyperOS / MIUI 上最常见的一条是开发者选项里的「USB 安装」没开:" -ForegroundColor Red
+        Write-Host "  设置 -> 更多设置 -> 开发者选项 -> 「USB 安装」(允许通过 USB 安装应用)" -ForegroundColor Red
+        Write-Host "  那个开关有时还要求插着 SIM 且登录小米帐号; 开完再跑一次本脚本即可" -ForegroundColor Red
+        exit 2
+    }
+    Write-Host "installed" -ForegroundColor Green
+
+    # 装完立刻把两条授权写回去 (vivo 上那个写入窗口就在装完这一会儿, 中间别插别的事)
     $script = @"
-pm install -r -i com.android.packageinstaller -t $remote 2>&1 | tail -3
 cur=`$(settings get secure enabled_accessibility_services)
 case "`$cur" in
   *"$component"*) echo "ACCESSIBILITY_ALREADY_LISTED" ;;
@@ -90,28 +155,59 @@ case "`$ncur" in
        echo "LISTENER_WRITTEN"
      fi ;;
 esac
-settings get secure enabled_accessibility_services
-settings get secure enabled_notification_listeners
-rm -f $remote
 "@
-    Write-Host "installing on the device, then writing the entry back in the same breath" -ForegroundColor Cyan
+    Write-Host "writing the accessibility and notification entries back" -ForegroundColor Cyan
     $installed = ($script | & $adb -s $Serial shell "sh -s" 2>&1 | Out-String).Trim()
     Write-Host $installed
 
-    # 判据一: 设备的 lastUpdateTime 变了
-    $after = (& $adb -s $Serial shell "dumpsys package $pkg | grep lastUpdateTime" 2>&1 | Out-String).Trim()
+    $after = (& $adb -s $Serial shell "dumpsys package $Package | grep lastUpdateTime" 2>&1 | Out-String).Trim()
     if ($after -eq $before -or $after -eq '') {
         throw "the app was not installed: lastUpdateTime is still '$after' (the install output above says why)"
     }
     Write-Host "installed: $after" -ForegroundColor Green
 
-    # 判据二: 我们那一条有没有留在名单里。**判据是名单本身**, 不是自造 key 的探针 ——
-    # 探针在这台机器上永远是 null, 拿它当判据只会得出一个假的"没写进去" (见下面「验收」那段)
-    if ($installed -match 'LwAccessibility') {
+    # 版本读数: 装的是不是"刚刚那一包", 一眼看这里
+    $version = (& $adb -s $Serial shell "dumpsys package $Package | grep -E 'versionName|versionCode' | head -2" 2>&1 | Out-String).Trim()
+    Write-Host "on device: $($version -replace '\s+', ' ')" -ForegroundColor Green
+
+    # 判据: 我们那一条有没有留在名单里 (写进去了 / 本来就在, 两种都算留住了)。**判据是名单本身**,
+    # 不是自造 key 的探针 —— 探针在这台机器上永远是 null, 拿它当判据只会得出一个假的"没写进去"
+    if ($installed -match 'ACCESSIBILITY_(WRITTEN|ALREADY_LISTED)') {
         Write-Host "accessibility written back" -ForegroundColor Green
         $wrote = $true
     } else {
         Write-Host "the device did not keep the accessibility write" -ForegroundColor Red
+    }
+}
+
+# 拉起应用并等 host 就绪 : 装完不拉起, 设备上就只是"装了个壳" (host 树首启才解压)
+#
+# 判据是 `dsh web: http://…` 那一行 —— 它晚于 host 树解压、晚于浏览器信任栅栏, 是"能用了"那一刻。
+# 只看**这一次启动之后新出的行** (启动前先数一遍), 否则上一轮留下的那一行会让它当场报"好了"
+if (-not $NoLaunch) {
+    $base = @(& $adb -s $Serial logcat -d -s DshHost 2>&1).Count
+    Write-Host "launching the app and waiting for the host ..." -ForegroundColor Cyan
+    & $adb -s $Serial shell am start -n "$Package/.MainActivity" 2>&1 | Out-Null
+    $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    $ready = $null
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $lines = @(& $adb -s $Serial logcat -d -s DshHost 2>&1)
+        if ($lines.Count -le $base) { continue }
+        $fresh = @($lines[$base..($lines.Count - 1)]) -join "`n"
+        if ($fresh -match 'dsh web: http') { $ready = $fresh; break }
+        if ($fresh -match 'failed to import|code could not be extracted|host tree') {
+            Write-Host "host 起不来, 上面这段日志是原因:" -ForegroundColor Red
+            Write-Host $fresh -ForegroundColor DarkGray
+            break
+        }
+    }
+    if ($null -ne $ready) {
+        Write-Host "the host is up: $((($ready -split "`n") | Where-Object { $_ -match 'dsh web: http' } | Select-Object -Last 1).Trim())" -ForegroundColor Green
+    } elseif ($SkipInstall) {
+        Write-Host "没等到 host 就绪行 (可能本来就在跑): $WaitSeconds s" -ForegroundColor Yellow
+    } else {
+        Write-Host "没等到 host 就绪行 (等了 $WaitSeconds s): 看设备上的 logcat -s DshHost" -ForegroundColor Yellow
     }
 }
 
@@ -123,8 +219,6 @@ rm -f $remote
 #      一个假的"不接受写入", 再拿它解释失败就把人引到"再装一次"那条死路上
 #   2. **系统有没有真的绑上** —— 设置里写着不等于服务活着。`dumpsys activity services` 里那条
 #      ServiceRecord 才是证据; 它的输出格式各 ROM 略有差别, 所以找不到时只标"未确认"而不判失败
-#
-# 位置说明: 放在 `-Perms` **之后**, 因为 pm grant 与 appops 各要几次 adb 往返
 Write-Host ""
 Write-Host "checking" -ForegroundColor Cyan
 
