@@ -35,7 +35,24 @@ class WidgetSlotChat : WidgetSlotBase(WidgetSlot.CHAT) {
 class WidgetChatActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != WidgetChat.ACTION_SAY) return
+        when (intent.action) {
+            // 翻一页: 气泡区那块就是"滚动窗"的等价物 (RemoteViews 里没有 ScrollView)
+            WidgetChat.ACTION_SCROLL -> {
+                WidgetChat.scroll(context, DesktopChatFile.lines(context).size)
+                runCatching { WidgetHost.refreshChat(context) }
+                return
+            }
+            // 一键清空气泡对话 (主人 2026-10-17: "不动入口")
+            WidgetChat.ACTION_CLEAR -> {
+                val cleared = runCatching { DesktopChatFile.clear(context) }.getOrDefault(false)
+                WidgetChat.resetScroll(context)
+                Log.i(TAG, "the widget asked to clear the bubbles: $cleared")
+                runCatching { WidgetHost.refreshChat(context) }
+                return
+            }
+            WidgetChat.ACTION_SAY -> Unit
+            else -> return
+        }
         val said = runCatching { LwOverlay.chatFromWidget(context) }
             .getOrElse { error ->
                 Log.w(TAG, "the widget's say button did not reach the ball", error)
@@ -49,3 +66,4 @@ class WidgetChatActionReceiver : BroadcastReceiver() {
         const val TAG = "LwWidgetChat"
     }
 }
+

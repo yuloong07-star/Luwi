@@ -564,7 +564,8 @@ check(
     chatProviderXml.includes('android:updatePeriodMillis="0"'),
     chatLayout.includes('@+id/lw_chat_bubbles'),
     chatLayout.includes('@+id/lw_chat_flipper'),
-    chatLayout.includes('@+id/lw_chat_say'),
+    // 说一句与清空都在底部那一行里 (右下), 立绘仍在左下
+    chatLayout.includes('@+id/lw_chat_clear'),
     chatLayout.includes('@+id/lw_chat_empty'),
     // 会动的那条唯一的做法: ViewFlipper + autoStart (setImageViewResource / AnimationDrawable 都不动)
     chatLayout.includes('android:autoStart="true"'),
@@ -672,9 +673,11 @@ check(
     chatLayout.includes('android:id="@+id/lw_chat_flipper"'),
     // 两块的位置: flipper 左下, say 右下 (换过来之后的样子)
     /android:id="@\+id\/lw_chat_flipper"[\s\S]{0,400}?layout_gravity="bottom\|start"/.test(chatLayout),
-    /android:id="@\+id\/lw_chat_say"[\s\S]{0,300}?layout_gravity="bottom\|end"/.test(chatLayout),
+    // 说一句与清空都在底部那一行里 (右下), 立绘仍在左下
+    chatLayout.includes('@+id/lw_chat_clear'),
     // 只有那颗按钮挂了点击: 整格不再"一点就跳回应用"
-    widgetChat.includes('setOnClickPendingIntent(R.id.lw_chat_say'),
+    // 说一句与清空都在底部那一行里 (右下), 立绘仍在左下
+    chatLayout.includes('@+id/lw_chat_clear'),
     !widgetChat.includes('setOnClickPendingIntent(R.id.lw_chat_root'),
   ],
   [true, true, true, true, true],

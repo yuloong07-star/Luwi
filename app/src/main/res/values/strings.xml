@@ -680,6 +680,8 @@
     <string name="settings_widget_chat_row">Desktop chat widget</string>
     <string name="settings_widget_chat_summary">Puts your current ball art on the home screen with the last few lines of talk. Tap it to put it up, long-press the cell on the home screen to take it off</string>
     <string name="widget_chat_say">Say something</string>
+    <string name="widget_chat_clear">Clear</string>
+    <string name="widget_chat_older">Earlier lines · tap the bubbles to come back</string>
     <string name="widget_chat_empty">Nothing said yet · tap “Say something”</string>
     <string name="settings_plugin_inline_same_uid">It runs with Luwi\'s own privileges (same uid): the capability checks are a courtesy there, not a wall</string>
     <string name="settings_plugin_inline_whitelisted">Its author is on the allow list (fingerprint %1$s)</string>
@@ -707,3 +709,4 @@
     <string name="notification_channel_tools">Tool notifications</string>
     <string name="notification_channel_tools_description">Notifications the model posts with lw_notify</string>
 </resources>
+

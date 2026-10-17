@@ -180,6 +180,24 @@ internal object DesktopChatFile {
         }
     }
 
+    /**
+     * 清空那本账 (主人 2026-10-17: 组件上加一颗「清空」, 一键清空气泡对话)
+     *
+     * 只动气泡——**入口、投递链、宿主那一侧的账一个字节都不动** (主人原话: "不动入口")。
+     * 写的是"空 lines", 不是删文件: 删了之后下一次读又是"没有文件"那一条路, 两种状态在读数上分不开
+     */
+    fun clear(context: Context): Boolean {
+        val directory = directory(context)
+        if (!directory.isDirectory && !directory.mkdirs()) return false
+        val temporary = File(directory, "$FILE_NAME.tmp")
+        return try {
+            temporary.writeText(encode(emptyList(), System.currentTimeMillis()))
+            temporary.renameTo(file(context))
+        } catch (error: Throwable) {
+            runCatching { temporary.delete() }
+            false
+        }
+    }
     /** 那条链上真的写了一笔之后要有人重画组件 (调用方拿它判断要不要 [Watch]) */
     fun lines(context: Context): List<Line> = snapshot(context).lines
 
@@ -243,3 +261,4 @@ internal object DesktopChatFile {
         watcher = null
     }
 }
+

@@ -680,6 +680,8 @@
     <string name="settings_widget_chat_row">桌面对话组件</string>
     <string name="settings_widget_chat_summary">把当前浮标立绘和最近几句对话摆到桌面上。点这一行放上去, 要拿下就在桌面上长按那一格移除</string>
     <string name="widget_chat_say">说一句</string>
+    <string name="widget_chat_clear">清空</string>
+    <string name="widget_chat_older">更早的几句 · 点气泡回到最新</string>
     <string name="widget_chat_empty">还没说过话 · 点「说一句」</string>
     <string name="settings_plugin_inline_same_uid">它与 Luwi 同权限 (同一个 uid): 运行时那几道能力检查对它是体验, 不是墙</string>
     <string name="settings_plugin_inline_whitelisted">它的作者在白名单里 (指纹 %1$s)</string>
@@ -707,3 +709,4 @@
     <string name="notification_channel_tools">工具通知</string>
     <string name="notification_channel_tools_description">模型用 lw_notify 发出来的通知</string>
 </resources>
+
