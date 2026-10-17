@@ -386,10 +386,16 @@ console.log(`pack-host: pruned ${String(pruned)} package(s) this device cannot r
 
 // The mobile web-ui plugin is fetched into a scratch directory and copied in, rather than declared
 // as a dependency of the tree. Declaring it would drag npm's peer resolution over the whole install:
-// its peer range admits released 0.1.x and 0.2.0-rc.1+, but not the prerelease this tree is built
-// from (0.1.5-rc.2), so the install would only pass with --legacy-peer-deps - a flag that changes
-// how the ENTIRE dsh closure resolves, to accommodate one package that needs nothing from it. Here
-// the relaxed resolution is confined to a throwaway directory
+// its peer range admits released 0.1.x and 0.2.0-rc.1+, and the tree is built from a prerelease, so
+// the install would only pass with --legacy-peer-deps - a flag that changes how the ENTIRE dsh
+// closure resolves, to accommodate one package that needs nothing from it. Here the relaxed
+// resolution is confined to a throwaway directory
+//
+// **3.0.6 -> 3.1.0 (2.7.8 批次 4, 2026-10-17 主人自己先换上那一版)**: D7 当初停在 3.0.6 的理由是
+// "3.1.0 把宿主下限抬到 0.1.7-rc.1, 与本树 0.1.5-rc.2 冲突" —— 事后实测本树是 **0.2.1-alpha.1**,
+// 且 3.0.6 与 3.1.0 的 peerDependencies 逐条相同, 那道闸本来就不成立。3.1.0 相对 3.0.6 多出来的是
+// 两处面板退场快照的修复 (旧 disposer 删掉新实例 / 退出侧边栏留下永不自清的全屏快照), 正是批次 4
+// 要量的那两条
 const webui = 'dsh-web-mobile'
 const webuiStage = join(out, '.webui-stage')
 mkdirSync(webuiStage, { recursive: true })
@@ -513,6 +519,68 @@ console.log(
   `pack-host: installed ${imagePlugin.name}@${imagePlugin.version} from ${npmRegistry}`,
 )
 
+// 随包发的第二个第三方插件: `@modusensus/dsh-mneme` (记忆), 做法与生图那一条同一个形状 ——
+// `npm pack` 只把包自己拿下来。它声明的那一个运行时依赖是 `morphicons`, 而 `lib/` 里没有一处
+// `import 'morphicons'` (客户端那份图标数据是随包发的), 所以只要这一个目录就够 —— 下面那次
+// import 就是这条判断的判据: 真缺一个依赖时它会在这儿抛
+//
+// **裁掉四样**: `docs/` (~130 KB)、`test/` (~2 MB, 143 个用例文件)、`src/` (~1.4 MB, TypeScript 源,
+// 跑的是 `lib/`)、以及 `scripts/` 里除 `mneme-runtime.mjs` 之外的全部 (`lib/loader.js` 有一句提示
+// 会点名它, 别的都是开发期脚本)。裁完这一包约 2 MB
+//
+// **与生图那一条不一样的地方**: 生图那三处 `~/.dsh/dsh-imagegen` 写死在源码里, 只能改源码; 而 mneme
+// 的数据目录是 config 项 (`memoryDir`), 于是那句绝对路径由 `PluginRows` 按本机 filesDir 写进 profile
+// patch (挂在覆盖层上面的话, dsh 的设置面板就改不了它 —— 见那份文件头)。自管运行时那一档不落
+// config, 走 `DshHost` 给出的 `DSH_MNEME_RUNTIME_DIR`
+//
+// **它要 `node:sqlite`** (`lib/store.js` 的 `DatabaseSync`): 随包的 node 是 v26, 这一点在真机上量过
+// (2026-10-17, 见 docs/DSH-LW-2.7.8-开发计划.md 第 8 节那一批)
+const mnemePlugin = { name: '@modusensus/dsh-mneme', version: '0.9.0' }
+
+const mnemeStage = join(out, '.mneme-stage')
+mkdirSync(mnemeStage, { recursive: true })
+run(
+  'npm',
+  [
+    'pack',
+    `${mnemePlugin.name}@${mnemePlugin.version}`,
+    '--registry', npmRegistry,
+    '--pack-destination', mnemeStage,
+  ],
+  mnemeStage,
+)
+const mnemeTarball = readdirSync(mnemeStage).find(name => name.endsWith('.tgz'))
+if (mnemeTarball === undefined) {
+  throw new Error(`npm pack produced no tarball for ${mnemePlugin.name}@${mnemePlugin.version}`)
+}
+run('tar', ['-xzf', join(mnemeStage, mnemeTarball), '-C', mnemeStage], mnemeStage)
+const mnemeRoot = join(out, 'node_modules', ...mnemePlugin.name.split('/'))
+mkdirSync(dirname(mnemeRoot), { recursive: true })
+cpSync(join(mnemeStage, 'package'), mnemeRoot, { recursive: true })
+rmSync(mnemeStage, { recursive: true, force: true })
+
+for (const name of ['docs', 'test', 'src']) rmSync(join(mnemeRoot, name), { recursive: true, force: true })
+for (const name of readdirSync(join(mnemeRoot, 'scripts'))) {
+  if (name !== 'mneme-runtime.mjs') rmSync(join(mnemeRoot, 'scripts', name), { recursive: true, force: true })
+}
+for (const name of readdirSync(join(mnemeRoot, 'lib'))) {
+  if (name.endsWith('.map')) rmSync(join(mnemeRoot, 'lib', name), { force: true })
+}
+
+const mnemeManifest = JSON.parse(readFileSync(join(mnemeRoot, 'package.json'), 'utf8'))
+const mnemeEntry = typeof mnemeManifest.main === 'string' ? mnemeManifest.main : 'index.js'
+try {
+  await import(pathToFileURL(join(mnemeRoot, mnemeEntry)).href)
+} catch (error) {
+  throw new Error(
+    `${mnemePlugin.name} cannot be imported after installation (${error?.message ?? error}): it is`
+      + ' missing a dependency it actually imports, or it needs a package this tree does not carry',
+  )
+}
+console.log(
+  `pack-host: installed ${mnemePlugin.name}@${mnemePlugin.version} from ${npmRegistry}`,
+)
+
 // Luwi's own host plugin is copied in rather than packed: it is a few hundred lines of
 // plain ESM with no build step, and it has to sit under node_modules so that its import of
 // @deepseek-ai/dsh-tools resolves to the same copy the host itself uses
@@ -520,6 +588,16 @@ const plugin = fileURLToPath(new URL('../host-plugin', import.meta.url))
 const installed = join(out, 'node_modules', 'luwi-channel')
 cpSync(plugin, installed, { recursive: true })
 console.log(`pack-host: installed the Luwi plugin from ${plugin}`)
+
+// Luwi 自己的 CSS 覆盖层 (2.7.8 批次 4, D8 = b): 与 luwi-channel 同一个拷法 —— 它就是本仓
+// `presets/ui-fix` 那一份, 宿主那一半是空的, 样式在 `lib/client.js` 里
+//
+// **两半都要拷**: 宿主那一半让这一行能被 Loader 装上 (client-modules 只扫已挂载的行),
+// 客户端那一半由 dsh 的 modules 按 package.json 里 `dsh.client` 扫出来发给浏览器
+const uiFix = fileURLToPath(new URL('../presets/ui-fix', import.meta.url))
+const uiFixInstalled = join(out, 'node_modules', 'luwi-ui-fix')
+cpSync(uiFix, uiFixInstalled, { recursive: true })
+console.log(`pack-host: installed the Luwi CSS overlay from ${uiFix}`)
 
 // 真把这个包 import 一次, 数一数注册出来几个工具
 //

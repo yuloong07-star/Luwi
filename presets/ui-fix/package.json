@@ -1,0 +1,20 @@
+{
+  "name": "luwi-ui-fix",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Luwi 自己的 CSS 覆盖层: 只对着宿主的 DOM 打样式补丁, 不复制组件、不动 JS",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "license": "Apache-2.0"
+}

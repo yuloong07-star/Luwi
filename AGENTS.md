@@ -585,6 +585,41 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
   悄悄不换的后果, 是主人的工作区里又多一个没人会去查的 `.dsh`
 - 判据表在 `tools/check-image-edit.mjs` (20 条): 那五个字段的名字 / 两个 op 两侧一致 / 相册目录只有一份
   口径 / 三个清单 (pack-host 的包名、`PluginRows` 的行、技能的随包表) 对得上 / 那三处 `~/.dsh` 的换法还在
+- **第二个随包插件是记忆 `@modusensus/dsh-mneme`** (2.7.8 批次 4, 主人 2026-10-17: "记忆插件要像生图插件
+  那样进包"): 与生图同一个形状 —— `tools/pack-host.mjs` 用 `npm pack @modusensus/dsh-mneme@0.9.0` 取包自己,
+  **裁 `docs/` / `test/` / `src/` 与 `scripts/` 里除 `mneme-runtime.mjs` 之外的全部** (那一个被 `lib/loader.js`
+  的提示行点名), 剩约 2 MB。它声明的那一个运行时依赖 `morphicons` **其实没有被 lib 里任何一处 import**
+  (图标数据随客户端那份 bundle 发), 所以 `npm pack` 就够 —— 装完那次 import 是这条判断的判据。
+  挂的那一行是 `PluginRows` 的 `id mneme`, 指 `node_modules/@modusensus/dsh-mneme/lib/index.js`, **同在
+  profile patch 那一层** (理由与生图一字不差: 它的模型、语言、数据目录都是主人要在面板里改的)。
+  数据落点有两处要钉: **记忆库**走那一行 `config:` 里的 `memoryDir`, 由 `PluginRows.memoryConfig` 按本机
+  filesDir 代写成 `$DSH_HOME/memory` 的绝对路径 (缺省是 `~/.dsh/memory`, 而 `HOME` 指着工作区, 不钉住
+  就会在主人看得见的地方长一个 `.dsh/memory`); **自管运行时**那一档 (本地向量化) 走 `DshHost` 给出的
+  `DSH_MNEME_RUNTIME_DIR`。它只用 `node:sqlite` (`lib/store.js` 的 `DatabaseSync`), 所以随包的 node 必须带
+  那个内建模块 —— 这一条源码里核不出来, 2026-10-17 在真机那份 node (v26.4.0) 上量过。判据在
+  `tools/check-bundled-plugins.mjs` (10 条: 两个包的声明 / 裁法 / 挂的层 / `file://` 形态 / 两处数据目录)。
+  **老安装里已经手工装过 mneme 且那一行已在时不动它** ([PluginRows] 的幂等): 那种机器上记忆库仍落
+  `~/.dsh/memory`, 要挪进 `$DSH_HOME` 就在面板里把 `memoryDir` 改过去
+- **右栏那颗「浏览器」格子在上游是 desktop 专属的, 我们按 id 把它打开** (2.7.8 批次 4 量到的根因):
+  `@deepseek-ai/dsh-web-app/cordis.patch.yml` 里那一行是
+  `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`, 而 Luwi 起的是 **`web`** profile ——
+  于是它**根本没进 Loader**, 页面里连它的客户端模块都没有 (`__DSH_BOOT__.entries` 里没有
+  `sidebar-browser`), 右栏 Start 面板上也不出「浏览器」那张卡。**这不是 CSS 的问题, 是那一格压根挂不上**;
+  `PluginOverlay.write` 每启一次 host 写一条同 id 同 name 的 `disabled: false` 覆盖 (patch 层序
+  `bundle → profile → $DSH_HOME → 命令行覆盖层`, 我们这层最后, 所以压得住), 树里没有那个文件时不写
+  (指向不存在的文件会让 Loader 报一条载入失败)。它宿主那一半是空的 (`apply(){}`), 存在的唯一目的是让
+  client-modules 扫到它 —— 这个包只提供客户端那一半
+- **Luwi 自己的 CSS 覆盖层是 `presets/ui-fix`** (2.7.8 批次 4, D8 = b; 量到的现场与每条补丁的
+  "什么时候可以删"都写在 `presets/ui-fix/lib/client.js` 的注释里): 一个**双面**包 —— 宿主那一半
+  (`index.mjs`) 是空的, 客户端那一半 (`lib/client.js`) 只做一件事: `ctx.effect` 里往 `document.head`
+  插一段 `<style>`, 交回一个摘掉它的函数。**只写选择器与样式, 不复制组件、不 monkey-patch JS** ——
+  这是"随时能整块撤掉"的唯一前提。`pack-host` 把整个目录拷进 `node_modules/luwi-ui-fix`, 由
+  `PluginOverlay` **两张表**各挂一行 (语音 bundle 开/关各一张), **不在 `PluginRows`**: 它没有配置要在
+  面板上改。选择器优先挑上游自己命名的东西 (`span[data-files-path]` / `.mneme-*` 这类), 前端那套
+  `_path_1kiio_3` 哈希类名只在没别的抓手时才用 —— 哈希一变补丁静默失效, 所以
+  `tools/check-ui-fix.mjs` 把这里出现的**每一个选择器**去已构建的产物里 grep 一遍 (18 条), 一个都
+  命中不了就红, 上游一改 DOM 我们当场知道。每条覆盖都带 `!important`: 这一段 `<style>` 与上游那几个
+  客户端包同优先级, 谁先插进来不由我们决定
 - **验过的 (2026-10-08, 模拟器 `emulator-5554`)**: 出包装机后 host 起来 (`dsh web: http://…`)、
   GUI 渲染 (`rootChildren: 1`)、**两半都挂上了** (宿主那一半把模板快照写进了
   `$DSH_HOME/dsh-imagegen/templates/`; 客户端那一半的名字出现在首页那份模块表里:

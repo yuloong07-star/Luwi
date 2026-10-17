@@ -278,6 +278,10 @@ object DshHost {
                     put("TMPDIR", temp.absolutePath)
                     put("DSH_TELEMETRY_DISABLED", "1")
                     put("NO_COLOR", "1")
+                    // 记忆插件 (dsh-mneme) 自管运行时那一档的落点: 它的缺省是 `~/.dsh/mneme/runtime`,
+                    // 而下面那行 HOME 指着工作区 —— 不钉住它, 主人一开本地向量化就会在看得见的目录里
+                    // 长出一个几百 MB 的运行时 (记忆库本身走 profile patch 里的 memoryDir, 见 PluginRows)
+                    put("DSH_MNEME_RUNTIME_DIR", File(File(home, "mneme"), "runtime").absolutePath)
                     put("OPENSSL_CONF", openssl.absolutePath)
                     // dsh resolves the shell itself: DSH_BASH names the bash that travels with
                     // the app, and SHELL is what any other child sees as the user's shell

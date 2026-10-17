@@ -54,6 +54,9 @@ object PluginOverlay {
         // (host-plugins/luwi-dsh-sync, 2026-10-14)。手机侧 git 经 Linux 沙盒执行, 电脑侧同一份包
         // 走 ctx.subprocess —— 见 docs/DSH-LW-3.0.0-G1-施工单.md 与 docs/Luwi-dsh-sync-设计.md
         Row("luwi-dsh-sync", "node_modules/luwi-dsh-sync/index.mjs"),
+        // 只含 CSS 覆盖的自有 client 包 (2.7.8 批次 4, D8 = b): 它没有配置要改, 所以挂在覆盖层上
+        // (那两行要能被设置面板改的归 PluginRows)。宿主那一半是空的, 客户端那一半在 lib/client.js
+        Row("luwi-ui-fix", "node_modules/luwi-ui-fix/index.mjs"),
         Row(
             "speech-to-text",
             "node_modules/@deepseek-ai/dsh-experimental-speech-to-text/lib/index.js",
@@ -80,10 +83,28 @@ object PluginOverlay {
         Row("luwi-channel", "node_modules/luwi-channel/index.mjs"),
         Row("dsh-web-mobile", "node_modules/dsh-web-mobile/lib/index.js"),
         Row("luwi-dsh-sync", "node_modules/luwi-dsh-sync/index.mjs"),
+        Row("luwi-ui-fix", "node_modules/luwi-ui-fix/index.mjs"),
     )
 
     /** 官方 bundle 的名字: 它在 profile 的 package.json 里出现就说明被打开了 */
     private const val VOICE_BUNDLE = "@deepseek-ai/dsh-experimental-voice-input-bundle"
+
+    /**
+     * 右栏那个"浏览器"格: 上游在 web profile 上**默认关掉它** (2.7.8 批次 4 量到的根因)
+     *
+     * `@deepseek-ai/dsh-web-app/cordis.patch.yml` 里那一行是
+     * `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`, 而 Luwi 起的是 `web` profile,
+     * 于是那一行**根本没进 Loader** —— 页面里连它的 client 模块都没有 (`__DSH_BOOT__.entries` 里
+     * 没有 `sidebar-browser`), Start 面板上也不出「浏览器」那张卡。也就是说主人的第 5 条需求
+     * 「右侧边栏的浏览器显示问题」在这一版上根本不是 CSS 的问题, **那一格压根挂不上**
+     *
+     * 打开的方式是按 id 同 name 覆盖 `disabled: false` (patch 层是 `bundle → profile → $DSH_HOME →
+     * 命令行覆盖层`, 我们这一层最后, 所以压得住)。`name` 必须与那棵树里那条逐字一致, 否则
+     * `applyEntryPatches` 会按 "name mismatch" 整条丢掉
+     */
+    private const val BROWSER_ROW = "ui-sidebar-browser"
+    private const val BROWSER_NAME = "@deepseek-ai/dsh-client-ui-sidebar-browser"
+    private const val BROWSER_ENTRY = "node_modules/@deepseek-ai/dsh-client-ui-sidebar-browser/lib/index.js"
 
     /** 官方 bundle 里那条 provider 行的 id, 也是我们要覆盖的那一条 */
     private const val VOICE_PROVIDER_ROW = "speech-to-text"
@@ -154,10 +175,18 @@ object PluginOverlay {
             File(root, row.entry).takeIf { it.isFile }?.let { row to it.absolutePath }
         }
         if (present.isEmpty()) return null
+        val browserPresent = File(root, BROWSER_ENTRY).isFile
         val file = File(File(context.filesDir, DIRECTORY).apply { mkdirs() }, FILE)
         file.writeText(
             buildString {
                 appendLine("# Written by Luwi on every host start, edits are overwritten")
+                if (browserPresent) {
+                    // 见 [BROWSER_ROW]: 上游只在 desktop profile 上挂这一格, 而 Luwi 起的是 web
+                    appendLine("# The right sidebar's Browser tab is desktop-only upstream; Luwi wants it")
+                    appendLine("- id: $BROWSER_ROW")
+                    appendLine("  name: '$BROWSER_NAME'")
+                    appendLine("  disabled: false")
+                }
                 if (bundle) {
                     // 官方 bundle 把 provider 行挂在它自己那份 patch 里, 而 patch 层是**按 id 覆盖**
                     // 的, 所以这里给一条同 id 的配置行就够, 不需要 (也不能) 再 insert 一遍

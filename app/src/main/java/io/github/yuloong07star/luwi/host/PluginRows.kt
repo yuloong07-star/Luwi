@@ -53,12 +53,34 @@ internal object PluginRows {
     /**
      * 我们放进 profile patch 的那几行, **顺序就是写的顺序**
      *
-     * `imagegen` (第三方生图插件 `@dickpy/dsh-imagegen`) 是唯一一条: 它的渠道、密钥与默认模型是
-     * **用户在界面上配**的东西, 而装在命令行覆盖层上会让整个设置面板变成只读
+     * `imagegen` (第三方生图插件 `@dickpy/dsh-imagegen`) 与 `mneme` (`@modusensus/dsh-mneme` 记忆)
+     * 都是"装进树里, 但要能被 dsh 的设置面板改"的那一类: 它们的渠道、密钥、模型与数据目录是**用户
+     * 在界面上配**的东西, 而装在命令行覆盖层上会让整个设置面板变成只读
+     *
+     * `config` 是**随包写进 insert 子行**的那几项 (面板之后追加的顶层 config 行压在它上面, 于是主人
+     * 改过的值照样生效)。只有 mneme 要: 它的记忆库缺省落 `~/.dsh/memory`, 而本机 `HOME` 指向**工作区**
+     * (`DshHost.spawn` 那两行), 不钉住就会在工作区根下长出一个 `.dsh/memory` —— 这与生图插件当年
+     * 在 `/sdcard/DSH/.dsh/dsh-imagegen` 里那一坨是同一类毛病
      */
-    private val OWNED = listOf(
-        "imagegen" to "node_modules/@dickpy/dsh-imagegen/lib/index.js",
+    private class Owned(
+        val id: String,
+        val entry: String,
+        val config: (Context) -> List<String> = { emptyList() },
     )
+
+    private val OWNED = listOf(
+        Owned("imagegen", "node_modules/@dickpy/dsh-imagegen/lib/index.js"),
+        Owned(
+            "mneme",
+            "node_modules/@modusensus/dsh-mneme/lib/index.js",
+            config = ::memoryConfig,
+        ),
+    )
+
+    /** 记忆库落在 `$DSH_HOME/memory`, 不落在工作区的 `~/.dsh/memory` (见 [Owned]) */
+    private fun memoryConfig(context: Context): List<String> =
+        listOf("memoryDir: '${File(File(context.filesDir, DshHost.HOME_DIR), "memory").absolutePath}'")
+
 
     /**
      * 每次 host 起来之前对一次账 (排在 [PluginOverlay.write] 前面, 与 `CustomPresets` 那两步并排)
@@ -77,15 +99,16 @@ internal object PluginRows {
         // profile 还不存在时按 dsh 自己那份模板起 (与 CustomPresets 用的是同一份, 见 patchTemplate)
         var patch = if (file.isFile) file.readText() else CustomPresets.patchTemplate()
         val before = patch
-        for ((id, entry) in OWNED) {
-            val target = File(root, entry)
+        for (row in OWNED) {
+            val target = File(root, row.entry)
+            val config = row.config(context)
             patch = when {
-                target.isFile -> ensuredRow(patch, id, target.absolutePath)
-                hasInsertRow(patch, id) -> withoutRow(patch, id).also {
-                    Log.w(TAG, "the host tree carries no $entry, so the $id row was removed")
+                target.isFile -> ensuredRow(patch, row.id, target.absolutePath, config)
+                hasInsertRow(patch, row.id) -> withoutRow(patch, row.id).also {
+                    Log.w(TAG, "the host tree carries no ${row.entry}, so the ${row.id} row was removed")
                 }
                 else -> {
-                    Log.w(TAG, "the host tree carries no $entry, so $id cannot be mounted")
+                    Log.w(TAG, "the host tree carries no ${row.entry}, so ${row.id} cannot be mounted")
                     patch
                 }
             }
@@ -107,9 +130,9 @@ internal object PluginRows {
      *
      * 幂等: 已经是那个形态时一个字节都不动 (每启一次 host 都会叫一遍)
      */
-    fun ensuredRow(patch: String, rowId: String, entryPath: String): String {
+    fun ensuredRow(patch: String, rowId: String, entryPath: String, config: List<String> = emptyList()): String {
         val name = fileUrlOf(entryPath)
-        return if (hasInsertRow(patch, rowId)) namedRow(patch, rowId, name) else withRow(patch, rowId, name)
+        return if (hasInsertRow(patch, rowId)) namedRow(patch, rowId, name) else withRow(patch, rowId, name, config)
     }
 
     /**
@@ -153,13 +176,16 @@ internal object PluginRows {
     fun hasInsertRow(patch: String, rowId: String): Boolean =
         patch.lines().any { indentOf(it) > 0 && it.trimStart() == "- id: $rowId" }
 
-    /** 一段 YAML: 一行 `- insert:` 加一行 id 加一行 name (name 加引号, 免得 `@` 之类的字符绊住解析) */
-    fun rowBlock(rowId: String, name: String): String = listOf(
-        "- insert:",
-        "    - id: $rowId",
-        "      name: '$name'",
-        "",
-    ).joinToString("\n")
+    /** 一段 YAML: 一行 `- insert:` 加一行 id 加一行 name (name 加引号, 免得 `@` 之类的字符绊住解析),
+     * 再按需跟上这几项 `config:` (本应用代写的缺省值, 面板之后追加的那一行压在它上面) */
+    fun rowBlock(rowId: String, name: String, config: List<String> = emptyList()): String = buildList {
+        addAll(listOf("- insert:", "    - id: $rowId", "      name: '$name'"))
+        if (config.isNotEmpty()) {
+            add("      config:")
+            config.forEach { add("        $it") }
+        }
+        add("")
+    }.joinToString("\n")
 
     /**
      * 把我们那一行放进 patch
@@ -170,10 +196,10 @@ internal object PluginRows {
      *
      * `name` 要的是 [fileUrlOf] 那个形态, 不是裸路径 —— 见文件头第二条
      */
-    fun withRow(patch: String, rowId: String, name: String): String {
+    fun withRow(patch: String, rowId: String, name: String, config: List<String> = emptyList()): String {
         // 幂等: 已经挂上了就一个字节都不动 (每启一次 host 都会叫一遍)
         if (hasInsertRow(patch, rowId)) return patch
-        val block = rowBlock(rowId, name).trimEnd()
+        val block = rowBlock(rowId, name, config).trimEnd()
         val lines = patch.lines().toMutableList()
         val empty = lines.indexOfFirst { it.trim() == "[]" }
         val content = lines.count { it.isNotBlank() && !it.trimStart().startsWith("#") }

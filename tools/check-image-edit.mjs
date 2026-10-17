@@ -154,7 +154,7 @@ check(
 
 /** 包名与挂它的那一行必须指同一个地方: 前者决定"树里有没有", 后者决定"挂不挂" */
 const rows = await read('app/src/main/java/io/github/yuloong07star/luwi/host/PluginRows.kt')
-const owned = /"imagegen" to "([^"]+)"/.exec(rows)
+const owned = /Owned\(\s*"imagegen",\s*"([^"]+)"/.exec(rows)
 check(
   'PluginRows 按同一个入口挂了这一行 (id imagegen)',
   owned?.[1],
@@ -177,7 +177,7 @@ check(
   [
     rows.includes('fun fileUrlOf('),
     rows.includes('append("file://")'),
-    rows.includes('ensuredRow(patch, id, target.absolutePath)'),
+    rows.includes('ensuredRow(patch, row.id, target.absolutePath, config)'),
     rows.includes('fileUrlOf(entryPath)'),
   ],
   [true, true, true, true],
@@ -186,7 +186,7 @@ check(
   '旧安装里那个裸路径每启一次 host 会被对成 file:// 形态 (只改 name 那一行)',
   [
     rows.includes('fun namedRow(patch: String, rowId: String, name: String)'),
-    rows.includes('if (hasInsertRow(patch, rowId)) namedRow(patch, rowId, name) else withRow(patch, rowId, name)'),
+    rows.includes('if (hasInsertRow(patch, rowId)) namedRow(patch, rowId, name) else withRow(patch, rowId, name, config)'),
   ],
   [true, true],
 )
