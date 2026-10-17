@@ -52,48 +52,15 @@ internal object WidgetChat {
     /** 「清空」: 一键把气泡那本账清空 (入口与投递链不动) */
     const val ACTION_CLEAR = "io.github.yuloong07star.luwi.widget.CLEAR"
 
-    /** 点气泡区: 往前翻一页 (RemoteViews 里没有 ScrollView, 翻页是"滚动"能做的那个等价物) */
-    const val ACTION_SCROLL = "io.github.yuloong07star.luwi.widget.SCROLL"
 
-    /** 翻到第几页之前的偏移 (0 = 最新那一页) */
-    private const val KEY_SCROLL = "chat-scroll"
-
-    /** 那一页是从哪一条开始的 (从最新往回数 offset 条, 再看 rows 条) */
-    internal fun window(lines: Int, rows: Int, offset: Int): Pair<Int, Int> {
-        val end = (lines - offset).coerceIn(0, lines)
-        val start = (end - rows).coerceAtLeast(0)
-        return start to end
-    }
-
-    /** 点一下气泡区 (接收器那一侧调它): 翻一页, 幅度就是上一次组装时记下的行数 */
-    fun scroll(context: Context, total: Int) {
-        val rows = context.getSharedPreferences(STORE, Context.MODE_PRIVATE).getInt("chat-rows", Face.DEFAULT_ROWS)
-        nextPage(context, total, rows)
-    }
-
-    /** 清空之后回到最新那一页 (不清的话下次张开会停在空的更早页上) */
-    fun resetScroll(context: Context) {
-        context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().remove(KEY_SCROLL).apply()
-    }
 
     /** 当前翻到第几页之前 */
-    internal fun offset(context: Context): Int =
-        context.getSharedPreferences(STORE, Context.MODE_PRIVATE).getInt(KEY_SCROLL, 0)
-
     /**
      * 点一下气泡区: 往前翻一页; 已经到最早那一页就回到最新
      *
      * 这是"滚动窗"在 RemoteViews 里能落地的做法 (那个容器里没有 ScrollView): 一页一页往回看,
      * 再点一下回到最新 —— 比"只显示最近几条、更早的看不到"多给了一条路
      */
-    fun nextPage(context: Context, total: Int, rows: Int): Int {
-        val step = rows.coerceAtLeast(1)
-        val current = offset(context)
-        val next = if (current + step >= total - rows || current + step >= total) 0 else current + step
-        context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().putInt(KEY_SCROLL, next).apply()
-        return next
-    }
-
     /** 那颗按钮点下去要说的话 (`PendingIntent.getBroadcast` 的 action) */
     /** 那颗按钮点下去要说的话 (`PendingIntent.getBroadcast` 的 action) */
     const val ACTION_SAY = "io.github.yuloong07star.luwi.widget.SAY"
@@ -252,15 +219,9 @@ internal object WidgetChat {
 
         val view = RemoteViews(context.packageName, R.layout.lw_widget_slot_chat)
         val snapshot = DesktopChatFile.snapshot(context)
-        // 气泡区: **下限 = 人物 + 一行**, 内容多时一路往上长到这一格放不下 (主人 2026-10-17 的两条)
+        // 气泡区: 高度 = 下限 (人物 + 一行) 与"这一格放得下几行"里大的那个
         val rows = Face.rowsFor(cellHeightDp, faceDp, bubbleSp)
-        // 翻页那一下: 点气泡区往前翻一页, 到最早那一页再点回到最新 (RemoteViews 里没有 ScrollView)
-        val pages = window(snapshot.lines.size, rows, offset(context))
-        val shown = snapshot.lines.subList(pages.first, pages.second)
-        val older = offset(context) > 0
-        // 翻页那一侧 (接收器) 要知道这一页几行: 组装时记下来, 它就不必再猜一遍
-        context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().putInt("chat-rows", rows).apply()
-        val areaHeight = Face.areaDp(faceDp, bubbleSp, shown.size)
+        val areaHeight = Face.areaDp(faceDp, bubbleSp, rows)
 
         // ① 气泡区的尺寸: 高度按上面那个数, 而人物那一块是正方形:
         // **第三个参数是 `TypedValue.COMPLEX_UNIT_*` 而不是 MeasureSpec** —— 传错的后果是接收器里
@@ -269,27 +230,8 @@ internal object WidgetChat {
         view.setViewLayoutWidth(R.id.lw_chat_flipper, faceDp.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
         view.setViewLayoutHeight(R.id.lw_chat_flipper, faceDp.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
 
-        // ② 气泡: `addView` 逐条加, 谁说的决定用哪份版式 (靠左 / 靠右), 字号跟 `bubbleSp`
-        view.removeAllViews(R.id.lw_chat_bubbles)
-        shown.forEach { line ->
-            val bubble = RemoteViews(
-                context.packageName,
-                if (line.who == DesktopChatFile.WHO_USER) {
-                    R.layout.lw_widget_slot_chat_bubble_user
-                } else {
-                    R.layout.lw_widget_slot_chat_bubble_assistant
-                },
-            )
-            bubble.setTextViewText(R.id.lw_chat_bubble_text, line.text)
-            bubble.setTextViewTextSize(R.id.lw_chat_bubble_text, TypedValue.COMPLEX_UNIT_SP, bubbleSp.toFloat())
-            view.addView(R.id.lw_chat_bubbles, bubble)
-        }
-        // 一条都没有 (或者那份文件读不懂) 时把话说在明处: 空着与"读不懂"不是一回事
-        val empty = when {
-            older -> context.getString(R.string.widget_chat_older)
-            shown.isEmpty() -> snapshot.note.ifBlank { context.getString(R.string.widget_chat_empty) }
-            else -> ""
-        }
+        // ② 气泡由 ListView 画 (见 WidgetChatListService), 空态那一格由 setEmptyView 顶上来
+        val empty = snapshot.note.ifBlank { context.getString(R.string.widget_chat_empty) }
         view.setTextViewText(R.id.lw_chat_empty, empty)
         view.setViewVisibility(R.id.lw_chat_empty, if (empty.isBlank()) View.GONE else View.VISIBLE)
 
@@ -299,9 +241,8 @@ internal object WidgetChat {
         // ④ 点哪儿去 (主人 2026-10-17 定的口径): **点气泡或空白处什么都不做** —— 那一格是"看最近几句"
         // 的地方, 一点就跳回应用会把人正看着的桌面顶掉。整格只留那一颗「说一句」有动作
         view.setOnClickPendingIntent(R.id.lw_chat_say, sayIntent(context))
-        // 清空 (一键清空气泡对话) 与 "翻一页" (气泡区那块 = 滚动窗的等价物)
+        // 清空 (一键清空气泡对话)
         view.setOnClickPendingIntent(R.id.lw_chat_clear, actionIntent(context, ACTION_CLEAR, 32))
-        view.setOnClickPendingIntent(R.id.lw_chat_bubbles, actionIntent(context, ACTION_SCROLL, 33))
         return view
     }
 
@@ -469,6 +410,9 @@ internal object WidgetChat {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 }
+
+
+
 
 
 

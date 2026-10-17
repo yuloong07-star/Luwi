@@ -543,6 +543,8 @@ const pluginManifest = await read('app/src/main/java/io/github/yuloong07star/luw
 const pluginSettings = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginSettings.kt')
 const detail = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/PluginDetailScreen.kt')
 const gif = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginGif.kt')
+// 气泡区改成集合型组件 (ListView + RemoteViewsService): 列表项与字号都在那个 service 里
+const listService = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetChatListService.kt')
 
 check(
   '清单里声明了对话槽与那颗「说一句」的接收器',
@@ -616,7 +618,7 @@ check(
     widgetChat.includes('fun rowsFor(cellHeightDp: Int, faceDp: Int, bubbleSp: Long): Int'),
     widgetChat.includes('setViewLayoutHeight(R.id.lw_chat_bubbles, areaHeight.toFloat()'),
     widgetChat.includes('fun actualDp(cellWidthDp: Int, cellHeightDp: Int, baseDp: Long): Int'),
-    widgetChat.includes('setTextViewTextSize(R.id.lw_chat_bubble_text, TypedValue.COMPLEX_UNIT_SP'),
+    listService.includes('setTextViewTextSize(R.id.lw_chat_bubble_text'),
     // 字号 / 人物 / 原始大小这三项在二级页上是**真弹窗** (主人 2026-10-17: 输入数字 / 三条选人物)
     detail.includes('Dialog(onDismissRequest'),
     detail.includes('跟随浮标显示'),

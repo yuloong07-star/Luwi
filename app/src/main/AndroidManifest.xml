@@ -323,6 +323,13 @@
                 android:resource="@xml/lw_widget_slot_chat" />
         </receiver>
 
+        <!-- 对话组件的气泡区是集合型组件 (ListView + RemoteViewsService): 滚动由桌面那一侧原生做,
+             我们只负责"第几条是什么"。BIND_REMOTEVIEWS 那条权限是这一层的闸 -->
+        <service
+            android:name=".plugin.widget.WidgetChatListService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
         <!-- 对话组件上那颗「说一句」: 走法 A —— 广播给浮标服务, 把右下角那块输入窗挂出来 (不出 Activity) -->
         <receiver
             android:name=".plugin.widget.WidgetChatActionReceiver"
@@ -389,3 +396,4 @@
     </queries>
 
 </manifest>
+
