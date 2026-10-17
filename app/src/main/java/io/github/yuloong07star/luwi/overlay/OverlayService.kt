@@ -1145,6 +1145,30 @@ class OverlayService : Service() {
             ballRestX = restX
             ballBaseY = restY
             currentBallX = restX
+            // **球的真实尺寸要等 view 建出来才知道** (2026-10-17 主人报的"启动时 ball 显示异常"):
+            // 上面那个 `ball` 问的是 [ballSizePx], 而这一刻 `ballView` 还是 null, 拿到的是缺省 48 dp;
+            // 挑了要求 72 dp 的外观插件 (带立绘那几份) 时窗口比停靠点多出 63 px —— 球一出来右边就有
+            // 一截在屏外, 闲置 5 s 半藏之后只剩贴着屏幕的一条边。[BallView] 构造里那次 [BallView.show]
+            // 已经把尺寸定下来了 (它的 [BallView.onMeasure] 也是同一个算式), 只是那次回调时
+            // `ballView` 还没赋值、`onBallSizeChanged` 空转; 所以这里补一拍: 按真实尺寸重算停靠点与
+            // 纵向钳制, 再摆一次窗 —— 没有主题时算出来与上面一样, 幂等
+            view.post {
+                if (ballView !== view) return@post
+                val actual = ballSizePx()
+                val snapped = BallGeometry.xForEdge(
+                    BallGeometry.edgeFor(ballRestX, metrics.widthPixels, actual),
+                    metrics.widthPixels,
+                    actual,
+                )
+                if (snapped != ballRestX) {
+                    note("the ball is ${actual}px but rest was placed for a smaller one: $ballRestX -> $snapped")
+                }
+                ballRestX = snapped
+                ballBaseY = BallGeometry.clampY(ballBaseY, metrics.heightPixels, actual)
+                peeked = false
+                applyBallPosition()
+                layoutChannel()
+            }
             phase = BallPhase.SUMMONED
             // 刚出来不半隐: 先让人看见它落在哪儿, 闲置 [BallMinutes.PEEK_IDLE_MS] 之后才自己收边
             noteActivity()
@@ -1581,6 +1605,9 @@ class OverlayService : Service() {
         OverlayState.peekBlocked = ""
         OverlayState.peekCalls += 1
         moveX(layout.x, BallGeometry.peekX(ballRestX, edge, ball))
+        // 读数跟着当场翻: 这两条路走的是动画, 不经过 [applyBallPosition], 不补这一行的话
+        // `op=state` 会在球已经收着时还报 `peeked=false` (2026-10-17 排查启动位置时被骗过一次)
+        OverlayState.peeked = true
         // 收边只动位置: 那一档该多亮由"半透明"自己说了算 (见 [BallMinutes.alphaFor])
         setBallAlpha(BallMinutes.alphaFor(BallSpot.translucent(this)))
         return true
@@ -1599,6 +1626,8 @@ class OverlayService : Service() {
         val want = ballXFor(peeked = false)
         if (!peeked && layout.x == want && snap?.isRunning != true) return
         peeked = false
+        // 与 [peek] 对称: 这两条路都不经过 [applyBallPosition], 读数要当场跟上
+        OverlayState.peeked = false
         moveX(layout.x, want)
         // 回弹这一下一定是"有人在用它": 那一档不算, 全亮全露 —— 半透明的账下一拍自己重算
         setBallAlpha(BallMinutes.alphaFor(translucent = false))

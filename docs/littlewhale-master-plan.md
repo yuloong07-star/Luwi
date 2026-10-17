@@ -379,7 +379,7 @@ Box(modifier = modifier.fillMaxSize().onSizeChanged { viewport = it }) { … }
 ## 3.1 版本事实
 
 ```dsh-ui
-{"title":"版本三要素","gap":12,"items":[{"type":"keyvalue","pairs":[{"key":"webui (dsh-web-mobile) 官方 latest","value":"3.1.0 (2026-10-17 查); 本树装 3.1.0 (2.7.8 批次 4 抬上去)"},{"key":"dsh npm latest / next","value":"0.2.0-rc.2"},{"key":"dsh 当前 submodule pin (fork)","value":"0.2.1-alpha.1 (2026-10-17 实测)"},{"key":"DSHA 在用","value":"0.1.7-rc.2"}]}]}
+{"title":"版本三要素","gap":12,"items":[{"type":"keyvalue","pairs":[{"key":"webui (dsh-web-mobile) 官方 latest","value":"3.1.0 (2026-10-17 查); 本树装 3.1.0 (2.7.8 批次 4 抬上去)"},{"key":"dsh npm latest / next","value":"0.2.0-rc.2 / 0.2.1-rc.2 (2026-10-17 查)"},{"key":"dsh 当前 submodule pin (fork)","value":"0.2.1-rc.2 (2026-10-17 晚抬上去, 分支 lw-sync-rc2)"},{"key":"DSHA 在用","value":"0.1.7-rc.2"}]}]}
 ```
 
 **用 peerDependencies 反推** (2026-10-17 实测: `dsh-web-mobile@3.0.6` 与 `@3.1.0` 的 range **逐条相同**):
@@ -388,7 +388,11 @@ Box(modifier = modifier.fillMaxSize().onSizeChanged { viewport = it }) { … }
 ^0.1.0-rc.6 || >=0.1.1-rc.0 <0.2.0 || >=0.1.2-a <0.2.0 || >=0.2.0-rc.1 <0.3.0-0
 ```
 
-实测判定: `0.2.1-alpha.1` ✅ (本树) / `0.1.7-rc.2` ✅ / `0.2.0-rc.2` ✅
+实测判定: `0.2.1-rc.2` ✅ (本树) / `0.1.7-rc.2` ✅ / `0.2.0-rc.2` ✅
+
+> 2026-10-17 晚补记: submodule 从 `0.2.1-alpha.1` 抬到 `0.2.1-rc.2` (只换基座, 17 条 fork 提交全部重放;
+> 做法与两条被上游吃掉的提交见 submodule 的 `patch.md`)。`0.2.1-rc.2` 的 peer range 与 alpha.1 一字不差,
+> webui 不用动。
 
 **三个都过 → 装 webui 与升 dsh 可以解耦, 现在就能装**
 

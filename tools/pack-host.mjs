@@ -321,6 +321,9 @@ if (!values['skip-build']) {
 }
 
 const packs = {}
+// `--concurrency 8` 让 `pack.ts` 走递归那一支; 2026-10-17 起 fork 的 `pack.ts` 会把 343 个
+// `--filter` 按字符切成几批 (Windows 上 pnpm 把这串交给 cmd, 撞 8K 上限会报
+// "The command line is too long."), 所以这里可以继续给 8
 for (const family of ['dsh', 'vendor']) {
   const directory = join(dsh, PACK_ROOT, family)
   // pack.ts clears its own output directory, so the two families must not share one
