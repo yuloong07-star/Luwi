@@ -127,6 +127,26 @@ export function apply(ctx) {
     warn(ctx, `the ball phase was not started: ${error?.message ?? error}`)
   }
 
+  // **`{{cwd}}` 这个提示词变量在 0.2.1-rc.2 里没有了** (2026-10-17): 上游把工作目录改成一条
+  // required 的 context 段 (`Current working directory: …`, 见 `working-directory`), 于是任何
+  // 还写着 `{{cwd}}` 的模板在组装时都抛 `unknown prompt variable "{{cwd}}"` —— 本仓的
+  // prompt.md、explore 预设的 persona suffix, 以及设备上用户自己写过的提示词都是这样。这里按
+  // 原名字再注册一次 (它只影响引用 `{{cwd}}` 的模板, 不引用的一步都不经过), 值取会话当前目录:
+  // `workingDirectory.get` 是"中途 cd 过"之后真正生效的那个, 那个服务不在时退回 header 的 cwd
+  try {
+    ctx.inject(['systemPrompt'], (scope) => {
+      scope.systemPrompt.variable('cwd', (context) => {
+        const agent = context.agent
+        const directory = scope.get('workingDirectory')
+        return (agent === undefined ? undefined : directory?.get(agent.session))
+          ?? agent?.session?.header?.cwd
+          ?? process.cwd()
+      })
+    })
+  } catch (error) {
+    warn(ctx, `the cwd prompt variable was not registered: ${error?.message ?? error}`)
+  }
+
   // 「看余额」那一档 (2026-10-16): 账号缝里那个数只有宿主拿得到, 落成文件应用才看得见 ——
   // **只有应用点「看余额」写出来的那个请求记号能触发它** (见 startBalance), 宿主自己不按节拍刷
   try {

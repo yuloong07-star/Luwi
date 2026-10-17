@@ -47,6 +47,9 @@ dsh 以 **git submodule** 挂在 `third_party/deepseek-harness/`, 指向 `https:
 
 **当前基座 (2026-10-17)**: 分支 `lw-sync-rc2` = 上游 **`dsh-v0.2.1-rc.2`** 的树 + fork 那批安卓补丁 (原来的 `lw-sync-alpha1` 是 0.2.1-alpha.1)。本机 `github.com:443` 不通, 所以那一跳的基座是**从 GitHub 的 tag 归档 (codeload) 重建出来的本地提交** (`upstream-rc2`, 只有树、没有上游历史), 再把 fork 提交 rebase 上去; 逐条做法与两条丢掉的提交见 submodule 的 `patch.md`。**这个 pin 还没推到 fork**: 推之前克隆本仓的人拿到的是一条不存在的提交, 别把这一版当发布基线
 
+**rc.2 删掉了 `{{cwd}}` 这个提示词变量** (上游把工作目录改成一条 required 的 context 段, `Current working directory: …`), 而本仓的 `prompts`/`prompt.md` 模板、`presets/explore` 的 persona suffix、以及设备上用户自己写过的提示词都还在引用它 —— 组装时直接抛 `unknown prompt variable "{{cwd}}"`, 自动化那条 `wind-down` 就是这么失败过一次。现在由 `host-plugin` 的 `systemPrompt.variable('cwd', …)` 按原名字补回来 (值取 `workingDirectory.get(agent.session)`, 那个服务不在时退回 `header.cwd`), 老模板一个字都不用改; 设备上量到的判据是"这一轮走到 `llm-deepseek: no API key` 才停", 而不是停在提示词组装
+
+
 ## 架构
 
 Luwi 自己是一台**远程 dsh 服务器 + 一个安卓控制端**, 两件事共用一个进程:
