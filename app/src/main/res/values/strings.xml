@@ -381,6 +381,33 @@
     <string name="settings_lock_cleared">the recording is gone, and the encrypted password went with its Keystore key</string>
     <string name="settings_lock_note_none">Nothing has been tried yet. The recording keeps only the moves: the password goes into the encrypted slot, and the taps that typed it are dropped on purpose</string>
 
+    <string name="settings_section_explore">Exploration</string>
+    <string name="settings_section_explore_summary">One read-only exploration a day; she rewrites the next task herself</string>
+    <string name="settings_explore_off">Not scheduled yet</string>
+    <string name="settings_explore_next">next %1$s</string>
+    <string name="settings_explore_running">running now (until %1$s)</string>
+    <string name="settings_explore_toggle">Explore on a schedule</string>
+    <string name="settings_explore_toggle_summary">It starts one by itself at that time; no tap needed</string>
+    <string name="settings_explore_at">Start time</string>
+    <string name="settings_explore_at_summary">Every day at %1$s</string>
+    <string name="settings_explore_at_dialog_summary">Once a day: write HH:mm (for example 03:00) and it starts by itself at that time</string>
+    <string name="settings_explore_at_hint">03:00</string>
+    <string name="settings_explore_at_bad">The time has to be HH:mm, for example 03:00</string>
+    <string name="settings_explore_card">The next exploration\'s task</string>
+    <string name="settings_explore_card_empty">(empty: it will explore the phone freely)</string>
+    <string name="settings_explore_card_dialog_summary">This is the opening task of the next run; she also rewrites it at the end of every exploration</string>
+    <string name="settings_explore_card_hint">Say in one paragraph what the next run should look at</string>
+    <string name="settings_explore_card_saved">Saved; the next run will use this</string>
+    <string name="settings_explore_card_save_failed">It was not written (the file is not writable), so nothing changed</string>
+    <string name="settings_explore_card_note">She rewrites this card after every exploration (memory + what that run found); you can also edit it here</string>
+    <string name="settings_explore_last_started">Started an exploration at %1$s</string>
+    <string name="settings_explore_last_skipped">Skipped at %1$s: %2$s</string>
+    <string name="settings_explore_last_failed">Could not queue it at %1$s: %2$s</string>
+    <string name="settings_explore_said_title">Proactive conversations per day</string>
+    <string name="settings_explore_said_summary">%1$d said today; it skips once the limit is reached</string>
+    <string name="settings_explore_said_times">%1$d</string>
+    <string name="settings_explore_note">For her to open a conversation on her own, turn on 允许它自己动手 in Automatic commands; a run skipped because the host was down is recorded here</string>
+
     <string name="settings_section_automation">Automatic commands</string>
     <string name="settings_section_automation_summary">When something happens, do something (say a line, or open a conversation to work)</string>
     <string name="settings_automation_empty">No automatic commands yet. They live in %1$s; tap New below and say in one line when it should fire and what it should do, and the model writes the rule</string>

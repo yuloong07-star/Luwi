@@ -73,6 +73,8 @@ import io.github.yuloong07star.luwi.lock.LockScript
 import io.github.yuloong07star.luwi.lock.LockSecret
 import io.github.yuloong07star.luwi.lock.LockSecretData
 import io.github.yuloong07star.luwi.lock.LockSetting
+import io.github.yuloong07star.luwi.tool.ExploreSchedule
+import io.github.yuloong07star.luwi.tool.ExploreTask
 import io.github.yuloong07star.luwi.tool.LwCamera
 import io.github.yuloong07star.luwi.tool.LwAutomation
 import io.github.yuloong07star.luwi.tool.LwLinux
@@ -234,7 +236,7 @@ internal val SettingsSectionsAlwaysOpen: Set<String> = SettingsSectionsAlwaysOpe
 /** 「能力」那一组的 13 段, 缺省全收着 (装完之后偶尔来调一次的那些) */
 private val AbilitySectionKeys = listOf(
     "accessibility", "notifications", "screenshot", "look", "ocr", "lock",
-    "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
+    "explore", "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
 )
 
 /**
@@ -618,6 +620,18 @@ fun SettingsScreen() {
                     onToggle = toggleSection,
                 ) {
                     Card { LockItems() }
+                }
+
+                // 探索 (2.7.8 批次 8): 主人 2026-10-17 的口径是"只定时开始, 没有手动入口", 所以这一段
+                // 只有开不开 / 每天几点 / 下一场那张任务卡 / 每天最多主动说几次, 外加两行读数
+                settingsSection(
+                    key = "explore",
+                    title = R.string.settings_section_explore,
+                    summary = R.string.settings_section_explore_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { ExploreItems() }
                 }
 
                 settingsSection(
@@ -3043,6 +3057,225 @@ private val AutomationMonitorTitles = linkedMapOf(
     "weather" to R.string.settings_automation_monitor_weather,
     "once" to R.string.settings_automation_monitor_once,
 )
+
+/** 排期读数里那个时刻: `MM-dd HH:mm`; 0 就是 `—` */
+private fun scheduleStamp(at: Long): String =
+    if (at <= 0L) "—" else SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(at))
+
+/** 排期读数里"到几点结束": 只给时分 */
+private fun clockStamp(at: Long): String =
+    if (at <= 0L) "—" else SimpleDateFormat("HH:mm", Locale.US).format(Date(at))
+
+/**
+ * 「探索」那一段 (2.7.8 批次 8)
+ *
+ * 主人 2026-10-17: "探索应该是定时的由用户决定开始时间，不要手动开始探索" —— 所以这里**一个手动
+ * 入口都没有**: 开不开 / 每天几点 / 下一场那张任务卡 (可手改) / 每天最多主动说几次, 外加两行读数
+ * (下一次与上一次那趟的结果)
+ *
+ * 卡不在这里改写; 它在每次探索收尾时由宿主按 `nextTask` 覆盖 (见 [ExploreTask])
+ */
+@Composable
+private fun ExploreItems() {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    var revision by remember { mutableIntStateOf(0) }
+    var editingAt by rememberSaveable { mutableStateOf(false) }
+    var editingCard by rememberSaveable { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+
+    val plan = remember(revision) { ExploreSchedule.plan(context) }
+    val cardText = remember(revision) { ExploreTask.read(context) }
+    val cardSummary = remember(revision) { ExploreTask.summary(context) }
+    val running = remember(revision) { ExploreTask.running(context) }
+    val settings = remember(revision) { LwAutomation.settings(context) }
+    val saidToday = remember(revision) { LwAutomation.saidToday(context) }
+    val nextAt = remember(revision) { ExploreSchedule.nextAt(plan.at, System.currentTimeMillis()) }
+
+    fun save(next: ExploreSchedule.Plan) {
+        ExploreSchedule.save(context, next)
+        revision += 1
+    }
+
+    val overview = buildString {
+        append(
+            if (plan.enabled) {
+                context.getString(R.string.settings_explore_next, scheduleStamp(nextAt ?: 0L))
+            } else {
+                context.getString(R.string.settings_explore_off)
+            },
+        )
+        running?.let {
+            append(" · ")
+            append(context.getString(R.string.settings_explore_running, clockStamp(it.deadline)))
+        }
+    }
+    PlaceholderItems(overview)
+
+    SwitchPreference(
+        title = stringResource(R.string.settings_explore_toggle),
+        summary = stringResource(R.string.settings_explore_toggle_summary),
+        checked = plan.enabled,
+        onCheckedChange = { save(plan.copy(enabled = it)) },
+    )
+    ArrowPreference(
+        title = stringResource(R.string.settings_explore_at),
+        summary = stringResource(R.string.settings_explore_at_summary, plan.at),
+        onClick = {
+            haptic.contextClick()
+            editingAt = true
+        },
+    )
+    ArrowPreference(
+        title = stringResource(R.string.settings_explore_card),
+        summary = cardSummary.ifEmpty { stringResource(R.string.settings_explore_card_empty) },
+        onClick = {
+            haptic.contextClick()
+            editingCard = true
+        },
+    )
+    OverlayDropdownPreference(
+        title = stringResource(R.string.settings_explore_said_title),
+        summary = stringResource(R.string.settings_explore_said_summary, saidToday, settings.saidLimit),
+        items = (1..10).map { context.getString(R.string.settings_explore_said_times, it) },
+        selectedIndex = (settings.saidLimit - 1).coerceIn(0, 9),
+        onSelectedIndexChange = { index ->
+            LwAutomation.saveSettings(context, settings.copy(saidLimit = index + 1))
+            revision += 1
+        },
+    )
+    plan.last?.let { last ->
+        val said = if (last.outcome == "started") {
+            context.getString(R.string.settings_explore_last_started, scheduleStamp(last.at))
+        } else {
+            context.getString(
+                if (last.outcome == "skipped") R.string.settings_explore_last_skipped
+                else R.string.settings_explore_last_failed,
+                scheduleStamp(last.at),
+                last.why.orEmpty(),
+            )
+        }
+        PlaceholderItems(said)
+    }
+    PlaceholderItems(message ?: stringResource(R.string.settings_explore_card_note))
+    PlaceholderItems(stringResource(R.string.settings_explore_note))
+
+    if (editingAt) {
+        ExploreTimeDialog(
+            current = plan.at,
+            onDismiss = { editingAt = false },
+            onSave = { text ->
+                editingAt = false
+                if (AutomationRule.minutesOf(text) == null) {
+                    message = context.getString(R.string.settings_explore_at_bad)
+                } else {
+                    message = null
+                    save(plan.copy(at = text.trim()))
+                }
+            },
+        )
+    }
+    if (editingCard) {
+        ExploreCardDialog(
+            initial = cardText,
+            onDismiss = { editingCard = false },
+            onSave = { text ->
+                editingCard = false
+                message = if (ExploreTask.write(context, text)) {
+                    context.getString(R.string.settings_explore_card_saved)
+                } else {
+                    context.getString(R.string.settings_explore_card_save_failed)
+                }
+                revision += 1
+            },
+        )
+    }
+}
+
+/** 每天几点: 一个 `HH:mm` 的文本框 (校验在 [ExploreItems] 里做) */
+@Composable
+private fun ExploreTimeDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    val haptic = LocalHapticFeedback.current
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_explore_at),
+        summary = stringResource(R.string.settings_explore_at_dialog_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        var text by rememberSaveable { mutableStateOf(current) }
+        SuperTextField(
+            modifier = Modifier.padding(bottom = 16.dp),
+            value = text,
+            onValueChange = { text = it },
+            label = stringResource(R.string.settings_explore_at_hint),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        )
+        Row(horizontalArrangement = Arrangement.SpaceBetween) {
+            TextButton(
+                text = stringResource(R.string.button_cancel),
+                onClick = {
+                    haptic.contextClick()
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(20.dp))
+            TextButton(
+                text = stringResource(R.string.button_confirm),
+                onClick = {
+                    haptic.confirm()
+                    onSave(text)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+    }
+}
+
+/** 下一场那张任务卡: 多行编辑框 (留空 = 到点自由探索) */
+@Composable
+private fun ExploreCardDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    val haptic = LocalHapticFeedback.current
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_explore_card),
+        summary = stringResource(R.string.settings_explore_card_dialog_summary),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        var text by rememberSaveable(initial) { mutableStateOf(initial) }
+        SuperTextField(
+            modifier = Modifier.padding(bottom = 16.dp),
+            value = text,
+            onValueChange = { text = it },
+            minLines = 8,
+            maxLines = 14,
+            label = stringResource(R.string.settings_explore_card_hint),
+        )
+        Row(horizontalArrangement = Arrangement.SpaceBetween) {
+            TextButton(
+                text = stringResource(R.string.button_cancel),
+                onClick = {
+                    haptic.contextClick()
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(20.dp))
+            TextButton(
+                text = stringResource(R.string.button_confirm),
+                onClick = {
+                    haptic.confirm()
+                    onSave(text)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+    }
+}
 
 /**
  * 「自动指令」那一段 (2.5.0 批次 8)

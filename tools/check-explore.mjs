@@ -63,7 +63,8 @@ const api = new Function(
     + ' EXPLORE_STEPS_DEFAULT, EXPLORE_STEPS_RANGE, EXPLORE_SAID_DEFAULT, EXPLORE_SUMMARY_CHARS,'
     + ' EXPLORE_SUMMARIES_KEPT, EXPLORE_CANDIDATES_MAX, EXPLORE_CANDIDATES_KEPT, EXPLORE_FACT_MAX,'
     + ' EXPLORE_KINDS, EXPLORE_SENSITIVITY, EXPLORE_TICK_MS, EXPLORE_WORKSPACE_NAME,'
-    + ' EXPLORE_PRESET, EXPLORE_CARDS_FILE, EXPLORE_STATE_FILE }',
+    + ' EXPLORE_PRESET, EXPLORE_TASK_FILE, EXPLORE_TASK_CHARS, EXPLORE_STATE_FILE,'
+    + ' proactiveSaidCount }',
 )(() => '', async () => [], () => '', () => '', async () => {}, async () => {}, async () => {}, async () => {})
 
 /* ── 一、预设那一段 ────────────────────────────────────────────────────── */
@@ -134,6 +135,11 @@ needed('不要用别的工具写这份摘要')
 needed('不要自己往长期记忆里写')
 needed('一律 sensitivity: high')
 needed('临时界面状态')
+// 2.7.8 批次 8: 收尾写下一场任务卡 + 那条主动对话走自动指令 (不走 schedule_create)
+needed('nextTask')
+needed('lw_automation')
+needed('schedule_create')
+needed('画像里"看到的"与"推断的"分开写')
 
 const toolFace = host.slice(host.indexOf("name: 'lw_explore'"), host.indexOf("name: 'lw_events_subscribe'"))
 check('lw_explore 的说明里也念到了那五节 (两处都要)', [
@@ -265,21 +271,37 @@ check('步数用尽的正文点名 op=finish 并说"不要再开新的事"', [
 /* ── 七、工具面 ───────────────────────────────────────────────────────── */
 
 check("宿主里注册了 'lw_explore'", host.includes("name: 'lw_explore'"), true)
-check('op 就是 status / start / finish 三个', /enum: \['status', 'start', 'finish'\]/u.test(toolFace), true)
+check('op 就是 status / finish 两个 (2.7.8 批次 8 撤掉了手动 start)', /enum: \['status', 'finish'\]/u.test(toolFace), true)
 check('candidates 的参数表在, 四个 kind 都在说明里', [
   /candidates:/u.test(toolFace),
   ['fact', 'preference', 'todo', 'date'].every((one) => toolFace.includes(one)),
+], [true, true])
+check('nextTask 的参数表与说明都在 (下一场任务卡)', [
+  /nextTask:/u.test(toolFace),
+  toolFace.includes('NEXT exploration'),
+], [true, true])
+check('工具说明里写清"宿主自己按排期开, 这条工具不开"', [
+  toolFace.includes('never starts one') || toolFace.includes('never starts'),
+  toolFace.includes('daily start time'),
 ], [true, true])
 check('工具数的下限抬到 65', Number(/(?:const FLOOR = )(\d+)/.exec(await read('tools/check-host-plugin.mjs'))[1]), 65)
 
 /* ── 八、文件与键名 ───────────────────────────────────────────────────── */
 
-check('三份文件的名字与目录', [
-  api.EXPLORE_STATE_FILE,
-  api.EXPLORE_CARDS_FILE,
-  /join\(home, 'lw', EXPLORE_STATE_FILE\)/u.test(section),
-], ['explore.json', 'explore-cards.json', true])
-check('探索卡清单的键名 (批次 8 才读写, 本批只定下它)', section.includes('{"names"'), true)
+check('那份任务卡的名字与上限 (宿主与应用同一个约定)', [
+  api.EXPLORE_TASK_FILE,
+  api.EXPLORE_TASK_CHARS,
+  /join\(home, 'lw', EXPLORE_TASK_FILE\)/u.test(section),
+], ['explore-card.md', 8000, true])
+check('宿主收尾写卡: 原子写 + nextTask 只收非空', [
+  /async function exploreTaskWrite\(text\)/u.test(section),
+  /const temporary = `\$\{path\}\.tmp`/u.test(section),
+  /nextTask: args\?\.nextTask/u.test(host),
+  /exploreTaskWrite\(askedNext\)/u.test(section),
+], [true, true, true, true])
+check('收尾回执念到下一场那张卡', [
+  section.includes("next task: no nextTask was given") || section.includes('next task:'),
+], [true])
 check('候选目录就在摘要目录底下', [
   /const EXPLORE_CANDIDATES_DIR = 'explore\/candidates'/u.test(section),
   /const EXPLORE_SUMMARY_DIR = 'explore'/u.test(section),
@@ -376,6 +398,98 @@ check('正文带 frontmatter 那六个键', (() => {
   return ['at: T', 'session: S', 'kind: todo', 'sensitivity: low', 'confidence: 0.6', 'evidence: lw_ui']
     .every((one) => body.includes(one))
 })(), true)
+
+/* ── 十二、探索卡与排期 (2.7.8 批次 8) ─────────────────────────────────── */
+
+const task = await read('app/src/main/java/io/github/yuloong07star/luwi/tool/ExploreTask.kt')
+const schedule = await read('app/src/main/java/io/github/yuloong07star/luwi/tool/ExploreSchedule.kt')
+const manifest = await read('app/src/main/AndroidManifest.xml')
+const service = await read('app/src/main/java/io/github/yuloong07star/luwi/host/DshHostService.kt')
+const screen = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/SettingsScreen.kt')
+const initialCard = await read('explore-card.md')
+
+check('初始卡就是那一场画像探索 (主人 2026-10-17 点名)', [
+  initialCard.includes('手机环境'),
+  initialCard.includes('装了哪些应用'),
+  initialCard.includes('用户画像'),
+  initialCard.includes('lw_apps'),
+  initialCard.includes('已确认事实'),
+  initialCard.includes('仍不确定的点'),
+  initialCard.includes('sensitivity: high'),
+  initialCard.includes('nextTask'),
+], [true, true, true, true, true, true, true, true])
+
+check('卡文件与种子记号 (应用与初始卡对得上)', [
+  /const val DIRECTORY = "lw"/.test(task),
+  /const val FILE = "explore-card.md"/.test(task),
+  /const val STAMP = ".lw-seed-explore"/.test(task),
+  /const val MAX_CHARS = 8000/.test(task),
+  task.includes('assets.open(FILE)'),
+], [true, true, true, true, true])
+
+check('卡是原子写 (tmp + rename, 单写者)', [
+  /val tmp = File\(target\.parentFile, "\$\{target\.name\}\.tmp"\)/.test(task),
+  /tmp\.renameTo\(target\)/.test(task),
+], [true, true])
+
+check('排期: 每天一个时刻 / 缺省 03:00 / requestCode 42', [
+  /const val DEFAULT_AT = "03:00"/.test(schedule),
+  /private const val REQUEST = 42/.test(schedule),
+  /fun nextAt\(at: String, now: Long/.test(schedule),
+  /fun skipReason\(hostRunning: Boolean, powerSave: Boolean, running: Boolean\)/.test(schedule),
+], [true, true, true, true])
+
+check('到点那几件事都在: 读卡 / 写收件箱 / 记 last', [
+  /ExploreTask\.read\(context\)/.test(schedule),
+  /VoiceInbox\.append\(context, text, source = VoiceInbox\.SOURCE_EXPLORE\)/.test(schedule),
+  /save\(context, current\.copy\(last = Last\(now, "skipped", skip\)\)\)/.test(schedule),
+  /save\(context, current\.copy\(last = Last\(now, "started", why\)\)\)/.test(schedule),
+], [true, true, true, true])
+
+check('排期配置文件: lw/explore-schedule.json + 三个读数键', [
+  /const val FILE = "explore-schedule.json"/.test(schedule),
+  schedule.includes('put("enabled", plan.enabled)'),
+  schedule.includes('put("outcome", last.outcome)'),
+  schedule.includes('put("why", it)'),
+], [true, true, true, true])
+
+check('接收器在清单里且 exported=false', [
+  /<receiver\s+android:name="\.tool\.ExploreAlarmReceiver"\s+android:exported="false" \/>/u.test(manifest),
+], [true])
+
+check('宿主起来时两个 ensure 都调', [
+  /ExploreTask\.ensure\(this\)/.test(service),
+  /ExploreSchedule\.ensure\(this\)/.test(service),
+], [true, true])
+
+check('设置页那段: 开关 / 时刻 / 卡 / 上限 / 读数, 没有手动开始', [
+  /settingsSection\(\s*key = "explore"/u.test(screen),
+  screen.includes('R.string.settings_explore_toggle'),
+  screen.includes('R.string.settings_explore_at'),
+  screen.includes('R.string.settings_explore_card'),
+  screen.includes('R.string.settings_explore_said_title'),
+  screen.includes('ExploreSchedule.save('),
+  screen.includes('ExploreTask.write('),
+  !screen.includes('settings_explore_start'),
+], [true, true, true, true, true, true, true, true])
+
+check('构建把初始卡拷进 assets', (await read('app/build.gradle.kts')).includes('projectDirectory.file("explore-card.md")'), true)
+
+check('宿主那本"主动说"的账: 只数 task / 非手动 / 投出去的 / 同一天', api.proactiveSaidCount([
+  '{"hit":true,"action":"task","delivered":true,"at":1792230000000}',
+  '{"hit":true,"action":"task","delivered":true,"manual":true,"at":1792230000000}',
+  '{"hit":true,"action":"remind","delivered":true,"at":1792230000000}',
+  '{"hit":true,"action":"task","blocked":"quiet","at":1792230000000}',
+  '{"hit":true,"action":"task","delivered":false,"at":1792230000000}',
+  '{"hit":false,"action":"task","at":1792230000000}',
+  '{"hit":true,"action":"task","delivered":true,"at":0}',
+], api.exploreDayKey(1792230000000)), 1)
+
+check('status 那两行读数换了账本 (不再写"下一批")', [
+  section.includes('task rules only; a manual run does not count'),
+  section.includes('next task card:'),
+  !section.includes('the daily limit lands in the next batch'),
+], [true, true, true])
 
 /* ── 收尾 ─────────────────────────────────────────────────────────────── */
 

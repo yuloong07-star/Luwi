@@ -112,8 +112,11 @@ internal object LwQuick {
      * 顺序是先挑非井号行、再退回标题行: 样例的第一行就是 `# 名字`, 直接拿它当摘要会与设置页那一行的
      * 标题一模一样 ("制定旅游计划 / 制定旅游计划"), 看着像坏了 —— 而第二行那句"这份工作流做什么"才是
      * 想给人看的
+     *
+     * 2.7.8 批次 8 起也由 [ExploreTask.summary] 复用: 探索卡是同一形状的 Markdown, 两处各写一份
+     * 摘要算法迟早会漂开
      */
-    private fun summaryOf(file: File): String = runCatching {
+    internal fun summaryOf(file: File): String = runCatching {
         val lines = file.useLines { it.take(MAX_SUMMARY_LINES).toList() }.map { it.trim() }
         val first = lines.firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
             ?: lines.firstOrNull { it.isNotEmpty() }?.trimStart('#')?.trim()

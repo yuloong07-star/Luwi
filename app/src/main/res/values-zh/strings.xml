@@ -381,6 +381,33 @@
     <string name="settings_lock_cleared">录制已经删掉, 加密的密码也连着那把 Keystore 密钥一起走了</string>
     <string name="settings_lock_note_none">还没试过。录制里只留动作: 密码进加密那一格, 而"敲密码那几个点击"是有意丢掉的</string>
 
+    <string name="settings_section_explore">探索</string>
+    <string name="settings_section_explore_summary">每天定时开一场只读探索, 下一场做什么由她自己改写</string>
+    <string name="settings_explore_off">还没开</string>
+    <string name="settings_explore_next">下一次 %1$s</string>
+    <string name="settings_explore_running">现在在跑 (到 %1$s 结束)</string>
+    <string name="settings_explore_toggle">按时间自己探索</string>
+    <string name="settings_explore_toggle_summary">到点自己开一场, 不用手动点</string>
+    <string name="settings_explore_at">每天几点开始</string>
+    <string name="settings_explore_at_summary">每天 %1$s</string>
+    <string name="settings_explore_at_dialog_summary">一天一次: 填 HH:mm (例如 03:00), 到点她自己开始</string>
+    <string name="settings_explore_at_hint">03:00</string>
+    <string name="settings_explore_at_bad">时刻要写成 HH:mm, 例如 03:00</string>
+    <string name="settings_explore_card">下一次探索的任务</string>
+    <string name="settings_explore_card_empty">(空: 到点会自由探索这台手机)</string>
+    <string name="settings_explore_card_dialog_summary">这一份就是下一场的开场任务; 她每次探索结束也会按那一趟改写它</string>
+    <string name="settings_explore_card_hint">用一段话说清下一场看什么</string>
+    <string name="settings_explore_card_saved">已经存好了, 下一场就用这一份</string>
+    <string name="settings_explore_card_save_failed">没写进去 (文件不可写), 这一份没生效</string>
+    <string name="settings_explore_card_note">卡由她每次探索结束后改写 (已知记忆 + 这一趟的结论), 也可以在这里手改</string>
+    <string name="settings_explore_last_started">%1$s 开始了一场探索</string>
+    <string name="settings_explore_last_skipped">%1$s 没跑: %2$s</string>
+    <string name="settings_explore_last_failed">%1$s 没投出去: %2$s</string>
+    <string name="settings_explore_said_title">每天最多主动说几次</string>
+    <string name="settings_explore_said_summary">今天已经主动说了 %1$d 次 · 到上限就跳过</string>
+    <string name="settings_explore_said_times">%1$d 次</string>
+    <string name="settings_explore_note">要让她自己开一场主动对话, 「自动指令」里的「允许它自己动手」得开着; 宿主没在跑的那一次会跳过并记在这里</string>
+
     <string name="settings_section_automation">自动指令</string>
     <string name="settings_section_automation_summary">满足条件就做一件事 (提醒一声, 或者开一场会话干活)</string>
     <string name="settings_automation_empty">还没有自动指令。存在这里: %1$s; 点下面的「新建」说一句"到点 / 到了某地 / 收到某条通知就做什么", 规则由模型写</string>

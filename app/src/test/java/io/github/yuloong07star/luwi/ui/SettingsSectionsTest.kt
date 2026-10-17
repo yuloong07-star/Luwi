@@ -19,10 +19,10 @@ class SettingsSectionsTest {
     /** D1 拍板的那六段: 省电那一段 + 「常用」一级分组下那五段 (导航那一段 2026-10-17 撤了) */
     private val common = listOf("power", "appearance", "channel", "ball", "wake", "speak")
 
-    /** 「能力」那一组的 13 段, 缺省全收着 */
+    /** 「能力」那一组的 14 段, 缺省全收着 (探索那一段是 2.7.8 批次 8 加的) */
     private val abilities = listOf(
         "accessibility", "notifications", "screenshot", "look", "ocr", "lock",
-        "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
+        "explore", "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
     )
 
     @Test
@@ -39,7 +39,7 @@ class SettingsSectionsTest {
     fun abilitySectionsAreCollapsed() {
         val collapsed = defaultCollapsed(SettingsSectionKeys)
 
-        assertEquals("缺省收起来的就是能力那 13 段", abilities.toSet(), collapsed)
+        assertEquals("缺省收起来的就是能力那 14 段", abilities.toSet(), collapsed)
         abilities.forEach { key ->
             assertTrue("$key 在能力组, 缺省应当收着", key in collapsed)
         }
@@ -71,7 +71,7 @@ class SettingsSectionsTest {
     @Test
     fun reenteringKeepsWhatTheUserToggled() {
         assertEquals(
-            "冷启动 (进程里还没有那一份): 缺省那 13 段收着",
+            "冷启动 (进程里还没有那一份): 缺省那 14 段收着",
             defaultCollapsed(SettingsSectionKeys),
             initialCollapsed(null),
         )
@@ -89,7 +89,7 @@ class SettingsSectionsTest {
     @Test
     fun sectionKeysAreUnique() {
         assertEquals("段名不能重复", SettingsSectionKeys.size, SettingsSectionKeys.toSet().size)
-        assertEquals("现在页面上是 19 段", 19, SettingsSectionKeys.size)
-        assertEquals("常用六段 + 能力十三段", SettingsSectionKeys.size, common.size + abilities.size)
+        assertEquals("现在页面上是 20 段", 20, SettingsSectionKeys.size)
+        assertEquals("常用六段 + 能力十四段", SettingsSectionKeys.size, common.size + abilities.size)
     }
 }

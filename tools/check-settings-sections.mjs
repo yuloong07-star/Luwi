@@ -54,12 +54,12 @@ check('白名单就是 D1 那六段 (省电 + 常用五段; 导航那一段 2026
   'power', 'appearance', 'channel', 'ball', 'wake', 'speak',
 ])
 
-check('能力那一组 13 段', ability, [
+check('能力那一组 14 段', ability, [
   'accessibility', 'notifications', 'screenshot', 'look', 'ocr', 'lock',
-  'automation', 'quick', 'plugin', 'skills', 'linux', 'sync', 'permissions',
+  'explore', 'automation', 'quick', 'plugin', 'skills', 'linux', 'sync', 'permissions',
 ])
 
-check('页面上真是 19 段', page.length, 19)
+check('页面上真是 20 段', page.length, 20)
 
 check('两份名单拼起来与页面逐个对齐 (顺序也管)', [...(open ?? []), ...(ability ?? [])], page)
 

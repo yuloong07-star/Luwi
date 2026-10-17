@@ -283,6 +283,12 @@
             android:name=".automation.AutomationAlarmReceiver"
             android:exported="false" />
 
+        <!-- 探索的排期 (2.7.8 批次 8): 每天一个时刻, 到点读那张任务卡写一行收件箱。与上面那个闹钟
+             分开一个 requestCode (42 对 41), 两边互不覆盖; exported=false 的理由与上一条相同 -->
+        <receiver
+            android:name=".tool.ExploreAlarmReceiver"
+            android:exported="false" />
+
         <!-- 桌面组件那两个槽 (插件方案 v2 的 3.1): 组件由**主 APK**声明, 插件只往里填内容 ——
              于是"往桌面加一只鲸鱼娘"不再需要第二个 APK。同槽互斥, 一个槽同一时刻只挂一只插件 -->
         <receiver

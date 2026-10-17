@@ -166,6 +166,9 @@ val copySeedAssets = tasks.register<Copy>("copySeedAssets") {
     shippedQuickCommands.forEach { name ->
         from(commands.file("$name.md")) { into("quick-commands") }
     }
+    // 探索那张任务卡的初始版 (2.7.8 批次 8): 源在仓库根, 落到 assets 根上, 由 ExploreTask 首启抄进
+    // `$DSH_HOME/lw/explore-card.md` —— 之后它会随每次探索被改写, 所以这里只是一份种子
+    from(rootProject.layout.projectDirectory.file("explore-card.md"))
     // 应用对应的那一份技能目录 (2.7.0 那一批): 整目录抄, 条数由 catalog.json 自己说了算 —— 加一条
     // 只写两个文件 (catalog.json 一行 + 一个 SKILL.md), 不用回来动构建脚本
     from(rootProject.layout.projectDirectory.dir("app-skills")) { into("app-skills") }

@@ -3574,8 +3574,9 @@ const TOOLS = [
       + ' yours to count**: when the calls run out you are told once to finish, and when the time'
       + ' runs out that turn is cancelled and you are told to finish immediately - neither of those'
       + ' refuses a tool call, so nothing here stops you, and nothing here counts what a subagent'
-      + ' does. op=start opens one (refused while another is still running, and refused outright in'
-      + ' power save mode, which is reported as such); op=finish hands in the report. The three red'
+      + ' does. **The user sets a daily start time and the host opens the exploration itself from the'
+      + ' task card it keeps**, so this tool never starts one: op=status reports the current run, and'
+      + ' op=finish hands in the report. The three red'
       + ' lines (no irreversible act on an app, no writing any existing file, no sending anything)'
       + ' live in this preset\'s prompt text, not in this tool: **this call cannot enforce them and'
       + ' does not check them.** The summary has to come through op=finish, and the host is what'
@@ -3587,26 +3588,17 @@ const TOOLS = [
       + ' A candidate card is ONE sentence worth having next time (kind fact / preference / todo /'
       + ' date, plus sensitivity low or high, confidence, evidence) - **not a snapshot of the'
       + ' screen**: battery level or "it is on this page" is not a card. A date (birthday,'
-      + ' anniversary, due date) is always sensitivity high, and at most 5 cards go in one finish.',
+      + ' anniversary, due date) is always sensitivity high, and at most 5 cards go in one finish.'
+      + ' op=finish also takes `nextTask`: the task for the NEXT exploration, one short paragraph,'
+      + ' decided from this run, the previous summary and the memory you already have. The host'
+      + ' writes it over the task card, so the next scheduled run starts from it - leave it out and'
+      + ' the card stays as it is.',
     parameters: {
       op: {
         type: 'string',
         required: true,
-        description: 'status reads this exploration, start opens one, finish hands in the report',
-        enum: ['status', 'start', 'finish'],
-      },
-      text: {
-        type: 'string',
-        description: 'start only: what this exploration is for, in the user\'s words. Left out it'
-          + ' is "自由探索这台手机"',
-      },
-      minutes: {
-        type: 'integer',
-        description: 'start only: how long, 1..180. Leave it out for the default of 30',
-      },
-      steps: {
-        type: 'integer',
-        description: 'start only: how many tool calls, 1..1000. Leave it out for the default of 60',
+        description: 'status reads this exploration, finish hands in the report',
+        enum: ['status', 'finish'],
       },
       summary: {
         type: 'string',
@@ -3620,6 +3612,11 @@ const TOOLS = [
           + ' evidence}. kind is fact / preference / todo / date; sensitivity is low or high'
           + ' (date is always high)',
       },
+      nextTask: {
+        type: 'string',
+        description: 'finish only: the task of the next exploration, one paragraph (what to look'
+          + ' at next time). It becomes the card the next scheduled run uses',
+      },
     },
     output: {
       schema: { type: 'string' },
@@ -3629,23 +3626,15 @@ const TOOLS = [
       const op = String(args?.op ?? '').trim()
       // 工具那一层没有 `ctx` 这个名字 (见 lw_mode 上面那段), 一律用模块级的 hostCtx
       if (op === 'status') return exploreStatusText(hostCtx)
-      if (op === 'start') {
-        const outcome = await startExplore(hostCtx, {
-          text: args?.text,
-          minutes: args?.minutes,
-          steps: args?.steps,
-          via: 'tool',
-        })
-        return exploreStartText(outcome)
-      }
       if (op === 'finish') {
         const outcome = await finishExplore(hostCtx, {
           summary: args?.summary,
           candidates: args?.candidates,
+          nextTask: args?.nextTask,
         }, sessionIdOf(exec))
         return exploreFinishText(outcome)
       }
-      throw new Error('lw_explore takes op status, start or finish')
+      throw new Error('lw_explore takes op status or finish')
     },
   }),
 
@@ -7610,11 +7599,12 @@ const EXPLORE_MINUTES_RANGE = [1, 180]
 const EXPLORE_STEPS_DEFAULT = 60
 const EXPLORE_STEPS_RANGE = [1, 1000]
 
-/** 每日主动说的上限 (批次 8 才记账; 本批只读, 见 [exploreStatus]) */
+/** 每日主动说的上限 (D17; 应用那一侧按这个缺省, 实际值在 automations/settings.json 的 saidLimit) */
 const EXPLORE_SAID_DEFAULT = 3
 
 /** 那几份文件的文件名 (与应用那一侧同一个约定, 谁都不许单边改) */
-const EXPLORE_CARDS_FILE = 'explore-cards.json'
+const EXPLORE_TASK_FILE = 'explore-card.md'
+const EXPLORE_TASK_CHARS = 8000
 const EXPLORE_STATE_FILE = 'explore.json'
 const EXPLORE_SUMMARY_DIR = 'explore'
 const EXPLORE_CANDIDATES_DIR = 'explore/candidates'
@@ -7816,10 +7806,42 @@ function exploreCandidatesDir() {
   return home ? join(home, 'lw', EXPLORE_CANDIDATES_DIR) : null
 }
 
-/** 探索卡清单 (批次 8 才读写, 本批只定文件名与键名): `{"names": ["<卡名>", ...]}` */
-function exploreCardsPath() {
+/** 探索那张任务卡 (批次 8): `$DSH_HOME/lw/explore-card.md` —— 应用排期到点读它, 收尾时由这里改写 */
+function exploreTaskPath() {
   const home = process.env.DSH_HOME
-  return home ? join(home, 'lw', EXPLORE_CARDS_FILE) : null
+  return home ? join(home, 'lw', EXPLORE_TASK_FILE) : null
+}
+
+/**
+ * 把下一场探索的任务写进那张卡 (收尾时调; 原子写)
+ *
+ * 与应用那侧 `ExploreTask` 同一个文件: 应用只读 (与主人手改), 这里只在收尾时覆盖
+ */
+async function exploreTaskWrite(text) {
+  const path = exploreTaskPath()
+  if (path === null) return { path: '', chars: 0, error: 'this host has no DSH_HOME' }
+  const body = String(text ?? '').trim().slice(0, EXPLORE_TASK_CHARS)
+  const temporary = `${path}.tmp`
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(temporary, `${body}\n`)
+    await rename(temporary, path)
+    return { path, chars: body.length }
+  } catch (error) {
+    return { path, chars: 0, error: String(error?.message ?? error) }
+  }
+}
+
+/** 那张卡现在什么样 (status 的读数用) */
+async function exploreTaskInfo() {
+  const path = exploreTaskPath()
+  if (path === null) return { path: '', chars: 0 }
+  try {
+    const text = await readFile(path, 'utf8')
+    return { path, chars: text.trim().length }
+  } catch {
+    return { path, chars: 0 }
+  }
 }
 
 /** 那份状态文件读成对象: 读不到 / 不是对象都给空对象 (调用方一律按缺省读) */
@@ -8252,6 +8274,11 @@ async function chooseExplorePreset(ctx) {
 
 /** 收尾: 交摘要与候选卡 (唯一的出口) */
 async function finishExplore(_ctx, args = {}, sessionId = '') {
+  // 下一场那张卡 (批次 8): 收尾时模型交一段话, 宿主覆盖 `lw/explore-card.md`。**先算出来**,
+  // 因为"已经落过了"那条分支也允许补交一次 nextTask (第二次 finish 常常是子代理发的)
+  const askedNext = typeof args?.nextTask === 'string'
+    ? args.nextTask.trim().slice(0, EXPLORE_TASK_CHARS)
+    : ''
   if (exploreRun.session === null) {
     // **同一场刚交过就如实说"已经落过了"** (2026-10-17 真机上量到的形态, 见 [exploreState] 的
     // lastSaved): 桩摘要不算, 那种情况模型补一份真的正是我们要的
@@ -8270,6 +8297,8 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
     const fresh = saved !== null && saved.stub !== true
       && Date.now() - Number(saved.at ?? 0) <= EXPLORE_ALREADY_SAVED_MS
     if (fresh) {
+      const task = askedNext === '' ? null : await exploreTaskWrite(askedNext)
+      if (task?.error) console.warn(`luwi-channel: the next task card was not written: ${task.error}`)
       return {
         saved: true,
         already: true,
@@ -8278,6 +8307,7 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
         truncated: false,
         candidates: saved.candidates,
         dropped: [],
+        nextTask: task,
       }
     }
     return { saved: false, why: 'no exploration is running, so there is nothing to finish' }
@@ -8294,26 +8324,77 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
     stub: false,
   })
   if (saved.error) return { saved: false, why: saved.error }
+  const task = askedNext === '' ? null : await exploreTaskWrite(askedNext)
+  if (task?.error) console.warn(`luwi-channel: the next task card was not written: ${task.error}`)
+  else if (task !== null) {
+    console.log(`luwi-channel: the next exploration's task card now says ${task.chars} characters`)
+  }
   exploreState.finished += 1
   console.log(
     `luwi-channel: exploration finished -> ${saved.path} (${saved.chars} chars,`
       + ` ${saved.candidates} candidate card(s), ${saved.dropped.length} dropped)`,
   )
-  return { saved: true, ...saved }
+  return { saved: true, ...saved, nextTask: task }
+}
+
+/**
+ * 今天主动说了几次 (D17 的读数)
+ *
+ * 与 `AutomationStore.saidToday` 同一套过滤: **真的投出去的 `task`** (hit / 无 blocked /
+ * delivered 不是 false / 不是手动 / action 是 task / 同一日期键), `remind` 与手动跑都不算。
+ * 上限读 `automations/settings.json` 的 `saidLimit` (缺省 3, 夹 1..10)
+ */
+function proactiveSaidCount(lines, day) {
+  let count = 0
+  for (const line of lines) {
+    if (typeof line !== 'string' || line.trim() === '') continue
+    let one = null
+    try {
+      one = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (one?.hit !== true) continue
+    if (one?.blocked !== undefined) continue
+    if (one?.delivered === false) continue
+    if (one?.manual === true) continue
+    if (one?.action !== 'task') continue
+    if (exploreDayKey(Number(one?.at)) !== day) continue
+    count += 1
+  }
+  return count
+}
+
+async function proactiveSaid(now = Date.now()) {
+  const home = process.env.DSH_HOME
+  const answer = { today: 0, limit: EXPLORE_SAID_DEFAULT }
+  if (!home) return answer
+  const day = exploreDayKey(now)
+  try {
+    const raw = await readFile(join(home, 'automations', 'settings.json'), 'utf8')
+    const asked = Number(JSON.parse(raw)?.saidLimit)
+    if (Number.isFinite(asked)) answer.limit = Math.min(10, Math.max(1, Math.round(asked)))
+  } catch {
+    // 没有这一份就是缺省, 不是错
+  }
+  try {
+    const raw = await readFile(join(home, 'automations', 'history.jsonl'), 'utf8')
+    answer.today = proactiveSaidCount(raw.split('\n'), day)
+  } catch {
+    // 还没有历史
+  }
+  return answer
 }
 
 /** 这一档现在什么样 (给 `lw_explore op=status`) */
 async function exploreStatus(ctx) {
   const budget = exploreBudget(exploreRun)
-  const record = await exploreStateRead()
   const latest = await exploreLatestSummary()
   const cards = await exploreCandidatesCount()
   const readings = await voiceWorkspaceReadings(ctx, exploreRun.session ?? '', exploreWorkspaceState)
   const power = await explorePowerSave()
-  const said = record?.said
-  const day = exploreDayKey()
-  const saidDate = typeof said?.date === 'string' ? said.date : ''
-  const saidCount = Number.isFinite(Number(said?.count)) ? Number(said.count) : 0
+  const said = await proactiveSaid()
+  const task = await exploreTaskInfo()
   return {
     running: exploreRun.session !== null && exploreRun.over !== true,
     over: exploreRun.over,
@@ -8339,9 +8420,11 @@ async function exploreStatus(ctx) {
     powerSaveWhy: power.why,
     summary: latest,
     candidates: cards,
-    said: saidCount,
-    saidToday: saidDate === day ? saidCount : 0,
+    said: said.today,
+    saidToday: said.today,
+    saidLimit: said.limit,
     saidDefault: EXPLORE_SAID_DEFAULT,
+    nextTask: task,
     preset: exploreState.preset,
     presetWhy: exploreState.presetWhy,
     started: exploreState.started,
@@ -8377,7 +8460,8 @@ async function exploreStatusText(ctx) {
       + `${readings.powerSaveUnknown ? ', the probe failed once this run' : ''}`,
     `latest summary: ${readings.summary || '(none yet)'}`,
     `candidate cards: ${readings.candidates} in all`,
-    `said today: ${readings.saidToday} of ${readings.saidDefault} (the daily limit lands in the next batch)`,
+    `said today: ${readings.saidToday} of ${readings.saidLimit} (task rules only; a manual run does not count)`,
+    `next task card: ${readings.nextTask.path || '(none yet)'} (${readings.nextTask.chars} chars)`,
     `this run: ${readings.started} started, ${readings.finished} finished, ${readings.stubs} stub(s),`
       + ` ${readings.refusals} refused, ${readings.dropped} card(s) dropped`,
     `preset: ${readings.preset ?? '(the registry default)'}${readings.presetWhy ? ` - ${readings.presetWhy}` : ''}`,
@@ -8390,27 +8474,19 @@ async function exploreStatusText(ctx) {
   return withJson(lines, readings)
 }
 
-/** `op=start` 那一段回执 */
-function exploreStartText(outcome) {
-  if (outcome.started !== true) {
-    return `exploration: not started - ${outcome.reason}`
-  }
-  return [
-    `exploration: started in ${shortSession(outcome.session)}`,
-    `workspace: ${outcome.workspace || '(not registered)'}`,
-    `budget: ${outcome.minutes} minutes / ${outcome.stepLimit} steps (counted by the host)`,
-    `preset: ${outcome.preset ?? '(the registry default)'}${outcome.presetWhy ? ` - ${outcome.presetWhy}` : ''}`,
-    `previous summary: ${outcome.summary || '(none, this is the first one)'}`,
-  ].join('\n')
-}
-
 /** `op=finish` 那一段回执 */
 function exploreFinishText(outcome) {
+  const nextTask = outcome.nextTask === null || outcome.nextTask === undefined
+    ? 'next task: no nextTask was given, so the card stays as it is'
+    : outcome.nextTask.error
+      ? `next task: the card was NOT written (${outcome.nextTask.error})`
+      : `next task: the card for the next run now has ${outcome.nextTask.chars} characters`
   if (outcome.already === true) {
     return [
       `this exploration's summary was already saved: ${outcome.path}`,
       `body: ${outcome.chars} characters, candidate cards: ${outcome.candidates} written`,
       'nothing was written a second time - do not hand the same report in again',
+      nextTask,
     ].join('\n')
   }
   if (outcome.saved !== true) return `the summary was not saved: ${outcome.why}`
@@ -8419,6 +8495,7 @@ function exploreFinishText(outcome) {
     `body: ${outcome.chars} characters${outcome.truncated ? ' (cut at the 8000-character limit)' : ''}`,
     `candidate cards: ${outcome.candidates} written`
       + `${outcome.dropped.length > 0 ? `, ${outcome.dropped.length} dropped (see the log)` : ''}`,
+    nextTask,
   ].join('\n')
 }
 
