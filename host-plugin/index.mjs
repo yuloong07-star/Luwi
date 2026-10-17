@@ -20,7 +20,7 @@ import { connect } from 'node:net'
 import { readFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -3855,6 +3855,10 @@ const TOOLS = [
         const state = await voiceInboxState()
         if (!state.inbox) return 'the voice inbox has no place to live: DSH_HOME is not set'
         const lines = state.queued.slice(-MAX_VOICE_LINES)
+        // 2.7.8 批次 2 的三项读数 (根因一 / 根因二的现场): 这一场属于哪个工作区 / 它的 cwd /
+        // `dsh-ball` 那条工作区注册没注册 —— 以及那本账现在能不能用
+        const ledger = await voiceLedgerSnapshot()
+        const readings = await voiceWorkspaceReadings(hostCtx, ledger.id || voiceDelivery.sessionId || '')
         return withJson(
           [
             `inbox ${state.inbox}`,
@@ -3863,12 +3867,31 @@ const TOOLS = [
             `${voiceDelivery.lines} delivered`
               + ` (${voiceDelivery.steered} steered, ${voiceDelivery.queued} queued)`
               + `${voiceDelivery.sessionId ? `, last to ${voiceDelivery.sessionId}` : ''}`
-              + `${voiceDelivery.opened ? `, ${voiceDelivery.opened} opened a new conversation` : ''}`,
+              + `${voiceDelivery.opened ? `, ${voiceDelivery.opened} opened a new conversation` : ''}`
+              + `${voiceDelivery.origin ? `, the last one came from ${voiceDelivery.origin}` : ''}`,
             `${voiceDelivery.current
               ? `the current conversation is ${voiceDelivery.current}`
               : 'there is no current conversation yet'}`
               + `${voiceDelivery.reused ? ` (${voiceDelivery.reused} line(s) reused it)` : ''}`
               + `${voiceDelivery.why ? `, last line: ${voiceDelivery.why}` : ''}`,
+            // 那本账 (2.7.8 批次 2): 它指向谁、能不能用、为什么不能用
+            `the ledger points at ${ledger.id || 'nothing'}`
+              + `${ledger.origin ? ` (written by a ${ledger.origin} line)` : ''}`
+              + `${ledger.usable ? ', reusable' : `, not reusable - ${ledger.why}`}`
+              + `${ledger.cwd ? `, its cwd is ${ledger.cwd}` : ''}`,
+            `the ${BALL_WORKSPACE_NAME} workspace is `
+              + `${readings.registered === true
+                ? `registered (${ballWorkspaceState.path ?? ballWorkspace()})`
+                : readings.registered === false
+                  ? `not registered - ${readings.registeredWhy ?? 'no reason recorded'}`
+                  : 'not known yet (nothing has asked the registry)'}`
+              + `${readings.workspace ? `; that session belongs to ${readings.workspace}` : ''}`
+              + `${readings.member === true
+                ? ' and is on that workspace\'s list'
+                : readings.member === false
+                  ? ' but is NOT on that workspace\'s list (it shows up under Ungrouped)'
+                  : ''}`
+              + `${readings.cwd ? ` (${readings.cwd})` : ''}`,
             // 新开一场时用的是哪个预设 (2026-10-09): 选中的那个没注册时这里会写"退到了哪一个"
             `preset for a new conversation: ${voiceDelivery.preset || 'the registry default'}`
               + `${voiceDelivery.presetWhy ? ` - ${voiceDelivery.presetWhy}` : ''}`,
@@ -3913,6 +3936,12 @@ const TOOLS = [
             cursor: state.cursor,
             queued: lines,
             delivery: { ...voiceDelivery },
+            ledger,
+            workspace: readings.workspace,
+            workspaceId: readings.workspaceId ?? '',
+            member: readings.member ?? null,
+            cwd: readings.cwd,
+            registered: readings.registered,
             reading: { ...voiceReading },
             commands: { ...voiceCommands },
             interrupts: { ...voiceInterrupt },
@@ -5724,18 +5753,58 @@ function ballWorkspace() {
   return join(home, BALL_WORKSPACE_NAME)
 }
 
+/**
+ * `dsh-ball` 那条工作区注册没注册 —— 上一次 [ensureBallWorkspace] 的读数
+ *
+ * `registered` 三态: `true` / `false` (试过, 不通) / `null` (这个 profile 没有那项服务, 问不出来)
+ */
+const ballWorkspaceState = { path: null, id: null, registered: null, why: null }
+
 /** 确保那个目录在: 建不出来时回 null, 调用方退回"工作区根" (对话照旧能开, 只是没有自己的家) */
-async function ensureBallWorkspace() {
+async function ensureBallWorkspace(ctx) {
   const directory = ballWorkspace()
   try {
     await mkdir(directory, { recursive: true })
-    return directory
   } catch (error) {
     // `hostCtx` 是 apply() 里挂上的 (见上面那个声明), 而这条路径只在投递时走到 —— 那时它一定在
     warn(hostCtx, `the channel workspace ${directory} could not be created: ${error?.message ?? error}`)
+    ballWorkspaceState.why = `the directory could not be created: ${error?.message ?? error}`
+    ballWorkspaceState.registered = false
     return null
   }
+  // **光建目录不够, 还得把它注册成工作区** (2.7.8 批次 2 根因一): dsh 的会话列表只遍历**已注册的工作区
+  // 实体**, 没入账的会话一律进「未分组」(`packages/client/ui-workspace/src/client/tree.ts` 的
+  // `groupByWorkspace`); 而工作区记录原本只在宿主启动那一趟按会话头的 cwd 补建 —— 于是**新装 / 清过
+  // 工作区列表之后的第一句一定落在未分组**, 要等重启一次才归位。`create` 的契约是 "Create or resolve
+  // one Workspace over an existing directory", 幂等, 所以每投一句问一次也不要紧
+  //
+  // **建新会话时还要把那条工作区的 id 交出去**: `sessionController.create` 只在请求带 `workspaceId`
+  // 时才 `attachSession` (`packages/api/session-controller/src/commands.ts:105-141`), 只给 `cwd` 的话
+  // 会话建出来但不入账 —— 界面上那条工作区在、里面一场都没有 (2026-10-17 模拟器上量到的)
+  let registered = null
+  let entity = null
+  try {
+    const registry = ctx?.get?.('workspaceRegistry') ?? hostCtx?.get?.('workspaceRegistry')
+    if (!registry || typeof registry.create !== 'function') {
+      registered = null
+      ballWorkspaceState.why = 'this profile has no workspace registry, so the ball conversations stay ungrouped'
+    } else {
+      entity = await registry.create(directory)
+      registered = true
+      ballWorkspaceState.why = null
+    }
+  } catch (error) {
+    registered = false
+    ballWorkspaceState.why = `the workspace could not be registered: ${error?.message ?? error}`
+    warn(hostCtx, `the channel workspace ${directory} was not registered: ${error?.message ?? error}`)
+  }
+  ballWorkspaceState.path = directory
+  ballWorkspaceState.registered = registered
+  ballWorkspaceState.id = entity === null ? null : String(entity.id ?? '')
+  return { path: directory, id: ballWorkspaceState.id }
 }
+
+
 
 /**
  * 轮询那个队列的间隔
@@ -6013,11 +6082,18 @@ async function voiceInboxState() {
  * 可变部分全在 [voiceSession.state] 这一个对象上: 换掉它就等于"什么都没记住", 而那正是
  * `tools/check-voice-inbox.mjs` 要模拟的两件事 (宿主重启 / 过了很久)
  */
-const voiceSession = { state: { file: { path: null, read: false }, current: { id: null, at: 0 } } }
+const voiceSession = {
+  state: {
+    file: { path: null, read: false },
+    current: { id: null, at: 0, origin: '', cwd: '' },
+    /** 上一次读到的账为什么不能用 (`lw_voice op=inbox` 的读数, 见 [voiceCurrentSession]) */
+    rejected: null,
+  },
+}
 
 /** 把这一笔账清干净, 下一次读会重新从文件里读 (测试与"重启"用) */
 function voiceSessionReset() {
-  voiceSession.state = { file: { path: null, read: false }, current: { id: null, at: 0 } }
+  voiceSession.state = { file: { path: null, read: false }, current: { id: null, at: 0, origin: '', cwd: '' }, rejected: null }
 }
 
 /**
@@ -6049,10 +6125,50 @@ async function voiceSessionLoad() {
     const record = JSON.parse(raw)
     const id = record?.id === undefined || record?.id === null ? '' : String(record.id)
     const at = Number(record?.at)
-    if (id && Number.isFinite(at)) state.current = { id, at }
+    // `origin` / `cwd` 是 2.7.8 批次 2 加的: 老账没有这两个字段, 读起来就是空 (于是它进不了
+    // [voiceLedgerUsable] 那条判据 —— 见那里的注释)
+    if (id && Number.isFinite(at)) {
+      state.current = {
+        id,
+        at,
+        origin: typeof record?.origin === 'string' ? record.origin : '',
+        cwd: typeof record?.cwd === 'string' ? record.cwd : '',
+      }
+    }
   } catch {
     // 半行 / 坏文件: 当没有, 下一次投递会重新写一份
   }
+}
+
+/**
+ * 这本账指向的那一场**是不是真的落在 `dsh-ball` 里** (2.7.8 批次 2 根因二)
+ *
+ * 判据只看账上记下的 `cwd`: 2026-10-17 之前写的账没有这个字段 (那时**每次投递都无条件写**, 于是
+ * 主人"在 GUI 那场里问一句 -> 在框里答一句"就能把它改写成那场 GUI 会话) —— 那种账**一律当没有**,
+ * 不做数据搬家, 下一次投递自然写一份新的。有 cwd 但不在浮标那个目录底下, 同样当没有
+ *
+ * 抽成纯字符串判据是为了让 `tools/check-voice-inbox.mjs` 直接量它 (两边都先去尾斜杠, 于是
+ * `/x/dsh-ball/` 与 `/x/dsh-ball` 是同一个地方)
+ *
+ * @param record - `voice/session.json` 读出来的那一份 (`{ id, at, origin, cwd }`)
+ * @param directory - 浮标那个工作区目录
+ * @returns 能不能拿它当"10 分钟内可复用的那一场"
+ */
+function voiceLedgerUsable(record, directory) {
+  return voicePathUnder(record?.cwd, directory) && voicePathUnder(directory, directory)
+}
+
+/** 纯字符串那一半: 同一个路径, 或者 `child` 在 `parent` 底下 (两边都去掉尾斜杠再比) */
+function voicePathUnder(child, parent) {
+  const inner = voicePathNorm(child)
+  const outer = voicePathNorm(parent)
+  if (inner === '' || outer === '') return false
+  return inner === outer || inner.startsWith(`${outer}/`)
+}
+
+/** 去尾斜杠并把反斜杠归一成正斜杠 (`/` 与空串都归一成空串, 于是"没填"与"根"不会被当成同一个地方) */
+function voicePathNorm(value) {
+  return String(value ?? '').replace(/\\/gu, '/').replace(/\/+$/u, '')
 }
 
 /** 现在那一场"当前对话"的 id, 没有 (或者过了 [VOICE_SESSION_MS]) 就是 null */
@@ -6061,17 +6177,176 @@ async function voiceCurrentSession() {
   const current = voiceSession.state.current
   if (!current.id) return null
   if (Date.now() - current.at > VOICE_SESSION_MS) return null
+  // 这一场得真的是浮标开出来的: 那本账被 GUI 会话改写过 / 是 2026-10-17 之前的老账, 都当没有
+  const directory = await canonicalVoicePath(ballWorkspace())
+  if (!voiceLedgerUsable(current, directory)) {
+    voiceSession.state.rejected = {
+      id: current.id,
+      cwd: current.cwd,
+      why: current.cwd === ''
+        ? 'the ledger predates the cwd field, so it cannot prove it points at the ball workspace'
+        : `the ledger points outside ${directory}`,
+    }
+    return null
+  }
+  voiceSession.state.rejected = null
   return current.id
 }
 
-/** 一句话投出去之后的记账: **每次发送都重算这一笔账**, 所以"10 分钟内可复用"是从最后一句起算 */
-async function voiceSessionBump(sessionId) {
+/**
+ * 一句话投出去之后的记账: **每次发送都重算这一笔账**, 所以"10 分钟内可复用"是从最后一句起算
+ *
+ * **不是每一次投递都该记** (2.7.8 批次 2 根因二): 只有球自己那一句 (`origin === 'ball'`) 才改这本账,
+ * 见 [voiceDeliver] 那一处调用 —— 回复框点名与自动指令各有各的落点
+ *
+ * @param sessionId - 投给哪一场
+ * @param extra - `{ origin, cwd }`: 这一句是谁发的、那一场的 cwd (cwd 先过 realpath, 见
+ *   [canonicalVoicePath] —— 影子会话的 cwd 写 `/data/data/…` 而 `DSH_HOME` 是 `/data/user/0/…`)
+ */
+async function voiceSessionBump(sessionId, extra = {}) {
   const path = voiceSessionPath()
+  const next = { id: String(sessionId), at: Date.now() }
+  if (typeof extra.origin === 'string' && extra.origin !== '') next.origin = extra.origin
+  if (typeof extra.cwd === 'string' && extra.cwd !== '') next.cwd = await canonicalVoicePath(extra.cwd)
   voiceSession.state.file = path === null ? { path: null, read: true } : { path, read: true }
-  voiceSession.state.current = { id: String(sessionId), at: Date.now() }
+  voiceSession.state.current = next
+  voiceSession.state.rejected = null
   if (path === null) return
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, `${JSON.stringify(voiceSession.state.current)}\n`)
+  await writeFile(path, `${JSON.stringify(next)}\n`)
+}
+
+/** 一个路径的 realpath; 读不到就原样回 (拿不到不等于不相等, 但那时也没有更好的答案) */
+async function canonicalVoicePath(value) {
+  const path = String(value ?? '')
+  if (path === '') return ''
+  try {
+    return await realpath(path)
+  } catch {
+    return voicePathNorm(path)
+  }
+}
+
+/**
+ * 那本账现在长什么样 (给 `lw_voice op=inbox` 与那份读数文件看)
+ *
+ * `usable` 是**能不能拿它当"10 分钟内可复用的那一场"**: 有 id、在 10 分钟以内、而且 cwd 落在
+ * `dsh-ball` 底下 ([voiceLedgerUsable])。`why` 在不 usable 时说清是哪一条不成立
+ */
+async function voiceLedgerSnapshot() {
+  await voiceSessionLoad()
+  const record = voiceSession.state.current
+  const directory = await canonicalVoicePath(ballWorkspace())
+  const exists = record.id !== ''
+  const fresh = exists && Date.now() - record.at <= VOICE_SESSION_MS
+  const usable = fresh && voiceLedgerUsable(record, directory)
+  const why = usable
+    ? ''
+    : !exists
+      ? 'there is no ledger yet'
+      : !fresh
+        ? 'the ledger is older than the reuse window'
+        : voiceSession.state.rejected?.why ?? 'the ledger does not point at the ball workspace'
+  return {
+    id: record.id ?? '',
+    at: record.at ?? 0,
+    origin: record.origin ?? '',
+    cwd: record.cwd ?? '',
+    usable,
+    why,
+  }
+}
+
+/**
+ * 三项读数 (2.7.8 批次 2 第一步): **这一场属于哪个工作区 / 它的 cwd / `dsh-ball` 注册没注册**
+ *
+ * 只读, 而且一律 try —— 读数不许把 `op=inbox` 弄挂。cwd 从会话存储里拿 (`ctx.sessions.get` 是便宜
+ * 的那一条, 不为了读数去 `resolveAgent` 把一场冷会话复活)
+ *
+ * @param ctx - host context (工具那一层要用模块级的 `hostCtx`)
+ * @param sessionId - 要问的那一场 (那本账指向的那一场), 空串就只报"注册没注册"
+ */
+async function voiceWorkspaceReadings(ctx, sessionId) {
+  const readings = {
+    sessionId: String(sessionId ?? ''),
+    workspace: '',
+    workspaceId: '',
+    member: null,
+    cwd: '',
+    registered: ballWorkspaceState.registered,
+    registeredWhy: ballWorkspaceState.why,
+  }
+  const id = readings.sessionId
+  if (id === '') return readings
+  try {
+    const cwd = String(ctx?.sessions?.get?.(id)?.header?.cwd ?? '')
+    readings.cwd = cwd
+    if (cwd === '') return readings
+    const canonical = await canonicalVoicePath(cwd)
+    const list = ctx?.get?.('workspaceRegistry')?.list?.() ?? []
+    for (const workspace of list) {
+      if (await canonicalVoicePath(workspace.path) !== canonical) continue
+      readings.workspace = String(workspace.title ?? '') || String(workspace.path ?? '')
+      readings.workspaceId = String(workspace.id ?? '')
+      // **在不在那条工作区的账上**才是会话列表分组的那条判据 (cwd 对得上但不入账就是「未分组」)
+      readings.member = Array.isArray(workspace.sessionIds)
+        ? workspace.sessionIds.some((sessionId) => String(sessionId) === id)
+        : null
+      break
+    }
+  } catch (error) {
+    readings.error = String(error?.message ?? error)
+  }
+  return readings
+}
+
+/** 那份读数文件放哪 (`$DSH_HOME/lw/voice-inbox.json`) */
+function voiceReadingsPath() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', 'voice-inbox.json') : null
+}
+
+/**
+ * 把同一份读数落一盘, **原子写** (`.tmp` + rename, 与其他那几份 `lw/*.json` 同一个做法)
+ *
+ * 为什么要有这个文件: `lw_voice op=inbox` 是**给模型看的**读数, 而在没有模型可问的时候 (纯设备验收)
+ * 那份回执根本打印不出来 —— 这一批的病根在运行期, 只靠读代码只能猜到"大概是哪一条", 所以要有一个
+ * `adb cat` 就能看的东西。文件里的字段与那份回执同一份来源
+ */
+async function voiceReadingsWrite(ctx) {
+  const path = voiceReadingsPath()
+  if (path === null) return
+  const ledger = await voiceLedgerSnapshot()
+  const readings = await voiceWorkspaceReadings(ctx, ledger.id)
+  const snapshot = {
+    v: 1,
+    at: Date.now(),
+    delivery: {
+      lines: voiceDelivery.lines,
+      origin: voiceDelivery.origin,
+      current: voiceDelivery.current,
+      last: voiceDelivery.sessionId,
+      opened: voiceDelivery.opened,
+      why: voiceDelivery.why,
+    },
+    ledger,
+    workspace: readings.workspace,
+    workspaceId: readings.workspaceId ?? '',
+    member: readings.member ?? null,
+    cwd: readings.cwd,
+    registered: readings.registered,
+    registeredWhy: readings.registeredWhy,
+    ballWorkspace: ballWorkspaceState.path ?? ballWorkspace(),
+    ballWorkspaceId: ballWorkspaceState.id ?? '',
+  }
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    const temporary = `${path}.tmp`
+    await writeFile(temporary, `${JSON.stringify(snapshot, null, 2)}\n`)
+    await rename(temporary, path)
+  } catch (error) {
+    warn(hostCtx, `the voice readings could not be written: ${error?.message ?? error}`)
+  }
 }
 
 /**
@@ -6133,7 +6408,7 @@ async function voiceTargetCandidates(to) {
 async function openBallConversation(ctx, controller, workspace) {
   const preset = await chooseVoicePreset(ctx)
   const request = {
-    ...(workspace === null ? {} : { cwd: workspace }),
+    ...ballCreatePlace(workspace),
     ...(preset.id === undefined ? {} : { agentPreset: preset.id }),
   }
   try {
@@ -6142,7 +6417,7 @@ async function openBallConversation(ctx, controller, workspace) {
   } catch (error) {
     if (preset.id === undefined || preset.id === 'standard') throw error
     const retry = await controller.create({
-      ...(workspace === null ? {} : { cwd: workspace }),
+      ...ballCreatePlace(workspace),
       agentPreset: 'standard',
     })
     return {
@@ -6152,6 +6427,20 @@ async function openBallConversation(ctx, controller, workspace) {
         + ' so standard was used instead',
     }
   }
+}
+
+/**
+ * 开新会话那一个请求里"落在哪"的那一半
+ *
+ * **有工作区 id 就带 id**: `sessionController.create` 只在带 `workspaceId` 时才把这一场 `attachSession`
+ * 进那条工作区的账 (`packages/api/session-controller/src/commands.ts:105-141`), 而"在不在账上"正是会话
+ * 列表分组的那条判据 —— 只给 `cwd` 的话会话落对了目录却仍是「未分组」。没有 id (这个 profile 没有
+ * 工作区注册表) 才退回 `cwd`
+ */
+function ballCreatePlace(workspace) {
+  if (workspace === null || workspace === undefined) return {}
+  if (typeof workspace.id === 'string' && workspace.id !== '') return { workspaceId: workspace.id }
+  return typeof workspace.path === 'string' && workspace.path !== '' ? { cwd: workspace.path } : {}
 }
 
 /**
@@ -6170,7 +6459,8 @@ async function deliverToBall(ctx, controller, sessionId, line, auto) {
     if (running) agent.steer(message)
     else agent.followup(message)
     const flushed = await ctx.sessions.flush(agent.session)
-    return { running, flushed, screenshot: auto.images.length > 0 }
+    // `cwd` 一起带回去: 投递完那一句之后要拿它写账 (2.7.8 批次 2), 而这一步已经把 header 拿在手里了
+    return { running, flushed, screenshot: auto.images.length > 0, cwd: String(agent.session?.header?.cwd ?? '') }
   })
 }
 
@@ -6502,6 +6792,13 @@ const voiceDelivery = {
   reused: 0,
   /** 最近一次为什么投给那一场: 正在跑的轮 / 复用的当前对话 / 最近动过的 / 新开的 */
   why: null,
+  /**
+   * 最近那一句是谁发的 (2.7.8 批次 2 的读数): `ball` (点球 / 唤醒词 / 浮标框里的键盘输入) /
+   * `replyBox` (回复框点名了某一场) / `automation` (自动指令到点)
+   *
+   * 这三个值同时决定"要不要改 `voice/session.json` 那本账" —— 只有 `ball` 才改
+   */
+  origin: null,
   steered: 0,
   queued: 0,
   /** 其中几条真的**新开了一场** (那笔账过了 / 那一场不在了, 见 [voiceTargetCandidates]) */
@@ -6636,10 +6933,13 @@ async function voiceDeliver(ctx, line) {
   // **自动指令每次新开一场** (主人 2026-10-08 定): 不接回复框点名, 也不复用浮标那 10 分钟的一场 ——
   // "到点了提醒我"不是接着刚才那件事说, 而一次性提醒也不该把上下文带进主人的聊天里
   const candidates = automated ? [] : await voiceTargetCandidates(line.to)
+  // 这一句是谁发的 (2.7.8 批次 2 的读数与判据): 自动指令 / 回复框点名 / 球自己
+  const asked = String(line.to ?? '').trim()
+  const origin = automated ? 'automation' : asked !== '' ? 'replyBox' : 'ball'
   // **新开的对话落在浮标那个专用工作区里** (主人 2026-10-06): 只对"这一句要开新对话"那一条路生效
   // (没有可复用的当前对话时: 那笔账过了 / 那一场不在了 / 从来没有过); 复用一个已经在跑的会话时不改它
   // 的目录 —— 一个会话的 cwd 是它自己的事, 中途换掉就是 `ApiSessionCwdConflict`
-  const workspace = await ensureBallWorkspace()
+  const workspace = await ensureBallWorkspace(ctx)
   beat('workspace')
   // **投递之前先把"指代不明"那一张图备好** (批次 4 的需求 9): 截的是主人手里那块屏 (display 0), 而
   // 它不进正文 —— 图块与那句话一起构成这一条用户消息。截不出来照投文字, 理由记在读数里 (见
@@ -6687,7 +6987,15 @@ async function voiceDeliver(ctx, line) {
   }
   beat('agent')
   // 投出去了才记"当前对话": 这一笔是从**这一句**起算的 10 分钟 (需求: 每次发送完成后 10 分钟内)
-  await voiceSessionBump(sessionId)
+  //
+  // **只有球自己那一句才改这本账** (2.7.8 批次 2 根因二): 从前是"投成功就无条件写", 于是主人
+  // "在 GUI 那场里问一句 -> 在浮标框里答一句"就把账改写成了那场 GUI 会话 —— 之后 10 分钟的点球 /
+  // 语音全都投进那场 GUI 会话, 它当然不在 `dsh-ball` 分组里。回复框点名的那一句只对那一场生效,
+  // 自动指令每次新开一场, 两者都不该动这本账
+  if (origin === 'ball') {
+    await voiceSessionBump(sessionId, { origin, cwd: outcome.cwd ?? workspace?.path ?? '' })
+  }
+  voiceDelivery.origin = origin
   voiceDelivery.lines += 1
   voiceDelivery.sessionId = String(sessionId)
   voiceDelivery.reused = (voiceDelivery.reused ?? 0) + (used?.why === 'the ball conversation, reused' ? 1 : 0)
@@ -6715,6 +7023,8 @@ async function voiceDeliver(ctx, line) {
     presetWhy: opened ? voiceDelivery.presetWhy : null,
   }
   voiceDelivery.error = null
+  // 同一份读数落一盘 (见 [voiceReadingsWrite]): 没有模型可问的时候, 设备验收就靠它
+  await voiceReadingsWrite(ctx)
   // **一段一段报出来** (主人 2026-10-15: "从 ball 到会话发送能缩到最小吗"): `console.log` 走 stdout,
   // 也就是应用抓的 logcat 那一份 (`ctx.logger.info` 不进那里), 所以要用它才量得到
   timing.total = Date.now() - startedAt

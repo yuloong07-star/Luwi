@@ -452,8 +452,8 @@ mtime 停在 00:02，而没投出去的第一行恰好是一句**唤醒词句**�
 
 ### 对话：浮标只投自己那一场（宿主那一侧）
 
-投递的目标会话有两条判据，写在 `host-plugin/index.mjs` 的 `voiceTargetSession`（`docs` 这一节与
-`tools/check-voice-inbox.mjs` 那 34 条判据是同一件事的两种说法）：
+投递的目标会话有两条判据，写在 `host-plugin/index.mjs` 的 `voiceTargetCandidates`（`docs` 这一节与
+`tools/check-voice-inbox.mjs` 那 64 条判据是同一件事的两种说法）：
 
 1. **10 分钟内那一场"当前对话"就复用它**（`voice/session.json` 落盘，所以宿主重启还记得）——
    每次投递成功都把这一笔**从最后一句起算**；那一场正在跑的话就 `steer` 插进去
@@ -472,6 +472,29 @@ mtime 停在 00:02，而没投出去的第一行恰好是一句**唤醒词句**�
 "浮标的对话都在 dsh-ball 里"这件事就不成立了。现在**浮标只认自己那一场**：正在跑就插进去，没在跑就排
 上，两种都落在浮标工作区；主人在界面里用哪一场与它无关。
 `lw_voice op=inbox` 会念出"现在那一场是哪个会话、最近一句为什么投给它"。
+
+#### 2026-10-17 那两条根因（2.7.8 批次 2）
+
+主人报的"ball 的对话没落到 ball 分组"有两条根因，都在宿主这一侧：
+
+1. **`dsh-ball` 那个目录从前没被注册成工作区**：dsh 的会话列表**不按 cwd 现分组**，它只遍历**已注册的
+   工作区实体**（`packages/client/ui-workspace/src/client/tree.ts` 的 `groupByWorkspace`），没入账的会话
+   一律进「未分组」；而工作区记录本来只在**宿主启动那一趟**按会话头的 cwd 补建 —— 于是装完 / 清过工作区
+   列表之后的**第一句一定落在未分组**，要重启一次才归位。现在 `ensureBallWorkspace` 建完目录顺手
+   `workspaceRegistry.create(directory)`（那是"Create or resolve"的幂等契约，每投一句问一次也不要紧），
+   拿不到那项服务就退回原行为并记一行读数，不假装注册上了
+2. **`voice/session.json` 那本账会被 GUI 会话改写**：从前**投递成功就无条件写账**，于是"主人先在 GUI 那场
+   问一句 → 浮标框里答一句（框本来就投给发出回复的那一场）"就把账改成了那场 GUI 会话，之后 10 分钟的点球
+   与语音全进那场 GUI 会话。现在账上记 `origin`（`ball` / `replyBox` / `automation`）与 `cwd`，而
+   **只有球自己那一句才写账**（`origin === 'ball'`）：回复框点名只对那一场生效，自动指令每次新开一场，
+   两者都不动这本账。复用之前还要过一道 cwd 判据（`voiceLedgerUsable`）—— **2026-10-17 之前的老账没有
+   `cwd` 字段，一律当没有**，不做数据搬家，下一次投递自然写一份新的
+
+读数两处：`lw_voice op=inbox` 的回执（`origin` / `the ledger points at …` / `the dsh-ball workspace is …`
+那三行，以及 JSON 里的 `ledger` / `workspace` / `cwd` / `registered`），以及同一份读数的落盘镜子
+`$DSH_HOME/lw/voice-inbox.json`（`origin` / `ledger{id,at,origin,cwd,usable,why}` / `registered` ——
+没有模型可问的设备验收就靠 `adb cat` 它）。判据在 `tools/check-voice-inbox.mjs`（64 条，其中第 14、15 节
+是这一批新加的）
 
 ### 浮标通道的专用工作区（2026-10-06 主人点名）
 

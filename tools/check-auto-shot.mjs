@@ -156,7 +156,10 @@ check(
 )
 check(
   '那张图进的是用户消息 (createVoiceMessage 收第二个参数)',
-  deliver.includes('createVoiceMessage(line.text, auto.images)')
+  // 2026-10-15 起造消息那一步挪进了 `deliverToBall` (选场那一段先按候逐个试), 所以这里量两件:
+  // 投递带着 `auto` 走, 而造消息那一处把它当第二个参数喂进去
+  deliver.includes('deliverToBall(ctx, controller, candidate.sessionId, line, auto)')
+    && plugin.includes('createVoiceMessage(line.text, auto.images)')
     && plugin.includes('async function createVoiceMessage(text, images = [])')
     && plugin.includes("...images.map((attachment) => ({ type: 'image', attachment }))"),
   true,
