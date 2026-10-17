@@ -8253,6 +8253,14 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
     // **同一场刚交过就如实说"已经落过了"** (2026-10-17 真机上量到的形态, 见 [exploreState] 的
     // lastSaved): 桩摘要不算, 那种情况模型补一份真的正是我们要的
     const saved = exploreState.lastSaved
+    if (saved !== null) {
+      // 一行读数 (console 走应用抓的 stdout, 也就是 logcat): "同一场再交一次"这条路上两个 id 必须一样
+      console.log(
+        `luwi-channel: a finish came with no run - session ${String(sessionId)},`
+          + ` last saved for ${String(saved.session)}`
+          + ` (${Date.now() - Number(saved.at ?? 0)}ms ago, stub ${String(saved.stub)})`,
+      )
+    }
     const fresh = saved !== null && saved.stub !== true
       && Date.now() - Number(saved.at ?? 0) <= EXPLORE_ALREADY_SAVED_MS
       && (String(sessionId ?? '') === '' || String(saved.session ?? '') === String(sessionId))
