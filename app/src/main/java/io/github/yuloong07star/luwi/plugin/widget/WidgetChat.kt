@@ -135,14 +135,45 @@ internal object WidgetChat {
         fun oneLineDp(bubbleSp: Long): Int = (bubbleSp * LINE_SPACING + BUBBLE_PAD_DP * 2).roundToInt()
 
         /**
-         * 气泡区多高 (dp) = **人物高度 + 一行气泡**
+         * 气泡区多高 (dp): **下限是人物高度 + 一行**, 上面再按"这一格能放几行"长
          *
-         * 主人 2026-10-17 的原话就是这个关系; 它同时是"2×2 那一档也没被挤没"的边界 (两个数一起变)
+         * 主人 2026-10-17 两条合并的结果:
+         *
+         * - "气泡显示区域改成比人物高度高约一行气泡的高度" → 下限 [minAreaDp]
+         * - "对话框只显示了 3 行, 超过就消失了" → 内容多的时候不许裁, 按 [rowsFor] 算出来的行数往上长
+         *
+         * 所以它是 `max(下限, 行数 × 行高)`: 一条都没有时也留着"人物 + 一行"那么高的底, 而气泡多时
+         * 一路长到这一格放不下为止 (再多的由那份文件自己的上限管)
          */
-        fun bubbleAreaDp(faceDp: Int, bubbleSp: Long): Int = faceDp + oneLineDp(bubbleSp)
+        fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int {
+            val line = oneLineDp(bubbleSp)
+            return maxOf(minAreaDp(faceDp, bubbleSp), rows * line)
+        }
+
+        /** 那条下限: 人物高度 + 一行 (人物变大它就跟着变高, 主人 2026-10-17 的第二条) */
+        fun minAreaDp(faceDp: Int, bubbleSp: Long): Int = faceDp + oneLineDp(bubbleSp)
+
+        /**
+         * 这一格放得下几行气泡
+         *
+         * 格子有多高、扣掉上下 padding 与底部那一行人物, 剩下的除以一行的高度 —— 结果夹在
+         * 1..[MAX_ROWS]。尺寸读不到 (0) 时按 [DEFAULT_ROWS] 算, 于是"还没报尺寸"那一拍也不会只剩空
+         */
+        fun rowsFor(cellHeightDp: Int, faceDp: Int, bubbleSp: Long): Int {
+            if (cellHeightDp <= 0) return DEFAULT_ROWS
+            val line = oneLineDp(bubbleSp).coerceAtLeast(1)
+            val free = cellHeightDp - PAD_DP * 2 - faceDp
+            return (free / line).coerceIn(1, MAX_ROWS)
+        }
 
         const val LINE_SPACING = 1.35f
         const val BUBBLE_PAD_DP = 5
+
+        /** 气泡区最多往上长几行 (与那份文件的 6 条对齐: 一条一行就正好放得下) */
+        const val MAX_ROWS = 6
+
+        /** 格子尺寸还读不到时按几行算 (原来写死的那个 3) */
+        const val DEFAULT_ROWS = 3
     }
 
     /** 拼一次那一格 (没给格子尺寸时立绘用缺省那一个数) */
@@ -173,16 +204,15 @@ internal object WidgetChat {
 
         val view = RemoteViews(context.packageName, R.layout.lw_widget_slot_chat)
         val snapshot = DesktopChatFile.snapshot(context)
-        val shown = snapshot.shown
+        // 气泡区: **下限 = 人物 + 一行**, 内容多时一路往上长到这一格放不下 (主人 2026-10-17 的两条)
+        val rows = Face.rowsFor(cellHeightDp, faceDp, bubbleSp)
+        val shown = snapshot.lines.takeLast(minOf(rows, snapshot.lines.size))
+        val areaHeight = Face.areaDp(faceDp, bubbleSp, shown.size)
 
-        // ① 气泡区的高度 = 人物高度 + 一行 (主人 2026-10-17 那条), 而人物那一块是正方形:
+        // ① 气泡区的尺寸: 高度按上面那个数, 而人物那一块是正方形:
         // **第三个参数是 `TypedValue.COMPLEX_UNIT_*` 而不是 MeasureSpec** —— 传错的后果是接收器里
         // 抛 "Must be a valid COMPLEX_UNIT_*", 那一格退回 initialLayout (看着像组件坏了)
-        view.setViewLayoutHeight(
-            R.id.lw_chat_bubbles,
-            Face.bubbleAreaDp(faceDp, bubbleSp).toFloat(),
-            TypedValue.COMPLEX_UNIT_DIP,
-        )
+        view.setViewLayoutHeight(R.id.lw_chat_bubbles, areaHeight.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
         view.setViewLayoutWidth(R.id.lw_chat_flipper, faceDp.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
         view.setViewLayoutHeight(R.id.lw_chat_flipper, faceDp.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
 
@@ -247,6 +277,11 @@ internal object WidgetChat {
             bindBallFace(context, view)
             return
         }
+        // 主人自己导入的 gif (`gif:<名字>`): 拆好的帧序列逐帧放 (RemoteViews 里这是唯一会动的做法)
+        io.github.yuloong07star.luwi.plugin.PluginGif.nameOf(choice)?.let { name ->
+            bindGifFace(context, view, holder, name)
+            return
+        }
         val directory = PluginStore.packageDir(context, holder)
         val file = directory?.let { runCatching { PluginPaths.resolve(it, choice, "ui.settings 的 face") }.getOrNull() }
         if (file == null || !file.isFile) {
@@ -264,8 +299,33 @@ internal object WidgetChat {
         )
     }
 
-    /** 与浮标相同外观: 取当前那一套的 `idle` 那张脸 (带帧就让它自己翻) */
-    private fun bindBallFace(context: Context, view: RemoteViews) {
+    /** 导入过的 gif: 拆好的那些帧 (`.data/faces/<名字>/frame-XX.png`) 逐帧放 */
+    private fun bindGifFace(context: Context, view: RemoteViews, holder: String, name: String) {
+        val frames = io.github.yuloong07star.luwi.plugin.PluginGif.frames(context, holder, name)
+        if (frames.isEmpty()) {
+            view.setViewVisibility(R.id.lw_chat_flipper, View.INVISIBLE)
+            return
+        }
+        view.setViewVisibility(R.id.lw_chat_flipper, View.VISIBLE)
+        val base = ".data/${io.github.yuloong07star.luwi.plugin.PluginGif.DIRECTORY}/$name"
+        val uris = frames.map { WidgetFramesProvider.pluginFileUri(holder, "$base/${it.name}") }
+        WidgetHost.grantToHomes(context, uris)
+        uris.forEach { uri ->
+            view.addView(
+                R.id.lw_chat_flipper,
+                RemoteViews(context.packageName, R.layout.lw_widget_slot_frame).apply {
+                    setImageViewUri(R.id.lw_slot_frame_image, uri)
+                },
+            )
+        }
+        view.setInt(
+            R.id.lw_chat_flipper,
+            "setFlipInterval",
+            io.github.yuloong07star.luwi.plugin.PluginGif.FLIP_INTERVAL_MS,
+        )
+    }
+
+    /** 与浮标相同外观: 取当前那一套的 `idle` 那张脸 (带帧就让它自己翻) */    private fun bindBallFace(context: Context, view: RemoteViews) {
         val face = runCatching { BallTheme.face(context, FACE_STATE) }.getOrNull()
         if (face == null) {
             view.setViewVisibility(R.id.lw_chat_flipper, View.INVISIBLE)

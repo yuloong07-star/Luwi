@@ -71,14 +71,40 @@ class WidgetChatTest {
         assertTrue(WidgetChat.Face.actualDp(300, 400, 5000) <= WidgetChat.Face.MAX_DP)
     }
 
-    /** 一行气泡有多高 (字号越大越高), 而气泡区 = 人物高度 + 一行 */
+    /** 一行气泡有多高 (字号越大越高), 而下限 = 人物高度 + 一行 */
     @Test
-    fun `气泡区比人物高一行`() {
+    fun `气泡区下限跟着人物走`() {
         val small = WidgetChat.Face.oneLineDp(9)
         val big = WidgetChat.Face.oneLineDp(18)
         assertTrue("$small < $big", small < big)
-        assertEquals(64 + small, WidgetChat.Face.bubbleAreaDp(64, 9))
-        // 人物变大时气泡区一起变 (那一行本身不变)
-        assertEquals(100 + small, WidgetChat.Face.bubbleAreaDp(100, 9))
+        assertEquals(64 + small, WidgetChat.Face.minAreaDp(64, 9))
+        // 人物变大时下限一起变高 (主人 2026-10-17 的第二条)
+        assertEquals(100 + small, WidgetChat.Face.minAreaDp(100, 9))
+    }
+
+    /**
+     * 行数按"这一格能放几行"算, 不再写死 3 (主人 2026-10-17: "只显示了 3 行, 超过就消失了")
+     *
+     * 而气泡区高度取 max(下限, 行数 × 行高): 内容多就往上长, 不会被裁
+     */
+    @Test
+    fun `行数按格子算`() {
+        // 高格子: 放得下多行 (夹在 1..MAX_ROWS)
+        val tall = WidgetChat.Face.rowsFor(800, 100, 11)
+        assertEquals(WidgetChat.Face.MAX_ROWS, tall)
+        // 矮格子: 至少一行
+        val short = WidgetChat.Face.rowsFor(160, 100, 11)
+        assertEquals(1, short)
+        // 尺寸读不到: 回到缺省那 3 行
+        assertEquals(WidgetChat.Face.DEFAULT_ROWS, WidgetChat.Face.rowsFor(0, 64, 11))
+        // 高度取 max(下限, 内容)
+        val line = WidgetChat.Face.oneLineDp(11)
+        // 一条都没有: 只剩那条下限
+        assertEquals(64 + line, WidgetChat.Face.areaDp(64, 11, 0))
+        // 三行还不到下限 (25*3=75 < 89), 所以仍是下限 —— 行数要多到超过它才往上长
+        assertEquals(64 + line, WidgetChat.Face.areaDp(64, 11, 3))
+        assertEquals(6 * line, WidgetChat.Face.areaDp(64, 11, 6))
     }
 }
+
+

@@ -19,12 +19,17 @@ import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.constants.UiSpacing
 import io.github.yuloong07star.luwi.plugin.PluginAudit
 import io.github.yuloong07star.luwi.plugin.PluginCapabilities
+import io.github.yuloong07star.luwi.plugin.PluginGif
 import io.github.yuloong07star.luwi.plugin.PluginManager
 import io.github.yuloong07star.luwi.plugin.PluginSettings
 import io.github.yuloong07star.luwi.plugin.PluginSignature
 import io.github.yuloong07star.luwi.plugin.PluginStore
 import io.github.yuloong07star.luwi.plugin.PluginTrust
 import io.github.yuloong07star.luwi.scaffolds.LazyColumn
+import io.github.yuloong07star.luwi.scaffolds.SuperTextField
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.window.Dialog
+import top.yukonga.miuix.kmp.basic.Card
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -142,6 +147,7 @@ fun PluginDetailScreen(id: String) {
                 items(manifest.settings.size) { index ->
                     val setting = manifest.settings[index]
                     PluginSettingRow(
+                        id = id,
                         setting = setting,
                         value = settings[setting.key] ?: setting.defaultValue,
                         onSet = { next ->
@@ -257,19 +263,46 @@ fun PluginDetailScreen(id: String) {
         }
     }
 }
-
 /**
- * 一项插件设置: 按声明的类型画一个能点的行
+ * "点击『显示的人物』显示真弹窗")
  *
- * 三档控件, 都是"点一下就变" (没有滑块也没有下拉): 这一页是 push 出来的, 而 Miuix 的 OverlayDropdown
- * 与本页那类弹窗在这一层挂不上窗口 —— 行式的控件最稳, 也刚好够用 (整数给 ±, 布尔给开关, 枚举轮换)
+ * 用的是 `androidx.compose.ui.window.Dialog`, 不是 Miuix 的 `OverlayDialog` —— 这一页是
+ * `navigator.push` 出来的, 那个库的弹窗在这一层挂不上窗口 (2026-10-17 在技能页上量到的)
+ *
+ * 三档:
+ * - `int` → 一个数字输入框 (范围也写在里面, 越界当场夹)
+ * - `bool` → 开关
+ * - `enum` 里那个 `face` → 主人点名的那三条: 跟随浮标显示 / 选择 gif / 导入 gif
  */
 @Composable
 private fun PluginSettingRow(
+    id: String,
     setting: PluginSettings.Setting,
     value: kotlinx.serialization.json.JsonElement,
     onSet: (kotlinx.serialization.json.JsonElement) -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var typing by remember { mutableStateOf<String?>(null) }
+    var faceOpen by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
+    val importer = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        picking = false
+        scope.launch {
+            val done = withContext(Dispatchers.IO) { PluginGif.import(context, id, uri) }
+            if (done.error.isBlank()) {
+                note = "${done.name} 导进来了 (${done.frames} 帧)"
+                onSet(PluginGif.valueOf(done.name))
+            } else {
+                note = done.error
+            }
+        }
+    }
+
     when (setting.type) {
         "bool" -> SwitchPreference(
             title = setting.title,
@@ -278,45 +311,145 @@ private fun PluginSettingRow(
             onCheckedChange = { on -> onSet(JsonPrimitive(on)) },
         )
 
-        "enum" -> {
-            val current = (value as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
-            val index = setting.options.indexOfFirst { it.value == current }.coerceAtLeast(0)
-            ArrowPreference(
-                title = setting.title,
-                summary = setting.options.getOrNull(index)?.label.orEmpty() + " · 点一下换下一个",
-                onClick = {
-                    val next = setting.options[(index + 1) % setting.options.size.coerceAtLeast(1)]
-                    onSet(JsonPrimitive(next.value))
-                },
-            )
-        }
-
-        "int" -> {
-            val current = (value as? JsonPrimitive)?.longOrNullValue() ?: 0L
-            val low = setting.min ?: 0L
-            val high = setting.max ?: (current + 100)
-            ArrowPreference(
-                title = setting.title,
-                summary = "$current (${low}~$high) · 点一下加一",
-                onClick = {
-                    val next = if (current + 1 > high) low else current + 1
-                    onSet(JsonPrimitive(next))
-                },
-            )
-        }
-
-        else -> ArrowPreference(
+        "int" -> ArrowPreference(
             title = setting.title,
-            summary = (value as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty() + " · 这一版不能在界面上改文字",
-            onClick = { },
+            summary = "${numberOf(value)}" + rangeOf(setting) + (if (note.isBlank()) "" else " · $note"),
+            onClick = { typing = numberOf(value).toString() },
         )
+
+        else -> {
+            val current = (value as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+            ArrowPreference(
+                title = setting.title,
+                summary = labelOf(context, id, setting, current) + (if (note.isBlank()) "" else " · $note"),
+                onClick = { if (setting.key == "face") faceOpen = true },
+            )
+        }
+    }
+
+    // 数字那个弹窗: 输进去、越界夹住、确定才算
+    typing?.let { text ->
+        Dialog(onDismissRequest = { typing = null }) {
+            Card {
+                Column(modifier = Modifier.padding(UiSpacing.Large)) {
+                    PageNotice("${setting.title} (${rangeOf(setting)})")
+                    SuperTextField(
+                        value = text,
+                        onValueChange = { next -> typing = next.filter { char -> char.isDigit() }.take(4) },
+                        label = setting.title,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                        ),
+                    )
+                    TextButton(
+                        text = "确定",
+                        onClick = {
+                            val low = (setting.min ?: 0L).toInt()
+                            val high = (setting.max ?: (low + 100)).toInt()
+                            val entered = typing?.toIntOrNull() ?: numberOf(value).toInt()
+                            typing = null
+                            onSet(JsonPrimitive(entered.coerceIn(low, high)))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
+                    TextButton(
+                        text = "取消",
+                        onClick = { typing = null },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+
+    // 「显示的人物」那个弹窗: 三条, 从上到下就是主人点名的那三条
+    if (faceOpen) {
+        val current = (value as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+        Dialog(onDismissRequest = { faceOpen = false }) {
+            Card {
+                Column(modifier = Modifier.padding(UiSpacing.Large)) {
+                    PageNotice("显示的人物")
+                    ArrowPreference(
+                        title = "跟随浮标显示",
+                        summary = if (current == "ball") "现在用的是它" else "用浮标当前那一套外观",
+                        onClick = { faceOpen = false; onSet(JsonPrimitive("ball")) },
+                    )
+                    ArrowPreference(
+                        title = "选择 gif",
+                        summary = if (PluginGif.imported(context, id).isEmpty()) {
+                            "还没导入过 gif —— 先用下面那条导入一张"
+                        } else {
+                            "已导入 ${PluginGif.imported(context, id).size} 份 · 点开挑一份"
+                        },
+                        onClick = { picking = true },
+                    )
+                    ArrowPreference(
+                        title = "导入 gif",
+                        summary = "从文件里挑一张动图, 拆成帧放在插件自己那块盘上",
+                        onClick = { importer.launch(arrayOf("image/gif")) },
+                    )
+                    TextButton(
+                        text = "取消",
+                        onClick = { faceOpen = false },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+
+    // 「选择 gif」那一层: 已导入的那几份 + 跟随浮标
+    if (picking) {
+        val names = PluginGif.imported(context, id)
+        Dialog(onDismissRequest = { picking = false }) {
+            Card {
+                Column(modifier = Modifier.padding(UiSpacing.Large)) {
+                    PageNotice("选择 gif")
+                    if (names.isEmpty()) {
+                        PageNotice("还没导入过 gif")
+                    }
+                    names.forEach { name ->
+                        ArrowPreference(
+                            title = name,
+                            summary = "用这一张",
+                            onClick = { picking = false; faceOpen = false; onSet(PluginGif.valueOf(name)) },
+                        )
+                    }
+                    TextButton(
+                        text = "取消",
+                        onClick = { picking = false },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
     }
 }
 
-/** `JsonPrimitive` 上那两个小读法 (界面上只用到这两种) */
-private fun JsonPrimitive.booleanOrNullValue(): Boolean? = booleanOrNull
+private fun numberOf(value: kotlinx.serialization.json.JsonElement): Long =
+    (value as? JsonPrimitive)?.longOrNullValue() ?: 0L
 
-private fun JsonPrimitive.longOrNullValue(): Long? = longOrNull
+private fun rangeOf(setting: PluginSettings.Setting): String {
+    val low = setting.min ?: return ""
+    val high = setting.max ?: return " (≥$low)"
+    return " ($low~$high)"
+}
+
+/** 当前这一档在界面上叫什么 (enum 那一行用它) */
+private fun labelOf(
+    context: android.content.Context,
+    id: String,
+    setting: PluginSettings.Setting,
+    current: String,
+): String {
+    if (setting.key == "face") {
+        if (current == "ball") return "跟随浮标显示"
+        PluginGif.nameOf(current)?.let { name -> return "gif · $name" }
+        return "跟随浮标显示"
+    }
+    return setting.options.firstOrNull { it.value == current }?.label ?: current
+}
 
 /** 一行小字 (这一页只有一层: 状态、读数、段标题都用它) */
 @Composable
@@ -336,4 +469,11 @@ private fun LaunchedEffectOnce(block: () -> Unit) {
 }
 
 
+
+
+
+/** `JsonPrimitive` 上那两个小读法 (界面上只用到这两种) */
+private fun JsonPrimitive.booleanOrNullValue(): Boolean? = booleanOrNull
+
+private fun JsonPrimitive.longOrNullValue(): Long? = longOrNull
 

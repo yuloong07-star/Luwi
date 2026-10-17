@@ -541,6 +541,8 @@ const widgetSpecKt = await read('app/src/main/java/io/github/yuloong07star/luwi/
 const slotReceivers = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/widget/WidgetSlotReceivers.kt')
 const pluginManifest = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginManifest.kt')
 const pluginSettings = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginSettings.kt')
+const detail = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/PluginDetailScreen.kt')
+const gif = await read('app/src/main/java/io/github/yuloong07star/luwi/plugin/PluginGif.kt')
 
 check(
   '清单里声明了对话槽与那颗「说一句」的接收器',
@@ -606,15 +608,22 @@ check(
   [true, true, true, true, true, true, true],
 )
 check(
-  '气泡区 = 人物高度 + 一行气泡 (主人 2026-10-17 第三条), 而人物仍随格子等比',
+  '气泡区: 下限 = 人物 + 一行, 内容多就往上长 (主人 2026-10-17 的两条), 而人物仍随格子等比',
   [
-    widgetChat.includes('fun bubbleAreaDp(faceDp: Int, bubbleSp: Long): Int = faceDp + oneLineDp(bubbleSp)'),
-    widgetChat.includes('Face.bubbleAreaDp(faceDp, bubbleSp)'),
-    widgetChat.includes('setViewLayoutHeight(\n            R.id.lw_chat_bubbles'),
+    widgetChat.includes('fun minAreaDp(faceDp: Int, bubbleSp: Long): Int = faceDp + oneLineDp(bubbleSp)'),
+    widgetChat.includes('fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int'),
+    widgetChat.includes('fun rowsFor(cellHeightDp: Int, faceDp: Int, bubbleSp: Long): Int'),
+    widgetChat.includes('setViewLayoutHeight(R.id.lw_chat_bubbles, areaHeight.toFloat()'),
     widgetChat.includes('fun actualDp(cellWidthDp: Int, cellHeightDp: Int, baseDp: Long): Int'),
     widgetChat.includes('setTextViewTextSize(R.id.lw_chat_bubble_text, TypedValue.COMPLEX_UNIT_SP'),
+    // 字号 / 人物 / 原始大小这三项在二级页上是**真弹窗** (主人 2026-10-17: 输入数字 / 三条选人物)
+    detail.includes('Dialog(onDismissRequest'),
+    detail.includes('跟随浮标显示'),
+    detail.includes('选择 gif'),
+    detail.includes('导入 gif'),
+    detail.includes('PluginGif.import(context, id, uri)'),
   ],
-  [true, true, true, true, true],
+  [true, true, true, true, true, true, true, true, true, true, true],
 )
 
 check(
@@ -940,4 +949,7 @@ check(
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
 if (failures > 0) process.exit(1)
+
+
+
 
