@@ -142,6 +142,18 @@ export function apply(ctx) {
     warn(ctx, `the mode model correction was not started: ${error?.message ?? error}`)
   }
 
+  // 探索那一档的预算 (2.7.8 批次 7): 数步那道闸 (只数不拒) 与到点那一拍 (5 s), 与上面两道闸并列
+  try {
+    ctx.tools.guard(exploreStepGuard)
+  } catch (error) {
+    warn(ctx, `the explore step guard was not registered: ${error?.message ?? error}`)
+  }
+  try {
+    startExploreClock(ctx)
+  } catch (error) {
+    warn(ctx, `the explore budget was not started: ${error?.message ?? error}`)
+  }
+
   // 语音输入是 dsh 里可选的一套 (voice-input bundle 带的那个客户端录音按钮): 服务在才注册
   // 本机的转写 provider, 不在就什么都不做 —— 一个可选能力不该让 lw_* 那堆工具跟着挂
   try {
@@ -3545,6 +3557,95 @@ const TOOLS = [
     },
   ),
 
+  // ---- 2.7.8 批次 7: 探索 ----
+  //
+  // 这一档的三件事在这条说明里就要写死 (模型是照这一段做的): 预算由宿主数 (到步只提醒 / 到点取消那一轮)、
+  // 三条红线在 persona 里而工具面不拦 (D9)、摘要只能走 op=finish 而且宿主落文件 (见 [startExplore] /
+  // [finishExplore])
+
+  defineTool({
+    name: 'lw_explore',
+    description:
+      'Explore mode. One exploration is one conversation in the Luwi workspace whose budget the HOST'
+      + ' keeps: 30 minutes and 60 tool calls unless the caller says otherwise. **The budget is not'
+      + ' yours to count**: when the calls run out you are told once to finish, and when the time'
+      + ' runs out that turn is cancelled and you are told to finish immediately - neither of those'
+      + ' refuses a tool call, so nothing here stops you, and nothing here counts what a subagent'
+      + ' does. op=start opens one (refused while another is still running, and refused outright in'
+      + ' power save mode, which is reported as such); op=finish hands in the report. The three red'
+      + ' lines (no irreversible act on an app, no writing any existing file, no sending anything)'
+      + ' live in this preset\'s prompt text, not in this tool: **this call cannot enforce them and'
+      + ' does not check them.** The summary has to come through op=finish, and the host is what'
+      + ' writes it to $DSH_HOME/lw/explore/<time>.md together with the candidate cards below'
+      + ' `candidates/` - **do not write that report or those cards with any other tool**, and do'
+      + ' not put it into long-term memory yourself: promotion is the host\'s and the user\'s call.'
+      + ' Write the summary in five sections - 已确认事实 / 仍不确定的点 / 下一场建议优先探索 /'
+      + ' 风险与拦截记录 / 证据引用 - at most 8000 characters (longer is cut and marked truncated).'
+      + ' A candidate card is ONE sentence worth having next time (kind fact / preference / todo /'
+      + ' date, plus sensitivity low or high, confidence, evidence) - **not a snapshot of the'
+      + ' screen**: battery level or "it is on this page" is not a card. A date (birthday,'
+      + ' anniversary, due date) is always sensitivity high, and at most 5 cards go in one finish.',
+    parameters: {
+      op: {
+        type: 'string',
+        required: true,
+        description: 'status reads this exploration, start opens one, finish hands in the report',
+        enum: ['status', 'start', 'finish'],
+      },
+      text: {
+        type: 'string',
+        description: 'start only: what this exploration is for, in the user\'s words. Left out it'
+          + ' is "自由探索这台手机"',
+      },
+      minutes: {
+        type: 'integer',
+        description: 'start only: how long, 1..180. Leave it out for the default of 30',
+      },
+      steps: {
+        type: 'integer',
+        description: 'start only: how many tool calls, 1..1000. Leave it out for the default of 60',
+      },
+      summary: {
+        type: 'string',
+        description: 'finish only, required: the whole report, the five sections, at most 8000'
+          + ' characters',
+      },
+      candidates: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'finish only: at most 5 cards, each {fact, kind, sensitivity, confidence,'
+          + ' evidence}. kind is fact / preference / todo / date; sensitivity is low or high'
+          + ' (date is always high)',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value }],
+    },
+    async execute(args) {
+      const op = String(args?.op ?? '').trim()
+      // 工具那一层没有 `ctx` 这个名字 (见 lw_mode 上面那段), 一律用模块级的 hostCtx
+      if (op === 'status') return exploreStatusText(hostCtx)
+      if (op === 'start') {
+        const outcome = await startExplore(hostCtx, {
+          text: args?.text,
+          minutes: args?.minutes,
+          steps: args?.steps,
+          via: 'tool',
+        })
+        return exploreStartText(outcome)
+      }
+      if (op === 'finish') {
+        const outcome = await finishExplore(hostCtx, {
+          summary: args?.summary,
+          candidates: args?.candidates,
+        })
+        return exploreFinishText(outcome)
+      }
+      throw new Error('lw_explore takes op status, start or finish')
+    },
+  }),
+
   // ---- 1.0.3 批次 6: 事件订阅 ----
   //
   // 这一批要改的是模型的**读法**: 按一下之后不要马上反复 lw_ui, 而是先说清"我在等什么", 再等它发生。
@@ -5782,9 +5883,17 @@ function voiceInboxPath() {
  */
 const BALL_WORKSPACE_NAME = 'dsh-ball'
 
-function ballWorkspace() {
+/**
+ * 一条通道工作区的目录: 宿主进程的 cwd 与 `HOME` 都是工作区根 (见 app 的 DshHost.spawn), 所以
+ * 只取根下一个固定的子目录
+ */
+function channelWorkspace(name) {
   const home = process.env.HOME || process.cwd()
-  return join(home, BALL_WORKSPACE_NAME)
+  return join(home, name)
+}
+
+function ballWorkspace() {
+  return channelWorkspace(BALL_WORKSPACE_NAME)
 }
 
 /**
@@ -5794,48 +5903,59 @@ function ballWorkspace() {
  */
 const ballWorkspaceState = { path: null, id: null, registered: null, why: null }
 
-/** 确保那个目录在: 建不出来时回 null, 调用方退回"工作区根" (对话照旧能开, 只是没有自己的家) */
-async function ensureBallWorkspace(ctx) {
-  const directory = ballWorkspace()
+/**
+ * 一条通道工作区的注册路 (浮标那条与探索那条共用的就是这一段)
+ *
+ * **光建目录不够, 还得把它注册成工作区** (2.7.8 批次 2 根因一): dsh 的会话列表只遍历**已注册的工作区
+ * 实体**, 没入账的会话一律进「未分组」(`packages/client/ui-workspace/src/client/tree.ts` 的
+ * `groupByWorkspace`); 而工作区记录原本只在宿主启动那一趟按会话头的 cwd 补建 —— 于是**新装 / 清过
+ * 工作区列表之后的第一句一定落在未分组**, 要等重启一次才归位。`create` 的契约是 "Create or resolve
+ * one Workspace over an existing directory", 幂等, 所以每投一句问一次也不要紧
+ *
+ * **建新会话时还要把那条工作区的 id 交出去**: `sessionController.create` 只在请求带 `workspaceId`
+ * 时才 `attachSession` (`packages/api/session-controller/src/commands.ts:105-141`), 只给 `cwd` 的话
+ * 会话建出来但不入账 —— 界面上那条工作区在、里面一场都没有 (2026-10-17 模拟器上量到的)
+ *
+ * @param name 目录名 (`dsh-ball` / `Luwi`)
+ * @param state 这条通道自己的那份读数 (见 [ballWorkspaceState] / [exploreWorkspaceState])
+ */
+async function ensureChannelWorkspace(ctx, name, state) {
+  const directory = channelWorkspace(name)
   try {
     await mkdir(directory, { recursive: true })
   } catch (error) {
     // `hostCtx` 是 apply() 里挂上的 (见上面那个声明), 而这条路径只在投递时走到 —— 那时它一定在
     warn(hostCtx, `the channel workspace ${directory} could not be created: ${error?.message ?? error}`)
-    ballWorkspaceState.why = `the directory could not be created: ${error?.message ?? error}`
-    ballWorkspaceState.registered = false
+    state.why = `the directory could not be created: ${error?.message ?? error}`
+    state.registered = false
     return null
   }
-  // **光建目录不够, 还得把它注册成工作区** (2.7.8 批次 2 根因一): dsh 的会话列表只遍历**已注册的工作区
-  // 实体**, 没入账的会话一律进「未分组」(`packages/client/ui-workspace/src/client/tree.ts` 的
-  // `groupByWorkspace`); 而工作区记录原本只在宿主启动那一趟按会话头的 cwd 补建 —— 于是**新装 / 清过
-  // 工作区列表之后的第一句一定落在未分组**, 要等重启一次才归位。`create` 的契约是 "Create or resolve
-  // one Workspace over an existing directory", 幂等, 所以每投一句问一次也不要紧
-  //
-  // **建新会话时还要把那条工作区的 id 交出去**: `sessionController.create` 只在请求带 `workspaceId`
-  // 时才 `attachSession` (`packages/api/session-controller/src/commands.ts:105-141`), 只给 `cwd` 的话
-  // 会话建出来但不入账 —— 界面上那条工作区在、里面一场都没有 (2026-10-17 模拟器上量到的)
   let registered = null
   let entity = null
   try {
     const registry = ctx?.get?.('workspaceRegistry') ?? hostCtx?.get?.('workspaceRegistry')
     if (!registry || typeof registry.create !== 'function') {
       registered = null
-      ballWorkspaceState.why = 'this profile has no workspace registry, so the ball conversations stay ungrouped'
+      state.why = 'this profile has no workspace registry, so the ball conversations stay ungrouped'
     } else {
       entity = await registry.create(directory)
       registered = true
-      ballWorkspaceState.why = null
+      state.why = null
     }
   } catch (error) {
     registered = false
-    ballWorkspaceState.why = `the workspace could not be registered: ${error?.message ?? error}`
+    state.why = `the workspace could not be registered: ${error?.message ?? error}`
     warn(hostCtx, `the channel workspace ${directory} was not registered: ${error?.message ?? error}`)
   }
-  ballWorkspaceState.path = directory
-  ballWorkspaceState.registered = registered
-  ballWorkspaceState.id = entity === null ? null : String(entity.id ?? '')
-  return { path: directory, id: ballWorkspaceState.id }
+  state.path = directory
+  state.registered = registered
+  state.id = entity === null ? null : String(entity.id ?? '')
+  return { path: directory, id: state.id }
+}
+
+/** 浮标那条: 目录 `dsh-ball`, 读数记在 [ballWorkspaceState] 上 (判据钉着这个函数名) */
+async function ensureBallWorkspace(ctx) {
+  return ensureChannelWorkspace(ctx, BALL_WORKSPACE_NAME, ballWorkspaceState)
 }
 
 
@@ -6299,16 +6419,23 @@ async function voiceLedgerSnapshot() {
  *
  * @param ctx - host context (工具那一层要用模块级的 `hostCtx`)
  * @param sessionId - 要问的那一场 (那本账指向的那一场), 空串就只报"注册没注册"
+ * @param state - 哪一条通道的工作区读数 (浮标那条缺省; 探索那条传 [exploreWorkspaceState])
  */
-async function voiceWorkspaceReadings(ctx, sessionId) {
+async function voiceWorkspaceReadings(ctx, sessionId, state = ballWorkspaceState) {
   const readings = {
     sessionId: String(sessionId ?? ''),
     workspace: '',
     workspaceId: '',
     member: null,
     cwd: '',
+    // 缺省那两行就是浮标那条的读数 (判据钉着这个字面量, 见 tools/check-voice-inbox.mjs 第 15 节);
+    // 探索那条把自己的 state 传进来, 下面那两行覆盖成它的
     registered: ballWorkspaceState.registered,
     registeredWhy: ballWorkspaceState.why,
+  }
+  if (state !== ballWorkspaceState) {
+    readings.registered = state.registered
+    readings.registeredWhy = state.why
   }
   const id = readings.sessionId
   if (id === '') return readings
@@ -6915,6 +7042,10 @@ async function createVoiceMessage(text, images = []) {
  * **flush 之后才算投出去**: 游标只在投递成功之后前移, 中途崩了下次会重投, 而不是静默丢掉
  */
 async function voiceDeliver(ctx, line) {
+  // 探索那一档走**收件箱**进来 (2.7.8 批次 7; 批次 8 的探索卡片走的就是这条): 它不是一句话, 而是
+  // "开一场探索" —— 于是它不进命令表、不截图、也不碰 `voice/session.json` 那本账 (那本账只认球自己
+  // 那一句, 见 [voiceSessionBump])。检查 `source` 放在最前面: 这一步只多一次字符串比较
+  if (line.source === 'explore') return startExplore(ctx, { text: line.text, via: 'inbox' })
   // 先看它是不是一句命令 (批次 4.5): 是的话走 applyMode, 不进会话 —— 所以这一句既不插正在跑的那
   // 一轮, 也不开新对话, 更不理会 `line.wake`。命令是"对这台手机说的", 不是"对助手说的一句话"
   //
@@ -7446,6 +7577,804 @@ function startBallPhase(ctx) {
   // **起来先写一次空表**: 宿主刚起来时账上一定是空的, 这一下顺手把应用里可能残留的旧字清掉
   // (应用重启时它自己也会读一次, 所以两份都对得上)
   void writeBallPhase()
+}
+
+/* ── 探索 (2.7.8 批次 7, 需求第 6 条) ────────────────────────────────────────
+ *
+ * 一次探索 = 落在 `Luwi` 工作区的一场会话: 宿主给它一小段预算 (缺省 30 分钟 / 60 步), 它只读地自由
+ * 探索这台手机, 最后折成一份结构化摘要 (外加若干记忆候选卡) 落盘, 下一场先读它接着看
+ *
+ * 四件事的边界先写清 (D9 / D10 / D13 / D14):
+ *  - **"只读"只是提示词层**: 三条红线写在 persona 里, 宿主**不加硬拦**、不叠 read-only 权限档, 也不
+ *    deny 工具 —— 越没越界靠验收里那一趟如实记 (见方案 §8 的已知边界)
+ *  - **预算由宿主数**: 工具调用次数 (`ctx.tools.guard`, 同步, 只数不拒) 与墙钟 (5 s 一拍),
+ *    模型自报的一律不算
+ *  - **一场只允许一场**: `op` 只有 status / start / finish, 没有 resume —— 结束之后靠摘要接上
+ *  - **摘要只走 op=finish**: 宿主落文件与候选卡; 批次 7 只落卡, 不晋升、不读、不删 (闸门留批次 8)
+ *
+ * 判据在 `tools/check-explore.mjs`: 它用 `new Function` 把下面那几段纯函数抽出来真跑, 测的是上线这份
+ */
+
+/** 探索那一场的工作区名 (主人 2026-10-18 拍板: D10 改成 `Luwi`, 目录 `$DSH_HOME/Luwi`) */
+const EXPLORE_WORKSPACE_NAME = 'Luwi'
+
+/** 那一档的预设 id: 与 `presets/explore/cordis.patch.yml` 里的 `config.id` 是同一个字面量 */
+const EXPLORE_PRESET = 'explore'
+
+/** 缺省时长与步数 (度选是主人 2026-10-18 的口径: §1 第 1 条把步数做成硬预算) */
+const EXPLORE_MINUTES_DEFAULT = 30
+const EXPLORE_MINUTES_RANGE = [1, 180]
+const EXPLORE_STEPS_DEFAULT = 60
+const EXPLORE_STEPS_RANGE = [1, 1000]
+
+/** 每日主动说的上限 (批次 8 才记账; 本批只读, 见 [exploreStatus]) */
+const EXPLORE_SAID_DEFAULT = 3
+
+/** 那几份文件的文件名 (与应用那一侧同一个约定, 谁都不许单边改) */
+const EXPLORE_CARDS_FILE = 'explore-cards.json'
+const EXPLORE_STATE_FILE = 'explore.json'
+const EXPLORE_SUMMARY_DIR = 'explore'
+const EXPLORE_CANDIDATES_DIR = 'explore/candidates'
+
+/** 摘要正文上限 (超出截断并在 frontmatter 记 `truncated: true`) 与只留最近多少份 */
+const EXPLORE_SUMMARY_CHARS = 8000
+const EXPLORE_SUMMARIES_KEPT = 30
+
+/** 一次 finish 最多交几张候选卡, 候选目录只留最近多少张, 一张卡最多几个字 */
+const EXPLORE_CANDIDATES_MAX = 5
+const EXPLORE_CANDIDATES_KEPT = 100
+const EXPLORE_FACT_MAX = 200
+
+/** 候选卡的 `kind` 与 `sensitivity` 只收这几个 (不合法的那一条整条丢掉, 不静默改写) */
+const EXPLORE_KINDS = ['fact', 'preference', 'todo', 'date']
+const EXPLORE_SENSITIVITY = ['low', 'high']
+
+/** 到点那一拍: 5 s 一次 (与应用那侧 3 s 那条轮询同一个量级, 但这里只比一个数) */
+const EXPLORE_TICK_MS = 5000
+
+/**
+ * 这一场探索现在花到哪了 (纯函数)
+ *
+ * `due` 三态是**这一批最要紧的一条判据**: `time` 是到点 (要取消那一轮), `steps` 是步数用尽
+ * (只提醒, 不拒), `null` 是都还没到。`over` 之后一律回 `null` —— 到点只处理一次
+ */
+function exploreBudget(run, now = Date.now()) {
+  if (!run?.session) return { active: false, due: null, remainingMs: 0, stepsLeft: 0 }
+  const remainingMs = Math.max(0, Number(run.deadline) - now)
+  const stepsLeft = Math.max(0, Number(run.stepLimit) - Number(run.steps))
+  const due = run.over === true ? null
+    : remainingMs === 0 ? 'time'
+      : stepsLeft === 0 ? 'steps' : null
+  return { active: remainingMs > 0 && run.over !== true, due, remainingMs, stepsLeft }
+}
+
+/** 一段数的夹取 (分钟 / 步数都用它): 认不出来的给缺省, 认出来的一律夹进范围 (纯函数) */
+function exploreClamp(value, range, fallback) {
+  const number = Number(value)
+  if (value === undefined || value === null || !Number.isFinite(number)) return fallback
+  return Math.min(range[1], Math.max(range[0], Math.round(number)))
+}
+
+/** 那一份摘要叫什么: `yyyyMMdd-HHmm` (本地时间, 按这一场开始那一刻算 —— 纯函数) */
+function exploreSummaryName(startedAt) {
+  const at = new Date(Number(startedAt) || Date.now())
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`
+    + `-${pad(at.getHours())}${pad(at.getMinutes())}`
+}
+
+/** 应用那一侧记"今天说过几次"用的日期键, 与 `$DSH_HOME/lw/explore.json` 里 `said.date` 同一个形状 */
+function exploreDayKey(now = Date.now()) {
+  const at = new Date(now)
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+}
+
+/**
+ * 探索开场那一段正文 (纯函数)
+ *
+ * 三件事写进同一段: 这一趟要做什么 (正文, 缺省"自由探索这台手机")、**预算那两行** (步数用完只提醒,
+ * 到点那一轮会被取消)、以及**上一份摘要的路径** —— 第 17 条 persona 要它先读那份, 而模型没有别的
+ * 办法知道最新那份在哪 (宿主替它算, 不麻烦它再列一次目录)
+ */
+function exploreStartLine(text, run, summaryPath) {
+  const asked = String(text ?? '').trim() || '自由探索这台手机'
+  return [
+    asked,
+    '',
+    `预算: ${Number(run?.minutes) || EXPLORE_MINUTES_DEFAULT} 分钟 / `
+      + `${Number(run?.stepLimit) || EXPLORE_STEPS_DEFAULT} 步, 由宿主数`
+      + ' —— 到步会收到一句插话 (只提醒, 不拒调用), 到点那一轮会被取消并收到"立刻收尾";',
+    `上一份摘要: ${String(summaryPath ?? '') || '还没有 (这是第一场)'}`,
+  ].join('\n')
+}
+
+/**
+ * 一张候选卡的正文 (纯函数)
+ *
+ * 校验三件事: `fact` 非空、`kind` 在四个里、`sensitivity` 在 low / high 里 (缺省 low) ——
+ * **`date` 类一律 `high`** (生日 / 纪念日 / 到期日写错一次就很难补回来, 见 §4.4)
+ *
+ * 不合法的回 `{ error }`, 由调用方**整条丢掉并记读数** —— 不静默改写成 low: 那会把"模型写错了"
+ * 变成一个看起来合法的低敏事实
+ */
+function exploreCandidateBody(card, extra = {}) {
+  const fact = String(card?.fact ?? '').trim()
+  if (fact === '') return { error: 'the card has no fact' }
+  const kind = String(card?.kind ?? '').trim()
+  if (!EXPLORE_KINDS.includes(kind)) {
+    return { error: `kind "${kind}" is not one of ${EXPLORE_KINDS.join(' / ')}` }
+  }
+  const asked = String(card?.sensitivity ?? '').trim()
+  if (asked !== '' && !EXPLORE_SENSITIVITY.includes(asked)) {
+    return { error: `sensitivity "${asked}" is not low or high` }
+  }
+  const sensitivity = kind === 'date' ? 'high' : asked === '' ? 'low' : asked
+  const confidence = Number(card?.confidence)
+  const kept = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : null
+  const evidence = String(card?.evidence ?? '').trim()
+  const said = fact.slice(0, EXPLORE_FACT_MAX)
+  const body = [
+    '---',
+    `at: ${extra.at ?? new Date().toISOString()}`,
+    `session: ${extra.session ?? ''}`,
+    `kind: ${kind}`,
+    `sensitivity: ${sensitivity}`,
+    ...(kept === null ? [] : [`confidence: ${kept}`]),
+    `evidence: ${evidence === '' ? 'not recorded' : evidence}`,
+    '---',
+    '',
+    said,
+    '',
+  ].join('\n')
+  return { kind, sensitivity, fact: said, confidence: kept, evidence, body }
+}
+
+/**
+ * 那一场探索的账: 谁在跑、预算从什么时候起、用了几步
+ *
+ * **内存里这一份是活的那一份**, `$DSH_HOME/lw/explore.json` 是它的镜子 —— 宿主重启之后按那份文件
+ * 重挂预算 (`deadline` 与 `steps` 都从文件回来), 于是"装一次包"不会把一场探索变成没人管的孤儿
+ */
+const exploreRun = {
+  session: null,
+  workspace: '',
+  startedAt: 0,
+  deadline: 0,
+  minutes: 0,
+  steps: 0,
+  stepLimit: 0,
+  reminded: false,
+  over: false,
+}
+
+/** 探索那一场的工作区注册读数 (形状与 [ballWorkspaceState] 同, 判据见 [ensureChannelWorkspace]) */
+const exploreWorkspaceState = { path: null, id: null, registered: null, why: null }
+
+/**
+ * 探索那条: 目录 `Luwi`, 读数记在 [exploreWorkspaceState] 上
+ *
+ * 主人 2026-10-18 拍板 (D10 改口径): 探索会话落在 `Luwi`, 与 `dsh-ball` 那条各记各的账 —— 注册路
+ * 共用 [ensureChannelWorkspace], 一条会话该带 `workspaceId` 的那件事与浮标那条完全相同
+ */
+async function ensureExploreWorkspace(ctx) {
+  return ensureChannelWorkspace(ctx, EXPLORE_WORKSPACE_NAME, exploreWorkspaceState)
+}
+
+/** 这一档的读数 (给 `lw_explore op=status`, 也是"省电探针抛错"与"丢掉几张卡"的唯一落点) */
+const exploreState = {
+  preset: null,
+  presetWhy: null,
+  started: 0,
+  finished: 0,
+  stubs: 0,
+  dropped: 0,
+  refusals: 0,
+  lastRefusal: null,
+  powerSaveUnknown: false,
+  lastError: null,
+}
+
+/**
+ * `$DSH_HOME/lw/explore.json` 那个文件
+ *
+ * **合并式原子写**: 先读, 只改自己的键 (`run`), `.tmp` + rename, 未知键一律保留 —— 批次 8 要往同一个
+ * 文件写 `said` (每日主动说的那本账), 那时这一侧一个字节都不用改
+ */
+function exploreStatePath() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', EXPLORE_STATE_FILE) : null
+}
+
+function exploreSummaryDir() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', EXPLORE_SUMMARY_DIR) : null
+}
+
+function exploreCandidatesDir() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', EXPLORE_CANDIDATES_DIR) : null
+}
+
+/** 探索卡清单 (批次 8 才读写, 本批只定文件名与键名): `{"names": ["<卡名>", ...]}` */
+function exploreCardsPath() {
+  const home = process.env.DSH_HOME
+  return home ? join(home, 'lw', EXPLORE_CARDS_FILE) : null
+}
+
+/** 那份状态文件读成对象: 读不到 / 不是对象都给空对象 (调用方一律按缺省读) */
+async function exploreStateRead() {
+  const path = exploreStatePath()
+  if (path === null) return {}
+  try {
+    const text = await readFile(path, 'utf8')
+    const parsed = JSON.parse(text)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 把内存里那一份写进文件: **未知键原样留着**, 只换 `v` / `updatedAt` / `run` */
+async function exploreStateWrite() {
+  const path = exploreStatePath()
+  if (path === null) return
+  const base = await exploreStateRead()
+  const payload = {
+    ...base,
+    v: 1,
+    updatedAt: Date.now(),
+    run: exploreRun.session === null ? null : { ...exploreRun },
+  }
+  const temporary = `${path}.tmp`
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(temporary, `${JSON.stringify(payload)}\n`)
+    await rename(temporary, path)
+  } catch (error) {
+    console.warn(`luwi-channel: the explore state file was not written: ${error?.message ?? error}`)
+  }
+}
+
+/** 宿主起来时把那一场接回来 (`run` 还在且没 over): 只按文件重挂预算, 不做别的 */
+async function exploreStateRestore() {
+  const record = await exploreStateRead()
+  const run = record?.run
+  if (run === null || typeof run !== 'object') return false
+  if (typeof run.session !== 'string' || run.session === '') return false
+  if (run.over === true) return false
+  exploreRun.session = run.session
+  exploreRun.workspace = typeof run.workspace === 'string' ? run.workspace : ''
+  exploreRun.startedAt = Number(run.startedAt) || 0
+  exploreRun.deadline = Number(run.deadline) || 0
+  exploreRun.minutes = Number(run.minutes) || EXPLORE_MINUTES_DEFAULT
+  exploreRun.steps = Number(run.steps) || 0
+  exploreRun.stepLimit = Number(run.stepLimit) || EXPLORE_STEPS_DEFAULT
+  exploreRun.reminded = run.reminded === true
+  exploreRun.over = false
+  return true
+}
+
+/** 把那一场清干净 (收尾 / 桩摘要 / 开会话失败都用它) */
+function exploreReset() {
+  exploreRun.session = null
+  exploreRun.workspace = ''
+  exploreRun.startedAt = 0
+  exploreRun.deadline = 0
+  exploreRun.minutes = 0
+  exploreRun.steps = 0
+  exploreRun.stepLimit = 0
+  exploreRun.reminded = false
+  exploreRun.over = false
+}
+
+/** 最新那一份摘要的路径 (没有就是空串) —— pc=start 那一段要把它交给模型 (persona 第 17 条) */
+async function exploreLatestSummary() {
+  const directory = exploreSummaryDir()
+  if (directory === null) return ''
+  const names = (await readdir(directory).catch(() => [])).filter((one) => one.endsWith('.md')).sort()
+  return names.length === 0 ? '' : join(directory, names[names.length - 1])
+}
+
+/** 候选目录里现在有几张卡 (`op=status` 那一行读数) */
+async function exploreCandidatesCount() {
+  const directory = exploreCandidatesDir()
+  if (directory === null) return 0
+  return (await readdir(directory).catch(() => [])).filter((one) => one.endsWith('.md')).length
+}
+
+/** 只留最近 `keep` 份: 目录按文件名排序 (那就是时间序), 多出来的从最旧的删起 */
+async function explorePrune(directory, extension, keep) {
+  const names = (await readdir(directory).catch(() => [])).filter((one) => one.endsWith(extension)).sort()
+  const extra = names.length - keep
+  if (extra <= 0) return 0
+  for (const name of names.slice(0, extra)) {
+    await rm(join(directory, name), { force: true }).catch(() => {})
+  }
+  return extra
+}
+
+/** 省电探针: 桥上有 `wakeword op=status` 带 powerSave (见 §2 第 7 条); 探针抛错不算省电 */
+async function explorePowerSave() {
+  try {
+    const status = await call('wakeword', { op: 'status' })
+    return { known: true, powerSave: status?.powerSave === true, why: null }
+  } catch (error) {
+    return { known: false, powerSave: null, why: String(error?.message ?? error) }
+  }
+}
+
+/**
+ * 往那一场说一句 (开场正文 / 到步提醒 / 到点收尾都用它)
+ *
+ * 形状与 [deliverToBall] 相同: `withoutInitiator` -> `resolveAgent` -> (取消) -> `steer` / `followup`
+ * -> `flush`。**到点那一下先取消再 followup** —— 与 [runVoiceInterrupt] 同一条语义
+ * (`cancel({kind:'user'}, {keepInbox:true})`), 但那个函数一个字节都不动 (它被 check-voice-inbox 钉着)
+ */
+async function exploreSay(ctx, text, options = {}) {
+  const controller = ctx?.get?.('sessionController')
+  if (!controller) throw new Error('this profile has no session controller, so the explore session cannot be reached')
+  const sessionId = exploreRun.session
+  if (!sessionId) throw new Error('no exploration is running')
+  return ctx.agents.withoutInitiator(async () => {
+    const resolved = await controller.resolveAgent(sessionId)
+    if ('error' in resolved) throw resolved.error
+    const { agent } = resolved
+    const message = await createVoiceMessage(text)
+    const running = agent.status === 'running'
+    if (options.cancel === true) {
+      agent.cancel({ kind: 'user' }, { keepInbox: true })
+      agent.followup(message)
+    } else if (running && options.steer === true) {
+      agent.steer(message)
+    } else {
+      agent.followup(message)
+    }
+    const flushed = await ctx.sessions.flush(agent.session)
+    return { sessionId, running, flushed }
+  })
+}
+
+/**
+ * 到步那一句: **只提醒, 不拒** (D9 那一档: 主机不拦工具调用)
+ *
+ * 只在第 stepLimit 步发一次 (`exploreRun.reminded` 是那道闸); 失败只记读数 —— 这个函数是从同步的
+ * guard 里 `void` 出去的, 抛出来没人接
+ */
+async function exploreStepNote(ctx) {
+  if (ctx === null) return
+  const text = `预算用完了 (${exploreRun.steps} 步), 该收尾了: 立刻 lw_explore `
+    + '{op:"finish", summary:"..."}, 不要再开新的事'
+  try {
+    const sent = await exploreSay(ctx, text, { steer: true })
+    console.log(`luwi-channel: exploration ${sent.sessionId} used up its budget - told it to finish`)
+  } catch (error) {
+    exploreState.lastError = `the step note was not sent: ${error?.message ?? error}`
+    console.warn(`luwi-channel: ${exploreState.lastError}`)
+  }
+}
+
+/**
+ * 数步那一件事 (第二个 `ctx.tools.guard`, 与 [cameraAndModeGate] 并列)
+ *
+ * **只数不拒**: 同步、最便宜的那条判据排最前, 三个 return 都是 `undefined`。子代理的会话 id 不同,
+ * 它的工具调用天然不计数 —— 这是 D9 同一口径下的**已知边界** (persona 写"不派", 宿主不拦)
+ */
+function exploreStepGuard(exec) {
+  if (exploreRun.session === null) return undefined
+  if (sessionIdOf(exec) !== exploreRun.session) return undefined
+  if (exploreRun.over === true) return undefined
+  exploreRun.steps += 1
+  // 每五步落一次盘 (宿主重启之后步数不从零开始), 不是每一步都写文件
+  if (exploreRun.steps % 5 === 0) void exploreStateWrite()
+  if (exploreRun.steps === exploreRun.stepLimit && !exploreRun.reminded) {
+    exploreRun.reminded = true
+    void exploreStateWrite()
+    void exploreStepNote(hostCtx)
+  }
+  return undefined
+}
+
+/** 到点那一拍: 看到 deadline 且没 over 就取消那一轮, 再投一句"立刻收尾" */
+async function exploreTick(ctx) {
+  if (exploreRun.session === null || exploreRun.over === true) return
+  if (exploreBudget(exploreRun).due !== 'time') return
+  const sessionId = exploreRun.session
+  const minutes = exploreRun.minutes
+  exploreRun.over = true
+  await exploreStateWrite()
+  console.log(`luwi-channel: exploration ${sessionId} hit its deadline (${minutes} min) - the turn was cancelled`)
+  try {
+    await exploreSay(ctx, `到点了 (${minutes} 分钟), 立刻 lw_explore op=finish 收尾`, { cancel: true })
+  } catch (error) {
+    exploreState.lastError = `the deadline notice was not sent: ${error?.message ?? error}`
+    console.warn(`luwi-channel: ${exploreState.lastError}`)
+  }
+}
+
+/**
+ * 写一份摘要 (+ 逐条落候选卡), 然后清 run
+ *
+ * 两件事都**只由宿主做**: persona 第 16 条明说不要用别的工具写 (那会撞红线 2), 所以这里也是唯一
+ * 落 `$DSH_HOME/lw/explore/` 的地方。桩摘要 (`stub`) 不写候选卡 —— 没有正文就没有可晋升的东西
+ */
+async function exploreWriteSummary({ summary, candidates = [], ended = 'finish', stub = false }) {
+  const directory = exploreSummaryDir()
+  if (directory === null) return { error: 'this host has no DSH_HOME, so the summary has nowhere to go' }
+  const at = new Date().toISOString()
+  const text = String(summary ?? '')
+  const truncated = text.length > EXPLORE_SUMMARY_CHARS
+  const body = truncated ? text.slice(0, EXPLORE_SUMMARY_CHARS) : text
+  const asked = Array.isArray(candidates) ? candidates : []
+  const kept = []
+  const dropped = []
+  if (!stub) {
+    if (asked.length > EXPLORE_CANDIDATES_MAX) {
+      dropped.push({
+        index: 0,
+        why: `${asked.length - EXPLORE_CANDIDATES_MAX} card(s) over the ${EXPLORE_CANDIDATES_MAX}`
+          + ' one finish may hand in were not taken',
+      })
+    }
+    for (const card of asked.slice(0, EXPLORE_CANDIDATES_MAX)) {
+      const one = exploreCandidateBody(card, { at, session: exploreRun.session })
+      if (one.error) {
+        dropped.push({ index: kept.length + dropped.length + 1, why: one.error })
+        continue
+      }
+      kept.push(one)
+    }
+  }
+  const front = [
+    '---',
+    `at: ${at}`,
+    `session: ${exploreRun.session ?? ''}`,
+    `workspace: ${exploreRun.workspace}`,
+    `minutes: ${exploreRun.minutes}`,
+    `steps: ${exploreRun.stepLimit}`,
+    `usedSteps: ${exploreRun.steps}`,
+    `ended: ${ended}`,
+    `candidates: ${kept.length}`,
+    ...(truncated ? ['truncated: true'] : []),
+    ...(stub ? ['stub: true'] : []),
+    '---',
+    '',
+  ]
+  const name = exploreSummaryName(exploreRun.startedAt)
+  const file = join(directory, `${name}.md`)
+  try {
+    await mkdir(directory, { recursive: true })
+    await writeFile(file, `${front.join('\n')}${body}\n`)
+  } catch (error) {
+    return { error: `the summary could not be written: ${error?.message ?? error}` }
+  }
+  let cards = 0
+  if (kept.length > 0) {
+    const cardsDir = exploreCandidatesDir()
+    try {
+      await mkdir(cardsDir, { recursive: true })
+      for (const [index, one] of kept.entries()) {
+        const cardFile = join(cardsDir, `${name}-${index + 1}.md`)
+        await writeFile(cardFile, one.body)
+        cards += 1
+      }
+      await explorePrune(cardsDir, '.md', EXPLORE_CANDIDATES_KEPT)
+    } catch (error) {
+      dropped.push({ index: 0, why: `the candidate cards could not be written: ${error?.message ?? error}` })
+    }
+  }
+  await explorePrune(directory, '.md', EXPLORE_SUMMARIES_KEPT)
+  exploreState.dropped += dropped.length
+  if (dropped.length > 0) {
+    console.warn(`luwi-channel: ${dropped.length} explore candidate card(s) were dropped - ${JSON.stringify(dropped)}`)
+  }
+  exploreReset()
+  await exploreStateWrite()
+  return { path: file, chars: body.length, truncated, candidates: cards, dropped }
+}
+
+/** 兜底: 到点了, 那一轮结束了而模型没交摘要 —— 写一份桩 (不写候选卡) */
+async function exploreStub() {
+  if (exploreRun.session === null) return
+  const sessionId = exploreRun.session
+  exploreState.stubs += 1
+  console.log(`luwi-channel: exploration ${sessionId} ended without a summary - a stub was written instead`)
+  const saved = await exploreWriteSummary({
+    summary: '(这一场没有留下摘要: 到点/到步时没有调 lw_explore op=finish)',
+    candidates: [],
+    ended: 'deadline',
+    stub: true,
+  })
+  if (saved.error) {
+    exploreState.lastError = saved.error
+    warn(hostCtx, saved.error)
+  }
+}
+
+/**
+ * 开一场探索 (op=start 与收件箱那条 `source:"explore"` 都走它)
+ *
+ * 判据顺序照方案 §5.4(d), 一步都不许换: 已经有活着的 -> 省电 -> 建工作区 -> 定预设 -> 建会话 ->
+ * 投开场正文 -> 落 run。**不传 workspaceId 与 cwd 两个** (二选一, 与 [openBallConversation] 同形)
+ */
+async function startExplore(ctx, options = {}) {
+  const via = typeof options?.via === 'string' && options.via !== '' ? options.via : 'tool'
+  if (exploreRun.session !== null && exploreRun.over !== true) {
+    exploreState.refusals += 1
+    exploreState.lastRefusal = { at: Date.now(), why: 'running', session: exploreRun.session }
+    return {
+      started: false,
+      refused: 'running',
+      session: exploreRun.session,
+      reason: `another exploration is still running (${exploreRun.session})`,
+    }
+  }
+  // 上一场到点了而摘要还没交: 先按桩收掉, 再开这一场 (一场只允许一场)
+  if (exploreRun.session !== null && exploreRun.over === true) await exploreStub()
+  const power = await explorePowerSave()
+  if (power.known && power.powerSave === true) {
+    exploreState.refusals += 1
+    exploreState.lastRefusal = { at: Date.now(), why: 'powerSave' }
+    return {
+      started: false,
+      refused: 'powerSave',
+      reason: 'the phone is in power save mode right now, so an exploration is not opened',
+    }
+  }
+  if (!power.known) exploreState.powerSaveUnknown = true
+  const controller = ctx?.get?.('sessionController')
+  if (!controller) throw new Error('this profile has no session controller, so an exploration has nowhere to go')
+  const workspace = await ensureExploreWorkspace(ctx)
+  const preset = await chooseExplorePreset(ctx)
+  exploreState.preset = preset.id ?? null
+  exploreState.presetWhy = preset.why
+  const minutes = exploreClamp(options?.minutes, EXPLORE_MINUTES_RANGE, EXPLORE_MINUTES_DEFAULT)
+  const stepLimit = exploreClamp(options?.steps, EXPLORE_STEPS_RANGE, EXPLORE_STEPS_DEFAULT)
+  const startedAt = Date.now()
+  const summaryPath = await exploreLatestSummary()
+  const request = {
+    ...ballCreatePlace(workspace),
+    ...(preset.id === undefined ? {} : { agentPreset: preset.id }),
+  }
+  let created = null
+  try {
+    created = await controller.create(request)
+  } catch (error) {
+    if (preset.id === undefined || preset.id === 'standard') throw error
+    created = await controller.create({ ...ballCreatePlace(workspace), agentPreset: 'standard' })
+    exploreState.preset = 'standard'
+    exploreState.presetWhy = `${preset.why}; the create failed (${describePresetFailure(error)}),`
+      + ' so standard was used instead'
+  }
+  const sessionId = String(created.sessionId)
+  exploreRun.session = sessionId
+  exploreRun.workspace = workspace?.path ?? ''
+  exploreRun.startedAt = startedAt
+  exploreRun.minutes = minutes
+  exploreRun.deadline = startedAt + minutes * 60 * 1000
+  exploreRun.steps = 0
+  exploreRun.stepLimit = stepLimit
+  exploreRun.reminded = false
+  exploreRun.over = false
+  await exploreStateWrite()
+  try {
+    await exploreSay(ctx, exploreStartLine(options?.text, exploreRun, summaryPath))
+  } catch (error) {
+    exploreState.lastError = `the first line was not delivered: ${error?.message ?? error}`
+    exploreReset()
+    await exploreStateWrite()
+    throw error
+  }
+  exploreState.started += 1
+  console.log(
+    `luwi-channel: exploration ${sessionId} started in ${exploreRun.workspace}`
+      + ` (${minutes} min / ${stepLimit} steps, via ${via}, preset ${exploreState.preset ?? 'the registry default'})`,
+  )
+  return {
+    started: true,
+    session: sessionId,
+    workspace: exploreRun.workspace,
+    minutes,
+    stepLimit,
+    deadline: exploreRun.deadline,
+    via,
+    preset: exploreState.preset,
+    presetWhy: exploreState.presetWhy,
+    summary: summaryPath,
+  }
+}
+
+/**
+ * 这一档用哪个预设: **解析不了就退 `standard` 并把原因记进读数** (照 [chooseVoicePreset] 的 why 形状)
+ *
+ * 与语音那一条不同的是它**不再往下试别的候选**: 探索的 persona 与工具面是绑在一起的 (那三条红线
+ * 只在 explore 那一份里), 换到别的预设上去跑就不是"探索"了 —— 宁可退 standard 并如实说
+ */
+async function chooseExplorePreset(ctx) {
+  const presets = ctx?.get?.('agentPresets')
+  if (!presets || typeof presets.resolve !== 'function') {
+    return { id: undefined, why: 'this profile has no preset registry, so the create picks for itself' }
+  }
+  try {
+    const resolved = await presets.resolve(EXPLORE_PRESET)
+    return { id: resolved.id, why: `the explore preset (${resolved.id})` }
+  } catch (error) {
+    return { id: 'standard', why: `${describePresetFailure(error)}; fell back to standard` }
+  }
+}
+
+/** 收尾: 交摘要与候选卡 (唯一的出口) */
+async function finishExplore(_ctx, args = {}) {
+  if (exploreRun.session === null) {
+    return { saved: false, why: 'no exploration is running, so there is nothing to finish' }
+  }
+  const summary = typeof args?.summary === 'string' ? args.summary : ''
+  if (summary.trim() === '') {
+    return { saved: false, why: 'the summary is empty: op=finish needs the body of the report' }
+  }
+  const ended = exploreRun.over === true ? 'deadline' : exploreRun.reminded === true ? 'steps' : 'finish'
+  const saved = await exploreWriteSummary({
+    summary,
+    candidates: Array.isArray(args?.candidates) ? args.candidates : [],
+    ended,
+    stub: false,
+  })
+  if (saved.error) return { saved: false, why: saved.error }
+  exploreState.finished += 1
+  console.log(
+    `luwi-channel: exploration finished -> ${saved.path} (${saved.chars} chars,`
+      + ` ${saved.candidates} candidate card(s), ${saved.dropped.length} dropped)`,
+  )
+  return { saved: true, ...saved }
+}
+
+/** 这一档现在什么样 (给 `lw_explore op=status`) */
+async function exploreStatus(ctx) {
+  const budget = exploreBudget(exploreRun)
+  const record = await exploreStateRead()
+  const latest = await exploreLatestSummary()
+  const cards = await exploreCandidatesCount()
+  const readings = await voiceWorkspaceReadings(ctx, exploreRun.session ?? '', exploreWorkspaceState)
+  const power = await explorePowerSave()
+  const said = record?.said
+  const day = exploreDayKey()
+  const saidDate = typeof said?.date === 'string' ? said.date : ''
+  const saidCount = Number.isFinite(Number(said?.count)) ? Number(said.count) : 0
+  return {
+    running: exploreRun.session !== null && exploreRun.over !== true,
+    over: exploreRun.over,
+    due: budget.due,
+    remainingMs: budget.remainingMs,
+    stepsLeft: budget.stepsLeft,
+    session: exploreRun.session ?? '',
+    workspace: readings.workspace || exploreRun.workspace,
+    workspacePath: exploreRun.workspace,
+    workspaceId: readings.workspaceId || exploreWorkspaceState.id || '',
+    member: readings.member,
+    cwd: readings.cwd,
+    registered: readings.registered,
+    registeredWhy: readings.registeredWhy,
+    startedAt: exploreRun.startedAt,
+    deadline: exploreRun.deadline,
+    minutes: exploreRun.minutes || EXPLORE_MINUTES_DEFAULT,
+    steps: exploreRun.steps,
+    stepLimit: exploreRun.stepLimit || EXPLORE_STEPS_DEFAULT,
+    reminded: exploreRun.reminded,
+    powerSave: power.powerSave,
+    powerSaveKnown: power.known,
+    powerSaveWhy: power.why,
+    summary: latest,
+    candidates: cards,
+    said: saidCount,
+    saidToday: saidDate === day ? saidCount : 0,
+    saidDefault: EXPLORE_SAID_DEFAULT,
+    preset: exploreState.preset,
+    presetWhy: exploreState.presetWhy,
+    started: exploreState.started,
+    finished: exploreState.finished,
+    stubs: exploreState.stubs,
+    dropped: exploreState.dropped,
+    refusals: exploreState.refusals,
+    lastRefusal: exploreState.lastRefusal,
+    powerSaveUnknown: exploreState.powerSaveUnknown,
+    lastError: exploreState.lastError,
+  }
+}
+
+/**
+ * `lw_explore op=status` 那一段回执: 一行一句, 结构化那份垫在下面 (`withJson`, 照 lw_automation 的形状)
+ */
+async function exploreStatusText(ctx) {
+  const readings = await exploreStatus(ctx)
+  const when = (stamp) => (Number(stamp) > 0 ? new Date(Number(stamp)).toISOString() : '')
+  const lines = [
+    readings.running
+      ? `exploration: running in ${shortSession(readings.session)} - ${readings.steps}/${readings.stepLimit} steps,`
+        + ` ${Math.round(readings.remainingMs / 1000)}s left${readings.due ? `, due ${readings.due}` : ''}`
+      : readings.session === ''
+        ? 'exploration: not running'
+        : `exploration: over in ${shortSession(readings.session)}, waiting for lw_explore op=finish`,
+    `budget: ${readings.minutes} minutes / ${readings.stepLimit} steps`
+      + `${readings.reminded ? ' (the step note was sent)' : ''}, started ${when(readings.startedAt) || '(never)'}`,
+    `workspace: ${readings.workspace || '(not registered)'} (id ${readings.workspaceId || 'none'}),`
+      + ` cwd ${readings.cwd || '(unknown)'}, member ${readings.member === null ? 'unknown' : String(readings.member)},`
+      + ` registered ${String(readings.registered)}${readings.registeredWhy ? ` - ${readings.registeredWhy}` : ''}`,
+    `power save: ${readings.powerSaveKnown ? String(readings.powerSave) : `unknown (${readings.powerSaveWhy})`}`
+      + `${readings.powerSaveUnknown ? ', the probe failed once this run' : ''}`,
+    `latest summary: ${readings.summary || '(none yet)'}`,
+    `candidate cards: ${readings.candidates} in all`,
+    `said today: ${readings.saidToday} of ${readings.saidDefault} (the daily limit lands in the next batch)`,
+    `this run: ${readings.started} started, ${readings.finished} finished, ${readings.stubs} stub(s),`
+      + ` ${readings.refusals} refused, ${readings.dropped} card(s) dropped`,
+    `preset: ${readings.preset ?? '(the registry default)'}${readings.presetWhy ? ` - ${readings.presetWhy}` : ''}`,
+  ]
+  if (readings.lastRefusal) {
+    lines.push(`the last refusal: ${readings.lastRefusal.why}`
+      + `${readings.lastRefusal.session ? ` (${shortSession(readings.lastRefusal.session)})` : ''}`)
+  }
+  if (readings.lastError) lines.push(`the last error: ${readings.lastError}`)
+  return withJson(lines, readings)
+}
+
+/** `op=start` 那一段回执 */
+function exploreStartText(outcome) {
+  if (outcome.started !== true) {
+    return `exploration: not started - ${outcome.reason}`
+  }
+  return [
+    `exploration: started in ${shortSession(outcome.session)}`,
+    `workspace: ${outcome.workspace || '(not registered)'}`,
+    `budget: ${outcome.minutes} minutes / ${outcome.stepLimit} steps (counted by the host)`,
+    `preset: ${outcome.preset ?? '(the registry default)'}${outcome.presetWhy ? ` - ${outcome.presetWhy}` : ''}`,
+    `previous summary: ${outcome.summary || '(none, this is the first one)'}`,
+  ].join('\n')
+}
+
+/** `op=finish` 那一段回执 */
+function exploreFinishText(outcome) {
+  if (outcome.saved !== true) return `the summary was not saved: ${outcome.why}`
+  return [
+    `exploration finished: ${outcome.path}`,
+    `body: ${outcome.chars} characters${outcome.truncated ? ' (cut at the 8000-character limit)' : ''}`,
+    `candidate cards: ${outcome.candidates} written`
+      + `${outcome.dropped.length > 0 ? `, ${outcome.dropped.length} dropped (see the log)` : ''}`,
+  ].join('\n')
+}
+
+/**
+ * 到点那一拍与"那一场接回来"的入口 (在 [apply] 里叫一次)
+ *
+ * 两个钩子: 5 s 一拍的预算检查, 以及"那一场的一轮结束了而摘要没交"那一条兜底 (写桩)
+ */
+function startExploreClock(ctx) {
+  try {
+    ctx.effect(
+      () => {
+        const timer = setInterval(() => void exploreTick(ctx), EXPLORE_TICK_MS)
+        return () => clearInterval(timer)
+      },
+      'luwi-channel: the explore budget',
+    )
+  } catch (error) {
+    warn(ctx, `the explore budget timer could not be registered: ${error?.message ?? error}`)
+  }
+  void exploreStateRestore()
+    .then((restored) => {
+      if (!restored) return
+      console.log(`luwi-channel: an exploration from before the restart is back on its budget: ${exploreRun.session}`)
+      return exploreTick(ctx)
+    })
+    .catch((error) => warn(ctx, `the explore state could not be read: ${error?.message ?? error}`))
+  onSessionEvent(ctx, (session, event) => {
+    if (event.type !== 'turn/end') return
+    if (exploreRun.session === null || session.id !== exploreRun.session) return
+    if (exploreRun.over !== true) return
+    // 到点那一下**先取消再 followup**: 被取消那一轮的 turn/end 是 interrupted / aborted, 不许拿它写桩
+    // (否则"取消了 / 模型还没开始收尾"就成了"没有留下摘要")
+    const kind = event.data?.reason?.kind
+    if (kind === 'interrupted' || kind === 'aborted') return
+    void exploreStub()
+  })
 }
 
 /* ── 余额 (2026-10-16, 「看余额」那一档) ──────────────────────────────────── */

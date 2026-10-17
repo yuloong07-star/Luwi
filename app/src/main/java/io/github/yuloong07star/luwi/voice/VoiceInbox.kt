@@ -93,6 +93,16 @@ internal object VoiceInbox {
      */
     const val SOURCE_AUTOMATION_SETUP = "automation-setup"
 
+    /**
+     * 探索那一档投的一句 (2.7.8 批次 7)
+     *
+     * 与上面那几个**都不在一个量级**: 它说的不是"某句话 / 某个按钮", 而是"开一场探索" —— 宿主那一侧
+     * 看到这个来源就按 `startExplore` 开一场 (预算缺省 30 分钟 / 60 步, 落在 `Luwi` 工作区),
+     * **不进命令表也不动那本 10 分钟的账**。批次 8 的探索卡片就走这条; 应用这一侧现在还只有
+     * `tools/lw-voice-line.ps1 -Source explore` 会写它, 常量先落在这里是为了两侧同一个字面量
+     */
+    const val SOURCE_EXPLORE = "explore"
+
     /** 超过这个大小就从尾部留 [KEEP_LINES] 行重写: 上千句话才可能走到, 到了也不该无限涨 */
     private const val CAP_BYTES = 1 shl 20
     private const val KEEP_LINES = 200

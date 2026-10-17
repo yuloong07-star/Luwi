@@ -13,9 +13,15 @@
 # 用法:
 #   pwsh -File tools\lw-voice-line.ps1 -Seq 7 -Text "调用 lw_mode 把模式切到 video" [-WaitSeconds 45]
 #   $env:ANDROID_SERIAL=emulator-5554; pwsh -File tools\lw-voice-line.ps1 -Seq 3 -Text "你好"
+#   pwsh -File tools\lw-voice-line.ps1 -Seq 9 -Text "自由探索" -Source explore   # 开一场探索
+#
+# **`-Source explore` 那条是「探索走收件箱进来」唯一的可脚本化入口** (2.7.8 批次 7): 宿主看到
+# `source:"explore"` 就不再把它当一句话, 而是照 `startExplore` 开一场探索 (预算缺省 30 分钟 / 60 步)。
+# 其余来源 (voice / keyboard / ball / quick / automation / automation-setup) 一律按原来的投递走
 param(
     [Parameter(Mandatory = $true)][int]$Seq,
     [Parameter(Mandatory = $true)][string]$Text,
+    [string]$Source = 'voice',
     [string]$Serial,
     [string]$Package = 'io.github.yuloong07star.luwi',
     [int]$WaitSeconds = 0
@@ -36,7 +42,7 @@ if (-not $Serial) {
 
 # 一行 JSONL: `text` 交给 ConvertTo-Json 转义 (中文与引号都安全), 写盘用无 BOM 的 UTF-8
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-$line = '{"seq":' + $Seq + ',"at":' + $now + ',"text":' + (ConvertTo-Json $Text -Compress) + ',"source":"voice"}' + "`n"
+$line = '{"seq":' + $Seq + ',"at":' + $now + ',"text":' + (ConvertTo-Json $Text -Compress) + ',"source":"' + $Source + '"}' + "`n"
 $local = Join-Path ([System.IO.Path]::GetTempPath()) "lw-voice-line-$Seq.jsonl"
 [System.IO.File]::WriteAllText($local, $line, (New-Object System.Text.UTF8Encoding($false)))
 

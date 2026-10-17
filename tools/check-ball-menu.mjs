@@ -354,13 +354,13 @@ check(
 /* ── 七、会话事件看得见本机的轮次 (2026-10-15 真机: 「正在想」与回复框都是空的) ── */
 
 check(
-  '四条 session/event 订阅一律走 onSessionEvent, 而且真的带 { global: true } (余额那条 2026-10-17 拿掉了)',
+  '五条 session/event 订阅一律走 onSessionEvent, 而且真的带 { global: true } (余额那条 2026-10-17 拿掉了, 第五条是 2.7.8 批次 7 的探索收尾兜底)',
   [
     [...plugin.matchAll(/^\s*ctx\.on\('session\/event'/gm)].length,
     [...plugin.matchAll(/^\s*onSessionEvent\(ctx, \(session, event\) => \{/gm)].length,
     plugin.includes("ctx.on('session/event', listener, { global: true })"),
   ],
-  [0, 4, true],
+  [0, 5, true],
 )
 check(
   '投影判据两边都归一 (DSH_HOME 写 /data/user/0, 影子会话的 cwd 写 /data/data)',
@@ -387,7 +387,7 @@ check(
     plugin.includes('realpathSync'),
     [...plugin.matchAll(/onSessionEvent\(ctx, \(session, event\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(event\.type/g)].length,
   ],
-  [false, 4],
+  [false, 5],
 )
 check(
   '回复框排在朗读开关前面 (关掉朗读也要有框), 正文有限长',

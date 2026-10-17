@@ -45,7 +45,9 @@ const ownerSource = readFileSync(
   'utf8',
 )
 
-if (guards.length !== 1) throw new Error(`这道闸应当只注册一个 guard, 读到 ${guards.length} 个`)
+// 2026-10-18 (2.7.8 批次 7): 插件里现在是**两道** guard —— 这一道 (视频模式与相机) 仍在最前, 第二条是
+// 探索的数步 (`exploreStepGuard`, 只数不拒), 下面那张判据表只问第一条
+if (guards.length !== 2) throw new Error(`插件里应当是两道 guard, 读到 ${guards.length} 个`)
 const gate = guards[0]
 
 /* ── 判据表自己 ───────────────────────────────────────────────────────────── */

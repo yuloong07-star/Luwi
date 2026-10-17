@@ -185,8 +185,9 @@ const hostEnums = [.../enum: \['list', 'read', 'install', 'enable', 'disable', '
 check('lw_plugin 的 op 名单两侧一致', hostEnums, operations)
 check('snapshot 只在桥上', [lwPlugin.includes('const val OP_SNAPSHOT = "snapshot"'), operations.includes('snapshot')], [true, false])
 
-check('工具数的下限抬到 64', Number(/(?:const FLOOR = )(\d+)/.exec(hostCheck)[1]), 64)
+check('工具数的下限抬到 65', Number(/(?:const FLOOR = )(\d+)/.exec(hostCheck)[1]), 65)
 check('宿主里注册了 lw_plugin', host.includes("'lw_plugin',"), true)
+check('宿主里注册了 lw_explore (2.7.8 批次 7 那一档)', host.includes("'lw_explore',"), true)
 check('设置页有插件那一段', settings.includes('key = "plugin"'), true)
 check(
   '插件详情对话框的正文封了高度并挂上 verticalScroll',
