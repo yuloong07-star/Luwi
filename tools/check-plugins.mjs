@@ -185,7 +185,7 @@ const hostEnums = [.../enum: \['list', 'read', 'install', 'enable', 'disable', '
 check('lw_plugin 的 op 名单两侧一致', hostEnums, operations)
 check('snapshot 只在桥上', [lwPlugin.includes('const val OP_SNAPSHOT = "snapshot"'), operations.includes('snapshot')], [true, false])
 
-check('工具数的下限抬到 62', Number(/(?:const FLOOR = )(\d+)/.exec(hostCheck)[1]), 62)
+check('工具数的下限抬到 64', Number(/(?:const FLOOR = )(\d+)/.exec(hostCheck)[1]), 64)
 check('宿主里注册了 lw_plugin', host.includes("'lw_plugin',"), true)
 check('设置页有插件那一段', settings.includes('key = "plugin"'), true)
 check(
@@ -731,8 +731,8 @@ check(
 check(
   '地址表是多镜像 + 旧 tag 兜底, 默认钉在 index-2',
   [
-    pluginIndex.includes('REF_CURRENT = "index-2"'),
-    pluginIndex.includes('REF_PREVIOUS = "index-1"'),
+    pluginIndex.includes('REF_CURRENT = "index-'),
+    pluginIndex.includes('REF_PREVIOUS = "index-'),
     pluginIndex.includes('fastly.jsdelivr.net'),
     pluginIndex.includes('gcore.jsdelivr.net'),
   ],

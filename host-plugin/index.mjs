@@ -3450,6 +3450,40 @@ const TOOLS = [
     },
   ),
 
+  // ---- 2.7.8 批次 5: 技能仓库 ----
+  //
+  // 桥与应用两侧早就齐了 (`PrivilegedBridge` 的 "skill" → `AppSkills.dispatch`), 缺的只是模型这一侧:
+  // 以前只有设置页那颗「一键」按钮能装技能, 模型自己装不了。这一条补齐之后, "把这个应用的技能装上"
+  // 与"删掉那个技能"都不必让主人去设置页点
+
+  simpleTool(
+    'lw_skill',
+    'The skills on this phone: the per-app guides that live in DSH_HOME/skills, one folder each with'
+    + ' a SKILL.md, mirrored from the app-skills repository. **Reach for this when the user asks to'
+    + ' install a skill for an app, or which apps already have one, or to delete a skill.** op=scan'
+    + ' reports what that repository holds and which of those are installed here, matched against the'
+    + ' apps that actually appear on the launcher (system components do not count). op=install writes'
+    + ' the named skills in: **it never touches a skill that is already there**, so an install can'
+    + ' never overwrite something the user edited - to replace one, remove it first, and say so.'
+    + ' op=remove deletes exactly the named skill folders and nothing else. Names are folder names:'
+    + ' no path separators, no "..". Say what you did in one line when you are done.',
+    'skill',
+    {
+      op: {
+        type: 'string',
+        required: true,
+        description: 'see what the repository holds, install the named skills, or delete the named ones',
+        enum: ['scan', 'install', 'remove'],
+      },
+      skills: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'The skill folder names to install or remove (the ids the repository lists).'
+          + ' Required by install and remove; scan ignores it',
+      },
+    },
+  ),
+
   // ---- 2.5.0 批次 8: 自动指令 ----
   //
   // 与 lw_quick 同一个形状 (一份文件一条), 差别在"正文是一份 JSON, 而且它会自己响": 所以说明里要把
