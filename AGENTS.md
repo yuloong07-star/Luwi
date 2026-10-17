@@ -507,23 +507,32 @@ node --import tsx/esm apps/cli/src/bin.ts --profile headless --patch <overlay.ym
 - **日程那条工具**: `lw_calendar` 六条 op (`list` / `events` / `read` / `create` / `update` / `free`),
   走 app 进程的 `ContentResolver`; 写入落在第一本可写日历 (可用 `calendarId` 指名), **没有可写的就拒**
 
-## 自动指令 (2026-10-08, 2.5.0 批次 8; 2.7.8 批次 8 加了「只响一次」)
+## 自动指令 (2026-10-08, 2.5.0 批次 8; 2.7.8 批次 8 加了「只响一次」, 批次 9 加了「且」「或」与两个读数源)
 
-"到什么时候做什么"那一条: 一份 JSON 一条规则, 七个监测器看条件, 命中之后把一句话投进会话。
+"到什么时候做什么"那一条: 一份 JSON 一条规则, 九个监测器看条件, 命中之后把一句话投进会话。
 施工单在 `docs/DSH-LW-2.5.0-批次8-开发计划.md`; 要记住的:
 
 | 文件 | 是什么 | 谁写 |
 | :-- | :-- | :-- |
 | `$DSH_HOME/automations/<名字>.json` | 一条规则 (`name` / `enabled` / `when` / `then` / 冷却 / 上限 / 静默) | 模型 (`lw_automation op=write`) 与设置页那个开关 |
-| `$DSH_HOME/automations/settings.json` | 七个监测器开关 + 频率档 + 静默时段 + 「允许它自己动手」+ `saidLimit` | 设置页 |
+| `$DSH_HOME/automations/settings.json` | 九个监测器开关 + 频率档 + 静默时段 + 「允许它自己动手」+ `saidLimit` | 设置页 |
 | `$DSH_HOME/automations/history.jsonl` | 一行一次判定与原因 (冷却 / 上限 / 主动说那本账都是从它现算的; 手动跑的那行带 `manual`) | 引擎 |
 | `$DSH_HOME/automations/places.json` | 地名 → 经纬度 (geocoding 的结果) | 引擎 |
 
-- **七个监测器: 通知 / 前台应用 / 光感 / 时间 / 地点 / 天气 / 只响一次**. 它们的低功耗口径是这一批的硬约束:
+- **九个监测器: 通知 / 前台应用 / 光感 / 时间 / 地点 / 天气 / 解锁 / 动手 / 只响一次**. 它们的低功耗口径是这一批的硬约束:
   **没有启用的规则就不注册**; 通知与前台应用是事件驱动 (后者只认无障碍事件, **不退回 UsageStats
-  轮询**); 光感一条 `SENSOR_DELAY_NORMAL` 的监听; 时间**只排一个**闹钟 (精确优先, 拿不到就退
+  轮询**); 光感一条 `SENSOR_DELAY_NORMAL` 的监听; 解锁是一条动态注册的 `ACTION_USER_PRESENT`
+  接收器, 「动手」挂在既有窗口事件链上 (解锁也记一笔); 时间**只排一个**闹钟 (精确优先, 拿不到就退
   `setAndAllowWhileIdle` 并把"不精确"写进读数); 轮询只剩天气 (默认 60 分钟) 与地点
   (`NETWORK_PROVIDER`，默认 10 分钟 · 500 米)
+- **「且」「或」与新鲜窗口** (批次 9, D21/D22): `{"kind":"all","conds":[…]}` / `{"kind":"any","conds":[…]}`,
+  `conds` 收 2~5 个**八个叶子条件之一** (notice / foreground / light / time / place / weather / unlock /
+  activity), **不许嵌套** (校验那一层当场拒, 说明里也写着)。判据不是"同时为真"而是"各自最近一次为真
+  落在窗口内": 每个子条件记 `lastTrueAt`, 缺省 time 1800 s / 瞬态 120 s / 状态 300 s, 子条件可写
+  `within` 覆盖。两个判定时机 —— 相关监测器送事件时重算一次, 外加 **60 秒 tick** (只在有组合规则时挂,
+  熄屏不跑, 只拿缓存重算状态类)。命中之后把这条规则所有子条件的新鲜标记清一次 (**同一次成立只响一声**);
+  四道闸 (静默 / 冷却 / 每日上限 / 允许动手) 一个字节没动, 仍在 `act()` 里。**老形状一个字节不动**:
+  `{"kind":"time","at":"23:45"}` 照旧
 - **省电联动**: `LwWakeWord.powerSave` 生效时只停轮询那两条, 事件类照常; 恢复时不补跑错过的轮询
 - **动作层是"投一句话"**: 命中之后写 `voice/inbox.jsonl`, 来源 `automation`。宿主对那一个来源有
   两处特别处理 —— **不进命令表匹配**, 且**每次触发新开一场会话** (不接浮标那 10 分钟的一场);
