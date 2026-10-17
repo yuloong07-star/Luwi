@@ -7183,7 +7183,7 @@ function desktopChatPath() {
  * `MAX_LINES` 是"手里留几条", 而组件那一格画得下的是更少的几条 (`DesktopChatFile.SHOW_LINES`) ——
  * 两个数归应用管, 这一侧只需要别把它撑大
  */
-const DESKTOP_CHAT_LINES = 6
+const DESKTOP_CHAT_LINES = 40
 const DESKTOP_CHAT_CHARS = 240
 
 /** 截一道 (带 `…`), 顺带把换行压成空格: 组件上那两行气泡装不下换行 */
@@ -7986,3 +7986,4 @@ function registerVoiceInput(ctx) {
   // Look once at load so the page knows whether this provider is usable, without downloading
   void speechInspect().catch((error) => speechAnnounce('failed', String(error?.message ?? error)))
 }
+

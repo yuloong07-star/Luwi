@@ -630,13 +630,13 @@ check(
 )
 
 check(
-  '那份账两侧同一对数 (6 条 / 240 字), 而且两边都原子写',
+  '那份账两侧同一对数 (40 条 / 240 字), 而且两边都原子写',
   [
-    chatFile.includes('const val MAX_LINES = 6'),
+    chatFile.includes('const val MAX_LINES = 40'),
     chatFile.includes('const val MAX_CHARS = 240'),
     chatFile.includes('renameTo(target)'),
     chatFile.includes('FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE'),
-    host.includes('const DESKTOP_CHAT_LINES = 6'),
+    host.includes('const DESKTOP_CHAT_LINES = 40'),
     host.includes('const DESKTOP_CHAT_CHARS = 240'),
     host.includes("join(home, 'lw', 'desktop-chat.json')"),
     host.includes('await rename(temporary, path)'),
@@ -954,6 +954,7 @@ check(
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
 if (failures > 0) process.exit(1)
+
 
 
 

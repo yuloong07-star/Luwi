@@ -46,7 +46,7 @@ internal object DesktopChatFile {
      * 6 是"够组件显示 + 够一会儿切回来还能看见上两句"的那个数, 而组件真正画得下的只有最近
      * [SHOW_LINES] 条 (2×2 那一格放不下更多气泡)
      */
-    const val MAX_LINES = 6
+    const val MAX_LINES = 40
 
     /** 组件那一格画几条 (剩下的靠 [MAX_LINES] 留在这里, 以后换大尺寸时直接改这一个数) */
     const val SHOW_LINES = 3
@@ -261,4 +261,5 @@ internal object DesktopChatFile {
         watcher = null
     }
 }
+
 

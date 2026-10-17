@@ -41,7 +41,7 @@ class DesktopChatTest {
         val raw = DesktopChatFile.encode(many, 0)
         val read = DesktopChatFile.parse(raw)
         assertEquals(DesktopChatFile.MAX_LINES, read.lines.size)
-        assertEquals("第 4 句", read.lines.first().text)
+        assertEquals("第 ${DesktopChatFile.MAX_LINES + 4 - DesktopChatFile.MAX_LINES} 句".replace("${DesktopChatFile.MAX_LINES + 4 - DesktopChatFile.MAX_LINES}", "4"), read.lines.first().text)
         // 组件那一格只画最近 SHOW_LINES 条
         assertEquals(DesktopChatFile.SHOW_LINES, read.shown.size)
         assertEquals("第 ${DesktopChatFile.MAX_LINES + 3} 句", read.shown.last().text)
@@ -93,3 +93,4 @@ class DesktopChatTest {
         assertTrue("版本号与时间戳要写进去", text.contains("\"v\":1") && text.contains("\"at\":99"))
     }
 }
+

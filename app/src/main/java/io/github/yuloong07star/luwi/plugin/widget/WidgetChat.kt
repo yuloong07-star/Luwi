@@ -226,8 +226,8 @@ fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int = rows * oneLineDp(bubbl
         // 高度按**实际有几条**算, 下限只有"一行" —— 之前那条下限是「人物 + 一行」, 而两条气泡
         // 只占两行, 剩下的空就在列表下半截, 看着像"只占一半" (主人 2026-10-17)
         val areaHeight = Face.areaDp(faceDp, bubbleSp, minOf(rows, total).coerceAtLeast(1))
-
-        // ① 气泡区的尺寸: 高度按上面那个数, 而人物那一块是正方形:
+        // 高度不再由这里给: 布局里那个 ListView 是 layout_height=0dp + weight=1, 吃掉人物那一行
+        // 以上的**全部**空间 —— 这样发得越多越"点满", 而不是固定几行高、上面空一大片 (主人 2026-10-17)
         // **第三个参数是 `TypedValue.COMPLEX_UNIT_*` 而不是 MeasureSpec** —— 传错的后果是接收器里
         // 抛 "Must be a valid COMPLEX_UNIT_*", 那一格退回 initialLayout (看着像组件坏了)
         view.setViewLayoutHeight(R.id.lw_chat_bubbles, areaHeight.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
@@ -251,7 +251,8 @@ fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int = rows * oneLineDp(bubbl
         }
 
         // ② 气泡由 ListView 画 (见 WidgetChatListService), 空态那一格由 setEmptyView 顶上来
-        val empty = snapshot.note.ifBlank { context.getString(R.string.widget_chat_empty) }
+        // 空态那行**只在一条都没有时**出现 (之前它不管有没有数据都显示, 于是有气泡时还压着一行'还没说过话')
+        val empty = if (total == 0) snapshot.note.ifBlank { context.getString(R.string.widget_chat_empty) } else ""
         view.setTextViewText(R.id.lw_chat_empty, empty)
         view.setViewVisibility(R.id.lw_chat_empty, if (empty.isBlank()) View.GONE else View.VISIBLE)
 
@@ -430,6 +431,7 @@ fun areaDp(faceDp: Int, bubbleSp: Long, rows: Int): Int = rows * oneLineDp(bubbl
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 }
+
 
 
 
