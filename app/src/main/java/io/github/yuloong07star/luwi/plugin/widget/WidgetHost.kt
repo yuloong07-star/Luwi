@@ -113,6 +113,11 @@ internal object WidgetHost {
         ids.forEach { id ->
             val (width, height) = cellSize(context, id)
             manager.updateAppWidget(id, views(context, slot, width, height))
+            // **集合型组件的数据集要单独叫一次** (2.7.8 批次 6): 只 updateAppWidget 不会让桌面重读
+            // ListView 里的条目 —— 现象正是"发了一句, 组件上什么都不出现"。这一条漏了, 列表永远是空的
+            if (slot == WidgetSlot.CHAT) {
+                runCatching { manager.notifyAppWidgetViewDataChanged(id, R.id.lw_chat_bubbles) }
+            }
         }
     }
 
@@ -330,3 +335,4 @@ internal object WidgetHost {
         }
     }
 }
+

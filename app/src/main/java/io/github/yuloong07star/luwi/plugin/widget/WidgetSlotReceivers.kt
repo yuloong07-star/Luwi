@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.plugin.PluginManager
 
 /**
@@ -21,6 +22,9 @@ open class WidgetSlotBase internal constructor(private val slot: String) : AppWi
         ids.forEach { id ->
             val (width, height) = WidgetHost.cellSize(context, id)
             manager.updateAppWidget(id, WidgetHost.views(context, slot, width, height))
+            if (slot == WidgetSlot.CHAT) {
+                runCatching { manager.notifyAppWidgetViewDataChanged(id, R.id.lw_chat_bubbles) }
+            }
         }
     }
 
@@ -90,3 +94,5 @@ class WidgetActionReceiver : BroadcastReceiver() {
         const val TAG = "LwWidgetAction"
     }
 }
+
+

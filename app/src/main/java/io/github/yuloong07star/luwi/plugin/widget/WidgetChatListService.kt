@@ -81,7 +81,7 @@ class WidgetChatListService : RemoteViewsService() {
 
         /** 两种气泡两份模板: user 靠右 / assistant 靠左 */
         override fun getViewTypeCount(): Int = 2
-
+        /** 两种气泡两份模板 (RemoteViewsFactory 没有"按位置给类型"那一条: 类型数由这一句声明) */
         override fun hasStableIds(): Boolean = false
 
         override fun getItemId(position: Int): Long = position.toLong()
@@ -91,4 +91,5 @@ class WidgetChatListService : RemoteViewsService() {
         }
     }
 }
+
 
