@@ -7815,8 +7815,26 @@ async function exploreStateRead() {
   }
 }
 
+/**
+ * 写状态文件那条链: **一次只写一份**
+ *
+ * 2026-10-17 真机上量到的: 数到第 10 步那一下会连着写两次 (每五步落一次盘 + 提醒落一次盘), 两处都用
+ * 同一个 `.tmp` 路径 —— 先完成的那一次把临时文件 rename 走了, 后一次 rename 就 ENOENT
+ * (`rename '…explore.json.tmp' -> '…explore.json': no such file or directory`), 那一份状态于是没落地。
+ * 串成一条链之后, 后一次读到的是前一次写完的盘上内容, 两次都写得进去
+ */
+let exploreStateQueue = Promise.resolve()
+
+function exploreStateWrite() {
+  exploreStateQueue = exploreStateQueue.then(
+    () => exploreStateWriteNow(),
+    () => exploreStateWriteNow(),
+  )
+  return exploreStateQueue
+}
+
 /** 把内存里那一份写进文件: **未知键原样留着**, 只换 `v` / `updatedAt` / `run` */
-async function exploreStateWrite() {
+async function exploreStateWriteNow() {
   const path = exploreStatePath()
   if (path === null) return
   const base = await exploreStateRead()

@@ -281,6 +281,14 @@ check('宿主起来时若 run 还在就重挂预算', [
   /if \(run\.over === true\) return false/u.test(section),
   /exploreRun\.deadline = Number\(run\.deadline\) \|\| 0/u.test(section),
 ], [true, true, true])
+check(
+  '状态文件那条写链串起来 (两次并发写同一个 .tmp 会 ENOENT, 2026-10-17 真机上量到的)',
+  [
+    /let exploreStateQueue = Promise\.resolve\(\)/u.test(section),
+    /exploreStateQueue = exploreStateQueue\.then\(/u.test(section),
+  ],
+  [true, true],
+)
 
 /* ── 九、落位 (三处常量不许漂开) ──────────────────────────────────────── */
 
