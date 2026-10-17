@@ -396,7 +396,7 @@ mkdirSync(webuiStage, { recursive: true })
 writeFileSync(join(webuiStage, 'package.json'), `${JSON.stringify({ name: 'lw-webui-stage', private: true }, null, 2)}\n`)
 run(
   'npm',
-  ['install', `${webui}@3.0.4`, '--no-audit', '--no-fund', '--package-lock=false', '--omit=optional', '--legacy-peer-deps'],
+  ['install', `${webui}@3.0.6`, '--no-audit', '--no-fund', '--package-lock=false', '--omit=optional', '--legacy-peer-deps'],
   webuiStage,
 )
 cpSync(join(webuiStage, 'node_modules', webui), join(out, 'node_modules', webui), { recursive: true })

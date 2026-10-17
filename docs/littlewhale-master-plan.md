@@ -379,18 +379,22 @@ Box(modifier = modifier.fillMaxSize().onSizeChanged { viewport = it }) { … }
 ## 3.1 版本事实
 
 ```dsh-ui
-{"title":"版本三要素","gap":12,"items":[{"type":"keyvalue","pairs":[{"key":"webui (dsh-web-mobile) 官方 latest","value":"3.0.4 —— 已经是最新, 无需升级"},{"key":"dsh npm latest / next","value":"0.2.0-rc.2"},{"key":"dsh 当前 submodule pin (fork)","value":"0.1.5-rc.2"},{"key":"DSHA 在用","value":"0.1.7-rc.2"}]}]}
+{"title":"版本三要素","gap":12,"items":[{"type":"keyvalue","pairs":[{"key":"webui (dsh-web-mobile) 官方 latest","value":"3.1.0 (2026-10-17 查); 本树装 3.0.6 (2.7.8 D7)"},{"key":"dsh npm latest / next","value":"0.2.0-rc.2"},{"key":"dsh 当前 submodule pin (fork)","value":"0.2.1-alpha.1 (2026-10-17 实测)"},{"key":"DSHA 在用","value":"0.1.7-rc.2"}]}]}
 ```
 
-**用 peerDependencies 反推** (实测 `dsh-web-mobile@3.0.4` 的 range):
+**用 peerDependencies 反推** (2026-10-17 实测: `dsh-web-mobile@3.0.6` 与 `@3.1.0` 的 range **逐条相同**):
 
 ```
 ^0.1.0-rc.6 || >=0.1.1-rc.0 <0.2.0 || >=0.1.2-a <0.2.0 || >=0.2.0-rc.1 <0.3.0-0
 ```
 
-实测判定: `0.1.5-rc.2` ✅ / `0.1.7-rc.2` ✅ / `0.2.0-rc.2` ✅
+实测判定: `0.2.1-alpha.1` ✅ (本树) / `0.1.7-rc.2` ✅ / `0.2.0-rc.2` ✅
 
 **三个都过 → 装 webui 与升 dsh 可以解耦, 现在就能装**
+
+> 2026-10-17 补记: 2.7.8 的 D7 定的是 3.0.6, 当时的理由是"3.1.0 的宿主下限 0.1.7-rc.1 与本树 0.1.5-rc.2 冲突"
+> —— **今天这条理由已不成立** (本树早已是 0.2.1-alpha.1, 两个版本的 peer range 一模一样)。本版仍按 D7 装
+> 3.0.6, 3.1.0 留给下一版单独量 (计划书 §10 也留了这句)
 
 ## 3.2 怎么装
 
