@@ -51,7 +51,7 @@ class WidgetChatListService : RemoteViewsService() {
         override fun onCreate() = Unit
 
         override fun onDataSetChanged() {
-            lines = DesktopChatFile.snapshot(context).lines.reversed()
+            lines = DesktopChatFile.snapshot(context).lines
             Log.i(TAG, "data set changed: ${lines.size} line(s), id=$pluginId, sp=$DEFAULT_BUBBLE_SP")
             // 字号跟着插件设置走: 组装那一刻的那一份与这里读的是同一个文件
             bubbleSp = PluginStore.manifest(context, pluginId)
@@ -100,6 +100,7 @@ class WidgetChatListService : RemoteViewsService() {
         }
     }
 }
+
 
 
 

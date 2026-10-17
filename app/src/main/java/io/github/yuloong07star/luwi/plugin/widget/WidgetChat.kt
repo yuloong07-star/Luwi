@@ -219,9 +219,11 @@ internal object WidgetChat {
 
         val view = RemoteViews(context.packageName, R.layout.lw_widget_slot_chat)
         val snapshot = DesktopChatFile.snapshot(context)
+        val total = snapshot.lines.size
         // 气泡区: 高度 = 下限 (人物 + 一行) 与"这一格放得下几行"里大的那个
         val rows = Face.rowsFor(cellHeightDp, faceDp, bubbleSp)
-        val areaHeight = Face.areaDp(faceDp, bubbleSp, rows)
+        // 高度按**实际有几条**算 (不是"能放几行"): 两条就两行高, 下面不留半块空白
+        val areaHeight = Face.areaDp(faceDp, bubbleSp, minOf(rows, total).coerceAtLeast(1))
 
         // ① 气泡区的尺寸: 高度按上面那个数, 而人物那一块是正方形:
         // **第三个参数是 `TypedValue.COMPLEX_UNIT_*` 而不是 MeasureSpec** —— 传错的后果是接收器里
@@ -240,6 +242,11 @@ internal object WidgetChat {
                 .putExtra(WidgetChatListService.EXTRA_ID, holder),
         )
         view.setEmptyView(R.id.lw_chat_bubbles, R.id.lw_chat_empty)
+        // 列表按"旧在上、新在下"排, 于是要**停在最后一条**才看得到最新那句 (主人 2026-10-17:
+        // "最新消息是从顶开始") —— setScrollPosition 是 API 31 起 RemoteViews 给集合型组件的那一条
+        if (total > 0) {
+            runCatching { view.setScrollPosition(R.id.lw_chat_bubbles, total - 1) }
+        }
 
         // ② 气泡由 ListView 画 (见 WidgetChatListService), 空态那一格由 setEmptyView 顶上来
         val empty = snapshot.note.ifBlank { context.getString(R.string.widget_chat_empty) }
