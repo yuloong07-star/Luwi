@@ -103,12 +103,12 @@ internal object WidgetChat {
         const val PAD_DP = 8
 
         /** 立绘最多占可用宽度的百分之多少 (右边那颗「说一句」要留在它旁边) */
-        const val WIDTH_PERCENT = 55
+        const val WIDTH_PERCENT = 70
 
         /** 立绘最多占可用高度的百分之多少 */
-        const val HEIGHT_PERCENT = 34
+        const val HEIGHT_PERCENT = 45
 
-        /** 格子有多大就画多大 (那一道旧算式, 与插件的基准无关) */
+        /** 格子有多大就画多大 (上限那一道, 与插件的基准无关) */
         fun cellDp(cellWidthDp: Int, cellHeightDp: Int): Int {
             if (cellWidthDp <= 0 || cellHeightDp <= 0) return BASE_DP
             val usableWidth = (cellWidthDp - PAD_DP * 2).coerceAtLeast(MIN_DP)
@@ -121,14 +121,16 @@ internal object WidgetChat {
         /**
          * 这一格上人物实际多大 (dp)
          *
-         * **两道乘在一起**: 格子有多大 ([cellDp]) × 主人设的原始大小相对基准的倍数 —— 于是
-         * "拉大格子就变大"与"设大原始大小也变大"两个要求同时成立, 而两头仍夹在 [MIN_DP]~[MAX_DP]
-         * (等比不变形靠"宽高给同一个数 + fitCenter", 不靠这个乘法)
+         * **设多少就是多少, 只有格子放不下时才按格子上限缩** (主人 2026-10-17: "人物被固定了, 修改
+         * 设置也没有变化")。原来那道是"格子的大小 × 设的值 ÷ 64", 于是大格子上只要设到 64 以上就
+         * 全都顶到上限 —— 改 64 / 115 / 132 看起来一模一样, 像是设置没生效
+         *
+         * 读不到格子尺寸时 (0) 直接用你设的那个数: 组件刚放上去、桌面还没报尺寸那一拍也不会被缩
          */
         fun actualDp(cellWidthDp: Int, cellHeightDp: Int, baseDp: Long): Int {
             val base = baseDp.coerceIn(MIN_DP.toLong(), MAX_DP.toLong()).toInt()
-            val scaled = cellDp(cellWidthDp, cellHeightDp).toFloat() * base / BASE_DP
-            return scaled.roundToInt().coerceIn(MIN_DP, MAX_DP)
+            if (cellWidthDp <= 0 || cellHeightDp <= 0) return base
+            return minOf(base, cellDp(cellWidthDp, cellHeightDp)).coerceIn(MIN_DP, MAX_DP)
         }
 
         /** 一行气泡有多高 (dp): 字号 × 行距 + 上下内边距 (`lw_widget_slot_chat_bubble_*.xml` 那 5 dp) */

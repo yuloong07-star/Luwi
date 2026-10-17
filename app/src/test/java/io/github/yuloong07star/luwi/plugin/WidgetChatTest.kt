@@ -19,58 +19,31 @@ import org.junit.Test
  */
 class WidgetChatTest {
 
-    /** 拉大 → 变大, 而且是单调不减的 */
-    @Test
-    fun `格子越大立绘越大`() {
-        val small = WidgetChat.Face.cellDp(150, 150)
-        val medium = WidgetChat.Face.cellDp(260, 260)
-        val large = WidgetChat.Face.cellDp(380, 560)
-        assertTrue("$small / $medium / $large 该一路变大", small <= medium && medium <= large)
-        assertTrue("中等那一档要比基准大", medium > WidgetChat.Face.BASE_DP)
-    }
-
-    /** 两头有界: 极小不塌, 极大不涨破 */
-    @Test
-    fun `两头夹住`() {
-        assertEquals(WidgetChat.Face.MIN_DP, WidgetChat.Face.cellDp(40, 40))
-        assertEquals(WidgetChat.Face.MAX_DP, WidgetChat.Face.cellDp(2000, 2000))
-    }
-
-    /** 尺寸读不到 (0 / 负数) 时落回缺省 */
-    @Test
-    fun `读不到尺寸就用缺省`() {
-        assertEquals(WidgetChat.Face.BASE_DP, WidgetChat.Face.cellDp(0, 0))
-        assertEquals(WidgetChat.Face.BASE_DP, WidgetChat.Face.cellDp(-1, 300))
-        assertEquals(WidgetChat.Face.BASE_DP, WidgetChat.Face.cellDp(300, -1))
-    }
-
-    /** 宽与高各自限一道: 窄而高的格子按宽那一边, 宽而矮的按高那一边 */
-    @Test
-    fun `宽高各限一道`() {
-        val narrow = WidgetChat.Face.cellDp(120, 800)
-        assertEquals(104 * 55 / 100, narrow)
-        val short = WidgetChat.Face.cellDp(800, 120)
-        assertEquals(WidgetChat.Face.MIN_DP, short)
-    }
-
     /**
-     * 插件里设的「原始大小」按倍数乘上去, 而两头仍夹住
+     * 「原始大小」设多少就是多少, 只有格子放不下时才按格子缩 (主人 2026-10-17: "人物被固定了")
      *
-     * 64 是基准: 设成 96 在同一格上就该更大, 设成 44 就该更小 —— 而两者都还在 44~132 里
+     * 原来那是"格子大小 × 设的值 ÷ 64", 大格子上 64 以上全顶到上限 —— 改 64 / 115 / 132 看起来
+     * 一模一样。现在 base ≤ 格子时就是 base, base > 格子时取格子
      */
     @Test
-    fun `原始大小按倍数算`() {
-        val base = WidgetChat.Face.actualDp(300, 400, 64)
-        val bigger = WidgetChat.Face.actualDp(300, 400, 96)
-        val smaller = WidgetChat.Face.actualDp(300, 400, 44)
-        assertTrue("$smaller < $base < $bigger", smaller < base && base < bigger)
-        assertTrue(bigger <= WidgetChat.Face.MAX_DP)
-        assertTrue(smaller >= WidgetChat.Face.MIN_DP)
-        // 原始大小归零 / 越界时仍落在合法区间 (声明里的 min/max 已经夹过, 这里是第二道)
-        assertTrue(WidgetChat.Face.actualDp(300, 400, 0) >= WidgetChat.Face.MIN_DP)
-        assertTrue(WidgetChat.Face.actualDp(300, 400, 5000) <= WidgetChat.Face.MAX_DP)
+    fun `原始大小设多少就是多少`() {
+        // 大格子: 64 / 115 / 132 各不相同 (那正是"改设置要看得见"这一条)
+        val small = WidgetChat.Face.actualDp(400, 700, 64)
+        val medium = WidgetChat.Face.actualDp(400, 700, 115)
+        val large = WidgetChat.Face.actualDp(400, 700, 132)
+        assertEquals(64, small)
+        assertEquals(115, medium)
+        assertEquals(132, large)
+        assertTrue(small < medium && medium < large)
+        // 小格子: 按格子能给的最大画 (再大也放不下)
+        val capped = WidgetChat.Face.actualDp(120, 120, 132)
+        assertEquals(WidgetChat.Face.cellDp(120, 120), capped)
+        // 尺寸读不到: 直接用你设的那个数
+        assertEquals(115, WidgetChat.Face.actualDp(0, 0, 115))
+        // 越界的 base 先夹进合法区间
+        assertTrue(WidgetChat.Face.actualDp(400, 700, 5000) <= WidgetChat.Face.MAX_DP)
+        assertTrue(WidgetChat.Face.actualDp(400, 700, 0) >= WidgetChat.Face.MIN_DP)
     }
-
     /** 一行气泡有多高 (字号越大越高), 而下限 = 人物高度 + 一行 */
     @Test
     fun `气泡区下限跟着人物走`() {
@@ -106,5 +79,6 @@ class WidgetChatTest {
         assertEquals(6 * line, WidgetChat.Face.areaDp(64, 11, 6))
     }
 }
+
 
 
