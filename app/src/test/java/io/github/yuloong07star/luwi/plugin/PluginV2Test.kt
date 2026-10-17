@@ -1,5 +1,6 @@
 package io.github.yuloong07star.luwi.plugin
 
+import io.github.yuloong07star.luwi.plugin.theme.BallTheme
 import io.github.yuloong07star.luwi.plugin.widget.WidgetSpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -154,9 +155,11 @@ class PluginV2Test {
             io.github.yuloong07star.luwi.plugin.theme.BallTheme.parse("""{"name":"空的那一份"}""")
         }
         // 一串帧的张数有上限 (球才 48 dp, 再多也看不出来, 只是白占内存)
+        // **上限那个数引用常量**: 写死一个数的话上限一改这条就假红 (2026-10-15 从 32 提到 128 时,
+        // 这里写死的 99 就是这么红的)
         assertThrows(IllegalArgumentException::class.java) {
-            io.github.yuloong07star.luwi.plugin.theme.BallTheme.parse(
-                """{"name":"帧太多","frames":{"idle":{"dir":"art/x","count":99,"fps":10}}}""",
+            BallTheme.parse(
+                """{"name":"帧太多","frames":{"idle":{"dir":"art/x","count":${BallTheme.MAX_FRAMES + 1},"fps":10}}}""",
             )
         }
     }

@@ -226,10 +226,10 @@
     <string name="settings_ball_size_summary">How big the ball is in dp (48-80); bigger is easier to see, smaller gets in the way less. Takes effect right away (the ball resizes within half a second); if it does not, restart Luwi. Now: %1$d dp</string>
     <string name="settings_ball_size_summary_theme">Your setting is %1$d dp, but the look you picked needs at least %2$d dp (its artwork is a full-body drawing), so it is %3$d dp right now. Takes effect right away; if it does not, restart Luwi</string>
     <string name="settings_ball_size_dialog">Type a size in dp (%1$d-%2$d)</string>
-    <string name="settings_ball_translucent">Half transparent</string>
-    <string name="settings_ball_translucent_summary">On: the whole ball drops to 70% opacity, so it hides less of what is under it. The breathing while speaking or listening is unchanged</string>
-    <string name="settings_ball_peek">Tuck away when idle</string>
-    <string name="settings_ball_peek_summary">On: after five idle seconds the ball slides to the edge and hides half of itself; touch it and it comes back. Off: it stays fully out and only moves when you drag it</string>
+    <string name="settings_ball_translucent">Fade when idle</string>
+    <string name="settings_ball_translucent_summary">On: after five idle seconds the whole ball fades to 35% opacity, so it hides less of what is under it; touch it and it goes back to full. The breathing while speaking or listening is unchanged</string>
+    <string name="settings_ball_peek">Tuck aside when idle</string>
+    <string name="settings_ball_peek_summary">On: after five idle seconds the ball slides half of itself off the screen edge; touch it and it comes back. Off: it stays fully out and only moves when you drag it</string>
 <string name="settings_ball_feel_guard">Guard</string>
     <string name="settings_ball_state_up">The ball is up, docked %1$s</string>
     <string name="settings_ball_state_down">The ball is not on screen right now</string>

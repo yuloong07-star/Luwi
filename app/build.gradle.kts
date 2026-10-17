@@ -220,8 +220,8 @@ android {
         // (球上那圈标记 0.378 → 0.65)。这一批在 git 里的开发者标签是 v2.7.0…v2.7.3, 收口时定名 2.7.4
         // 2.7.7: 浮标外观能放人物立绘了 —— `theme/ball.json` 收 `fit` (cover/contain), contain 那一档
         // 不裁圆; 球尺寸 48 → 72 dp; 涟漪窗跟着 96 → 132 dp; peeked/失败/完成 三档都能配素材
-        versionCode = 15
-        versionName = "2.7.7"
+        versionCode = 16
+        versionName = "2.7.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

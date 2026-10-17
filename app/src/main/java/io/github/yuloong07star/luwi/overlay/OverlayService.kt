@@ -418,6 +418,15 @@ internal object OverlayState {
     var ballWait: String = "waiting"
 
     /**
+     * 球此刻的不透明度 (1 = 全亮, 0.35 = 半隐那一档 (半藏只挪位置, 不改它))
+     *
+     * 它是"到点了却没变淡"那条账上**唯一说得清的数** (2026-10-17 加): [ballWait] 里的 `pale`
+     * 只说"判据认为该淡了", 而真正落到 View 上的是这个值 —— 写它的是 [setBallAlpha] 那一处
+     */
+    @Volatile
+    var ballAlpha: Float = 1f
+
+    /**
      * 键盘算不算"正在用它"
      *
      * 判据是两件事里有一件成立: 输入框有焦点, 或者键盘真的在屏上 ([OverlayService.imeBottom] > 0)。
@@ -629,7 +638,10 @@ class OverlayService : Service() {
     /**
      * 上一次「看余额」是主人什么时候要的
      *
-     * 只有失败那一条认它: 宿主平时自己也会刷余额, 那些失败不该在主人没看的时候往框里塞一句 ⚠
+     * **两档都认它** (2026-10-17 主人: 「余额查询只能用户主动在 ball 菜单主动查询」): 宿主往那份文件里
+     * 写了新数这件事本身不再是上屏的理由 —— 只有他自己点了菜单、正等着那一行时, 到的那份才值得写进框
+     * (金额那一档与失败那一句 `⚠` 合用一个判据, 从前只有失败那一条带闸, 于是每轮结束时宿主自己刷出来
+     * 的那一份会**悄没声地长在主人的回答后面**)
      */
     private var balanceAskedAt: Long = 0L
 
@@ -1029,7 +1041,9 @@ class OverlayService : Service() {
         snap = null
         peeked = false
         ballDragging = false
+        // 归零到全亮, 读数跟着写 (转屏之后那两档都从头算, 见 [alphaOf])
         ballView?.alpha = 1f
+        OverlayState.ballAlpha = 1f
         replace()
         reflowStrip()
         layoutChannel()
@@ -1563,8 +1577,8 @@ class OverlayService : Service() {
         OverlayState.peekBlocked = ""
         OverlayState.peekCalls += 1
         moveX(layout.x, BallGeometry.peekX(ballRestX, edge, ball))
-        ballView?.animate()?.alpha(baseAlpha() * PEEK_ALPHA)
-            ?.setDuration(BallMinutes.EDGE_SNAP_MS)?.start()
+        // 收边只动位置: 那一档该多亮由"半透明"自己说了算 (见 [BallMinutes.alphaFor])
+        setBallAlpha(BallMinutes.alphaFor(BallSpot.translucent(this)))
         return true
     }
 
@@ -1582,7 +1596,8 @@ class OverlayService : Service() {
         if (!peeked && layout.x == want && snap?.isRunning != true) return
         peeked = false
         moveX(layout.x, want)
-        ballView?.animate()?.alpha(baseAlpha())?.setDuration(BallMinutes.EDGE_SNAP_MS)?.start()
+        // 回弹这一下一定是"有人在用它": 那一档不算, 全亮全露 —— 半透明的账下一拍自己重算
+        setBallAlpha(BallMinutes.alphaFor(translucent = false))
     }
 
     /** 窗该在的 x: [wanted] 为真 (或 [peeked] 为真) 时是半隐位, 否则是停靠位 */
@@ -1667,9 +1682,15 @@ class OverlayService : Service() {
      */
     private fun traceIdle(wait: BallWait) {
         val now = System.currentTimeMillis()
-        if (wait.reason == lastIdleReason) return
+        // **两档任一变了都要落一行**: 休闲第一阶段到点时 `reason` 仍是 `waiting`, 只拿它当判据的话
+        // "到点了却没变淡"这件事在现场表里一个字都看不见 (2026-10-17 加)
+        if (wait.reason == lastIdleReason && wait.translucent == lastIdlePale) return
         lastIdleReason = wait.reason
+        lastIdlePale = wait.translucent
         val line = "$now ${wait.reason}" +
+            // pale 是"这一刻该不该半透明" (2026-10-17 加的两阶段里的第一阶段): 与 peek 分开记,
+            // 因为"该淡却没淡"与"该藏却没藏"是两条不同的账
+            " pale=${wait.translucent}" +
             " idle=${now - lastActiveAt} peeked=$peeked" +
             " keyboard=$overlayKeyboard phase=${phase.name}" +
             " listening=${VoiceState.capturing} menu=${menuView != null} held=$ballDragging" +
@@ -1677,8 +1698,11 @@ class OverlayService : Service() {
         runCatching { File(filesDir, "ball-idle.txt").appendText(line) }
     }
 
-    /** 上一次写进那份现场表的原因: 只在它变了的时候才落盘 */
+    /** 上一次写进那份现场表的原因: 只在它 (或半透明那一档) 变了的时候才落盘 */
     private var lastIdleReason: String? = null
+
+    /** 上一次写进那份现场表的半透明档: 与 [lastIdleReason] 一起决定"这一拍算不算变了" */
+    private var lastIdlePale: Boolean? = null
 
     /**
      * 闲置那一笔账从这里重新算, 并且**记一行**
@@ -1688,7 +1712,8 @@ class OverlayService : Service() {
      */
     private fun resetIdleWait(reason: String) {
         lastActiveAt = System.currentTimeMillis()
-        traceIdle(BallWait(peek = false, reason = reason))
+        // 刚落完账: 两档都还谈不上 (半透明那一位是"这一刻该不该淡", 见 [alphaOf])
+        traceIdle(BallWait(peek = false, translucent = false, reason = reason))
     }
 
     /** 有人动过它 (或者它自己说了一次状态): 闲置那一笔账从这里重新算 */
@@ -1708,6 +1733,7 @@ class OverlayService : Service() {
      * 而框是跟着球走的 (那条规矩见 [layoutChannel])
      */
     private fun waitNow() {
+        val now = System.currentTimeMillis()
         val wait = BallRest.wait(
             phase = phase,
             peeked = peeked,
@@ -1716,21 +1742,39 @@ class OverlayService : Service() {
             listening = VoiceState.capturing,
             keyboard = overlayKeyboard,
             channelOpen = boxOnScreen,
-            // 「闲置后半隐藏」关着时, 那一条闸永远不成立 —— 于是纯函数 [BallRest.wait] 与它的单测
+            // 「休闲半隐藏」关着时, 那一条闸永远不成立 —— 于是纯函数 [BallRest.wait] 与它的单测
             // 一个字都不用改 (2026-10-15 主人要的是开关, 不是改判据)
-            idleDue = BallMinutes.idleDue(System.currentTimeMillis(), lastActiveAt) &&
-                BallSpot.autoPeek(this),
+            idleDue = BallMinutes.idleDue(now, lastActiveAt) && BallSpot.autoPeek(this),
+            // 两个状态**同一个 5 秒到点** (主人 2026-10-17: "时间与透明度都和以前的一样"), 各看各的
+            // 开关: 半隐那一档问 [BallSpot.translucent], 半藏那一档问 [BallSpot.autoPeek]
+            translucentDue = BallMinutes.idleDue(now, lastActiveAt) && BallSpot.translucent(this),
         )
         OverlayState.ballWait = wait.reason
         traceIdle(wait)
         if (wait.peek) hideNow()
-        // 「半透明」那一档可能在设置里刚被改过: 没在收边、也没有滑行动画时校正一次 (改完当场看得见)
-        if (!peeked && snap?.isRunning != true) ballView?.alpha = baseAlpha()
+        // 两个开关都可能在设置里刚被改过: 没在收边、也没有滑行动画时校正一次 (改完当场看得见)
+        if (!peeked && snap?.isRunning != true) {
+            setBallAlpha(BallMinutes.alphaFor(wait.translucent))
+        }
     }
 
-    /** 球的基础不透明度: 开着「半透明」压到 [TRANSLUCENT_ALPHA], 否则全不透明 */
-    private fun baseAlpha(): Float =
-        if (BallSpot.translucent(this)) TRANSLUCENT_ALPHA else 1f
+    /**
+     * 把不透明度改过去 (变淡与变亮都带一小段过渡)
+     *
+     * 从全亮直接跳到三成半会看着像闪一下, 而休闲本来就是慢慢来的 —— 时长取 [BallMinutes.EDGE_SNAP_MS],
+     * 与收边那一下同一个节拍。**目标值已经对上就一个字节都不动**: 这一拍是 400 ms 一次, 反复启动
+     * 同一条动画会让它永远走不完
+     *
+     * 那个值由 [BallMinutes.alphaFor] 算 —— 它只认"半透明"那一档, **半隐一个字节都不参与**
+     * (2026-10-17 主人: "改的应该是状态而不是时间")
+     */
+    private fun setBallAlpha(target: Float) {
+        // 读数先写: 它就是"这一刻该多亮"的答案, View 还没挂上也照样报得出来 (见 [OverlayState.ballAlpha])
+        OverlayState.ballAlpha = target
+        val view = ballView ?: return
+        if (view.alpha == target) return
+        runCatching { view.animate().alpha(target).setDuration(BallMinutes.EDGE_SNAP_MS).start() }
+    }
 
     /* ── 输入条 ───────────────────────────────────────────────────────────── */
 
@@ -2160,18 +2204,25 @@ class OverlayService : Service() {
             getString(R.string.ball_balance_failed, snapshot.reason.ifBlank { "unknown" })
         }
 
-    /** 宿主把余额那份文件刷新了 (或者请求记号被写出来): 就地把那一行改掉 / 把失败如实递上去 */
+    /**
+     * 宿主把余额那份文件刷新了: 就地把那一行改掉 / 把失败如实递上去
+     *
+     * **只在主人刚点过菜单那一段里上屏** ([BALANCE_ASK_WINDOW_MS]): 「看余额」是唯一能让这一行出现的
+     * 入口 (2026-10-17 主人: 「余额查询只能用户主动在 ball 菜单主动查询」) —— 宿主那一侧现在也只在
+     * 请求记号出现时才去查, 但"文件变了就写框"这条路照样要带闸, 否则那一行会撞在主人刚收到的回答后面
+     * (2026-10-17 真机上量到的那一次就是: 宿主起来那几拍补刷正好压在第一次问答的尾巴上)
+     */
     private fun readBalance() {
         val snapshot = BalanceFile.snapshot(this) ?: return
+        val asked = balanceAskedAt > 0 && System.currentTimeMillis() - balanceAskedAt <= BALANCE_ASK_WINDOW_MS
+        if (!asked) return
         if (snapshot.ok) {
             // 只有"框在屏上"才值得写: 主人关掉框之后余额到账, 那一行不该凭空把框弹回来
             if (boxOnScreen) runCatching { boxView?.replaceInfo(balanceLine(snapshot)) }
             return
         }
-        // 失败: 只在"主人刚要过"那一段里报 (他正等着呢); 走 ⚠ 那一条, 那是"系统在说哪里不对"的位置
-        if (boxOnScreen && balanceAskedAt > 0 && System.currentTimeMillis() - balanceAskedAt <= BALANCE_ASK_WINDOW_MS) {
-            runCatching { boxView?.appendNote(balanceFailure(snapshot)) }
-        }
+        // 失败: 走 ⚠ 那一条, 那是"系统在说哪里不对"的位置
+        if (boxOnScreen) runCatching { boxView?.appendNote(balanceFailure(snapshot)) }
     }
 
     /**
@@ -3458,16 +3509,9 @@ class OverlayService : Service() {
         // [BallTaps.blankDouble], 账是 [OverlayService.lastBlankTapAt] —— 那个常量跟着那本计数器一起
         // 删掉了, 免得留下第二个人回答"几下才算"
 
-        /** 半隐时那点透明度 (参考那套闲置那一档是 0.29, 这里留得亮一些好认) */
-        private const val PEEK_ALPHA = 0.5f
-
-        /**
-         * 「半透明」那一档开着时, 整颗球的不透明度
-         *
-         * 与 [PEEK_ALPHA] 是**相乘**的关系: 又半透明又半隐时是 0.35。0.7 这个数是"看得清但不抢眼",
-         * 再低就认不出那是颗球了
-         */
-        private const val TRANSLUCENT_ALPHA = 0.7f
+        // **"半隐时那点透明度"那个常量已经不在了** (2026-10-17 主人: "改的应该是状态而不是时间"):
+        // 半隐藏只挪位置, 不再顺手把球压暗 —— 那个 0.5 与"半透明"的 0.7 相乘出来的 0.35 正是主人
+        // 点名不要的耦合。现在两颗球各说各的: 淡由 [BallMinutes.alphaFor] 一个人回答, 藏只看坐标
 
         /** 与唤醒词服务那个观察者同一个节奏: 400 ms 一次, 只在变了的时候重画 */
         private const val TICK_MS = 400L

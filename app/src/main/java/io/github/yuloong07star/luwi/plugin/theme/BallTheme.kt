@@ -40,8 +40,12 @@ internal object BallTheme {
      * 卡这个数的**不是包体而是内存**: 解码后的帧同时只留当前那一个状态
      * ([BallView.faceFrames] 换状态就整批换掉), 128 帧按球上那个解码尺寸约 16 MB; 再往上翻
      * 就得先想清楚低端机那点堆
+     *
+     * 它是 `internal` 而不是 `private`: 那张判据 (`PluginV2Test.ballThemeSpecIsChecked`) 要拿
+     * "上限 + 1"去钉"超过就要拒", 写死一个数的话上限一改那条就假红 —— 2026-10-15 提到 128 时
+     * 测试里那个 99 就是这么红的
      */
-    private const val MAX_FRAMES = 128
+    internal const val MAX_FRAMES = 128
     private const val MAX_FPS = 30
 
     @Serializable

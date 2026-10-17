@@ -4836,7 +4836,10 @@ private fun BallItems() {
     // 它自己至少要多大 (鲸鱼娘那份是 72 —— 全身立绘缩到 48 时五官糊成一团)。所以挑了插件之后
     // 这一行会把插件那个数**一并说出来**, 免得"我明明设了 48, 它却是 72"看着像坏了
     BallSizeSlider()
-    // 半透明 (2026-10-15 主人: "在浮标设置里加上半透明和半隐藏开关"): 开着时整颗球压到 70%
+    // 休闲那两个开关 (2026-10-15 主人: "在浮标设置里加上半透明和半隐藏开关"; 2026-10-17 主人把叫法
+    // 定成: **「半隐」= 淡下去那一档, 「半藏」= 挪一半到屏幕外那一档**): 两档**同一个 5 秒到点**
+    // (主人: "时间与透明度都和以前的一样" + "0.35"), 上一行是半隐 (淡到三成半), 下一行是半藏
+    // (把球挪出去一半) —— 各管一个状态, 判据仍旧只有 `BallRest.wait` 那一处
     //
     // **不必重启**: 那个 alpha 是 `OverlayService.waitNow()` 每一拍 (400 ms) 校正的, 改完当场看得见
     var translucentNow by remember { mutableStateOf(BallSpot.translucent(context)) }
@@ -4849,7 +4852,8 @@ private fun BallItems() {
             BallSpot.setTranslucent(context, wanted)
         },
     )
-    // 半隐藏: 闲置之后自动贴边收起来一半。**关掉不是"不能收边"**, 只是不再自动收 —— 碰一下照旧滑回来
+    // 「半藏」: 闲置之后自动贴边收起一半。**关掉不是"不能收边"**, 只是不再自动收 —— 碰一下照旧
+    // 滑回来。它独立于上面那一行: 半隐关着时这一档到点仍然收, 而且球是**全不透明**的
     var autoPeekNow by remember { mutableStateOf(BallSpot.autoPeek(context)) }
     SwitchPreference(
         title = stringResource(R.string.settings_ball_peek),

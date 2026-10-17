@@ -588,7 +588,7 @@ class BallTest {
             listening = false,
             keyboard = false,
             channelOpen = false,
-            idleDue = true,
+            idleDue = true, translucentDue = false,
         )
         assertEquals(true, wait.peek)
         assertEquals("peeking", wait.reason)
@@ -597,7 +597,7 @@ class BallTest {
     @Test
     fun `还没闲够就不收`() {
         val wait = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
-            listening = false, keyboard = false, channelOpen = false, idleDue = false)
+            listening = false, keyboard = false, channelOpen = false, idleDue = false, translucentDue = false)
         assertEquals(false, wait.peek)
         assertEquals("waiting", wait.reason)
     }
@@ -611,7 +611,7 @@ class BallTest {
     @Test
     fun `键盘在用就不算空闲`() {
         val wait = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
-            listening = false, keyboard = true, channelOpen = false, idleDue = true)
+            listening = false, keyboard = true, channelOpen = false, idleDue = true, translucentDue = false)
         assertEquals(false, wait.peek)
         assertEquals("keyboard", wait.reason)
         assertEquals(true, BallRest.isHeld(wait))
@@ -626,20 +626,20 @@ class BallTest {
     @Test
     fun `回答弹出来的框开着时也不收边`() {
         val wait = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
-            listening = false, keyboard = false, channelOpen = true, idleDue = true)
+            listening = false, keyboard = false, channelOpen = true, idleDue = true, translucentDue = false)
         assertEquals(false, wait.peek)
         assertEquals("channel", wait.reason)
         assertEquals(true, BallRest.isHeld(wait))
         // 框一关 (框外双击) 就又回到普通那一档
         assertEquals("peeking", BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false,
-            menuOpen = false, listening = false, keyboard = false, channelOpen = false, idleDue = true).reason)
+            menuOpen = false, listening = false, keyboard = false, channelOpen = false, idleDue = true, translucentDue = false).reason)
     }
 
     /** 语音链在跑的那一档: 它在场才有意义 (球上写着"正在听") */
     @Test
     fun `正在听的时候不收边`() {
         val wait = BallRest.wait(BallPhase.VOICE, peeked = false, dragging = false, menuOpen = false,
-            listening = true, keyboard = false, channelOpen = false, idleDue = true)
+            listening = true, keyboard = false, channelOpen = false, idleDue = true, translucentDue = false)
         assertEquals(false, wait.peek)
         assertEquals("listening", wait.reason)
     }
@@ -647,9 +647,9 @@ class BallTest {
     @Test
     fun `手指按着与菜单开着都算在用`() {
         assertEquals("held", BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = true,
-            menuOpen = false, listening = false, keyboard = false, channelOpen = false, idleDue = true).reason)
+            menuOpen = false, listening = false, keyboard = false, channelOpen = false, idleDue = true, translucentDue = false).reason)
         assertEquals("menu", BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false,
-            menuOpen = true, listening = false, keyboard = false, channelOpen = false, idleDue = true).reason)
+            menuOpen = true, listening = false, keyboard = false, channelOpen = false, idleDue = true, translucentDue = false).reason)
     }
 
     /**
@@ -659,7 +659,7 @@ class BallTest {
     @Test
     fun `已经收着的不再收第二次`() {
         val wait = BallRest.wait(BallPhase.RESTED, peeked = true, dragging = false, menuOpen = false,
-            listening = false, keyboard = false, channelOpen = false, idleDue = true)
+            listening = false, keyboard = false, channelOpen = false, idleDue = true, translucentDue = false)
         assertEquals(false, wait.peek)
         assertEquals("asleep", wait.reason)
     }
@@ -682,16 +682,16 @@ class BallTest {
         listening = true
         phase = BallPhase.VOICE
         assertEquals(false, BallRest.wait(phase, false, false, false, listening, keyboard,
-            channelOpen = false, idleDue = true).peek)
+            channelOpen = false, idleDue = true, translucentDue = false).peek)
         // 再点一次: 窗口收回去, 语音链自己那一档落下来 → 回到"全露着但没在听"
         listening = false
         phase = BallPhase.SUMMONED
         // 那一下本身算一次活动: 紧接着的一拍还没到点
         assertEquals(false, BallRest.wait(phase, false, false, false, listening, keyboard,
-            channelOpen = false, idleDue = false).peek)
+            channelOpen = false, idleDue = false, translucentDue = false).peek)
         // 5 s 之后: 收
         val wait = BallRest.wait(phase, false, false, false, listening, keyboard,
-            channelOpen = false, idleDue = true)
+            channelOpen = false, idleDue = true, translucentDue = false)
         assertEquals(true, wait.peek)
         assertEquals("peeking", wait.reason)
     }
@@ -706,19 +706,123 @@ class BallTest {
     fun `键盘收掉之后重新起算`() {
         val t0 = 1_000_000L
         val typing = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
-            listening = false, keyboard = true, channelOpen = false, idleDue = true)
+            listening = false, keyboard = true, channelOpen = false, idleDue = true, translucentDue = false)
         assertEquals("keyboard", typing.reason)
         // 键盘刚收掉那一刻: 还在那一档里等着, 计时是从这一刻起算的
         assertEquals(false, BallMinutes.idleDue(t0 + 1_000, t0))
         assertEquals("waiting", BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false,
             menuOpen = false, listening = false, keyboard = false, channelOpen = false,
-            idleDue = false).reason)
+            idleDue = false, translucentDue = false).reason)
         // 5 s 之后: 这一档才真的收
         val later = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
             listening = false, keyboard = false, channelOpen = false,
-            idleDue = BallMinutes.idleDue(t0 + BallMinutes.PEEK_IDLE_MS + 1, t0))
+            idleDue = BallMinutes.idleDue(t0 + BallMinutes.PEEK_IDLE_MS + 1, t0), translucentDue = false)
         assertEquals(true, later.peek)
         assertEquals("peeking", later.reason)
+    }
+
+    /* ── 半隐与半藏: 同一个 5 秒到点, 各看自己的开关 (2026-10-17) ─────────── */
+
+    /**
+     * 两个状态**同一个时刻到点**: 判据只有 `PEEK_IDLE_MS` 那一个 5 秒 —— 主人 2026-10-17 补的那句
+     * "时间与透明度都和以前的一样"要的就是这个数, 而"到点之后是哪一档"由两个开关在调用处各自
+     * `&&` 进来 (见 `OverlayService.waitNow`), 不是靠两个阈值错开
+     */
+    @Test
+    fun `两档共用同一个 5 秒`() {
+        val t0 = 1_000_000L
+        assertEquals(false, BallMinutes.idleDue(t0 + 5_000, t0))
+        assertEquals(true, BallMinutes.idleDue(t0 + 5_001, t0))
+        val due = BallMinutes.idleDue(t0 + 5_001, t0)
+        val both = BallRest.wait(BallPhase.SUMMONED, false, false, false, false, false, false,
+            idleDue = due, translucentDue = due)
+        assertEquals(true, both.peek)
+        assertEquals(true, both.translucent)
+    }
+
+    /** 到点那一拍: 半隐与半藏一起成立 —— 两件事各说各的, 0.5 不相乘任何东西 ([BallMinutes.alphaFor]) */
+    @Test
+    fun `闲 5 秒之后半透明与收边同时成立`() {
+        val wait = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
+            listening = false, keyboard = false, channelOpen = false, idleDue = true, translucentDue = true)
+        assertEquals(true, wait.peek)
+        assertEquals(true, wait.translucent)
+    }
+
+    /** 球在干活 (按着 / 菜单 / 正在听 / 键盘 / 输入框) 时**两档都不算**: 那一刻它既不淡也不收 */
+    @Test
+    fun `在用的时候既不淡也不收`() {
+        val held = listOf(
+            BallRest.wait(BallPhase.SUMMONED, false, true, false, false, false, false, true, true),
+            BallRest.wait(BallPhase.SUMMONED, false, false, true, false, false, false, true, true),
+            BallRest.wait(BallPhase.VOICE, false, false, false, true, false, false, true, true),
+            BallRest.wait(BallPhase.SUMMONED, false, false, false, false, true, false, true, true),
+            BallRest.wait(BallPhase.SUMMONED, false, false, false, false, false, true, true, true),
+        )
+        assertEquals(listOf(false, false, false, false, false), held.map { it.translucent })
+        assertEquals(listOf(false, false, false, false, false), held.map { it.peek })
+    }
+
+    /** 两个开关各管一个状态: 关掉半隐时, 到点那一拍半藏照旧 (半藏不依赖它) */
+    @Test
+    fun `半隐关着时半藏照旧`() {
+        val wait = BallRest.wait(BallPhase.SUMMONED, peeked = false, dragging = false, menuOpen = false,
+            listening = false, keyboard = false, channelOpen = false, idleDue = true, translucentDue = false)
+        assertEquals(true, wait.peek)
+        assertEquals(false, wait.translucent)
+    }
+
+    /** 已经半藏着的时候: 半隐那一档跟着同一笔闲置账 —— 碰一下 `lastActiveAt` 重置, 于是当场回全亮 */
+    @Test
+    fun `半藏时半隐跟着闲置账走`() {
+        assertEquals(
+            true,
+            BallRest.wait(BallPhase.RESTED, true, false, false, false, false, false, true, true).translucent,
+        )
+        assertEquals(
+            false,
+            BallRest.wait(BallPhase.RESTED, true, false, false, false, false, false, true, false).translucent,
+        )
+    }
+
+    /**
+     * **半藏不参与"多亮"这件事**: 那个算式只吃"半隐那一档"一个参数, 半藏 (`peek`) 传都传不进去
+     *
+     * 主人 2026-10-17: "当半透明关闭时, 半隐藏可以不透明显示" —— 从前的算式是 `0.7 × 0.5`,
+     * 于是只开半藏的机器永远得不到一颗亮的半藏球
+     */
+    @Test
+    fun `半藏不改不透明度`() {
+        assertEquals(0.35f, BallMinutes.alphaFor(translucent = true))
+        assertEquals(1f, BallMinutes.alphaFor(translucent = false))
+        assertEquals(BallMinutes.TRANSLUCENT_ALPHA, BallMinutes.alphaFor(true))
+    }
+
+    /**
+     * 四种开关组合各自的可见结果 (主人 2026-10-17: "改的应该是状态而不是时间" —— 淡与藏互不依赖)
+     *
+     * 两个开关各管一个状态: 只开半隐是"淡着但不半藏", 只开半藏是"半藏着但全亮", 都开是两样一起
+     * (而且不相乘), 都关就是原样。**同一刻到点**, 所以下面两组布尔正是真实里那两种开法
+     */
+    @Test
+    fun `两个状态互不依赖`() {
+        // 只开半隐: 淡着, 但不半藏
+        val translucentOnly = BallRest.wait(BallPhase.SUMMONED, false, false, false, false, false, false,
+            idleDue = false, translucentDue = true)
+        assertEquals(true, translucentOnly.translucent)
+        assertEquals(false, translucentOnly.peek)
+        assertEquals(0.35f, BallMinutes.alphaFor(translucentOnly.translucent))
+        // 只开半藏: 半藏着, 但全不透明
+        val peekOnly = BallRest.wait(BallPhase.SUMMONED, false, false, false, false, false, false,
+            idleDue = true, translucentDue = false)
+        assertEquals(true, peekOnly.peek)
+        assertEquals(false, peekOnly.translucent)
+        assertEquals(1f, BallMinutes.alphaFor(peekOnly.translucent))
+        // 都开: 又淡又藏, 而那个淡仍是 0.35 (不相乘); 都关: 全亮全露
+        val both = BallRest.wait(BallPhase.SUMMONED, false, false, false, false, false, false, true, true)
+        assertEquals(0.35f, BallMinutes.alphaFor(both.translucent))
+        val neither = BallRest.wait(BallPhase.SUMMONED, false, false, false, false, false, false, false, false)
+        assertEquals(1f, BallMinutes.alphaFor(neither.translucent))
     }
 
     /* ── 时长: 3 秒提示与 5 秒空闲是两笔账 ───────────────────────────────── */

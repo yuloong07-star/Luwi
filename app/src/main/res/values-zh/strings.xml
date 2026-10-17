@@ -226,10 +226,10 @@
     <string name="settings_ball_size_summary">球多大 (48-80 dp): 大一点看得清, 小一点不挡屏幕; 改完立刻生效 (球半秒内换成新尺寸), 若没变就重启一次 Luwi; 现在: %1$d dp</string>
     <string name="settings_ball_size_summary_theme">你设的是 %1$d dp, 而现在这套外观至少要 %2$d dp (它用的是全身立绘), 所以此刻是 %3$d dp; 改完立刻生效, 若没变就重启一次 Luwi</string>
     <string name="settings_ball_size_dialog">打一个 dp 数 (%1$d-%2$d)</string>
-    <string name="settings_ball_translucent">半透明</string>
-    <string name="settings_ball_translucent_summary">开着时整颗球压到七成不透明度, 不那么挡屏幕底下的东西; 说与听时那口呼吸照旧</string>
-    <string name="settings_ball_peek">闲置后半隐藏</string>
-    <string name="settings_ball_peek_summary">开着时闲着 5 秒就贴边收起来一半, 碰一下滑回来; 关掉它就一直在那儿露着, 只有你拖它才动</string>
+    <string name="settings_ball_translucent">半隐</string>
+    <string name="settings_ball_translucent_summary">闲着 5 秒后整颗球淡到三成半不透明度, 不那么挡屏幕底下的东西; 碰一下立刻回到全不透明, 说与听时那口呼吸照旧</string>
+    <string name="settings_ball_peek">半藏</string>
+    <string name="settings_ball_peek_summary">再闲一会儿 (5 秒) 就把球挪一半到屏幕外, 碰一下滑回来; 关掉它就一直在那儿露着, 只有你拖它才动</string>
 <string name="settings_ball_feel_guard">防误触</string>
     <string name="settings_ball_state_up">球在屏幕上, 停在%1$s</string>
     <string name="settings_ball_state_down">球现在不在屏幕上</string>

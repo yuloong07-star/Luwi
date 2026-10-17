@@ -246,11 +246,13 @@ internal object BallSpot {
     /**
      * 「半透明」那一档 (2026-10-15 主人: "在浮标设置里加上半透明和半隐藏开关")
      *
-     * 开着时整颗球压到 [TRANSLUCENT]，不挡屏幕底下的东西；半隐那一档是**再乘**它
+     * 2026-10-17 改的**只是它什么时候生效**: 从前开着就常驻压到七成, 主人点名那与他要的
+     * "休闲时才淡"不符 —— 现在它是休闲那一档「半隐」(闲 5 s 淡到三成半, 见 `BallMinutes.alphaFor`),
+     * 而同一个文件里那个 [KEY_AUTOPEEK] 是另一档「半藏」(同一个 5 s 把球挪一半到屏幕外)
      */
     private const val KEY_TRANSLUCENT = "ball-translucent"
 
-    /** 「闲置后半隐藏」那个开关: 关掉就永不自动贴边 (碰一下仍然会滑回来) */
+    /** 「休闲后半隐藏」那个开关: 关掉就永不自动贴边 (碰一下仍然会滑回来) */
     private const val KEY_AUTOPEEK = "ball-peek"
 
     fun on(context: Context): Boolean = prefs(context).getBoolean(KEY_ON, false)
@@ -267,8 +269,13 @@ internal object BallSpot {
         prefs(context).edit().putString(KEY_FEEL, feel.name).apply()
     }
 
-    /** 半透明: 缺省**关** (原来那颗球是全不透明的) */
-    fun translucent(context: Context): Boolean = prefs(context).getBoolean(KEY_TRANSLUCENT, false)
+    /**
+     * 休闲半透明: 缺省**开** (2026-10-17 主人: "休闲分两个阶段, 两个开关都开")
+     *
+     * 存过 `false` 的机器照旧读得到那个 `false` —— 当时是"不要常驻半透明", 现在这一档换了语义,
+     * 但"他关过"这件事仍然算数, 不去翻他的旧选择
+     */
+    fun translucent(context: Context): Boolean = prefs(context).getBoolean(KEY_TRANSLUCENT, true)
 
     fun setTranslucent(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean(KEY_TRANSLUCENT, on).apply()

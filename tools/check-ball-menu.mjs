@@ -9,6 +9,8 @@
  *   3. **文件字段两侧一致**: `balance.json` 那几个键应用与宿主各写一份约定 (与 ball-phase.json 同一条
  *      规矩), 还要校验签名清单之外的 sha256; 两个窗口数 (新鲜 60 s / 请求记号 30 s) 谁都不许单边改
  *   4. **候选只有一份口径**: 设置页那份对话框与球菜单那行「换个形象」都认 `BallTheme.choices`
+ *   5. **余额只有主人点菜单那一条触发** (2026-10-17): 宿主自己起来那几拍与「每轮结束刷一次」都拿掉了,
+ *      应用那一侧"文件到了就写框"那条路也带上了「主人刚要过」的闸 —— 两处缺一个, 那一行就会长在回答后面
  *
  * 不需要设备: 全是拿真源码对着核 (与 `check-image-edit.mjs` 同一个办法)。
  *
@@ -101,6 +103,23 @@ check(
     overlay.includes('boxView?.replaceInfo(balanceLine(snapshot))'),
   ],
   [true, true, true, true, true],
+)
+// 那一道闸 2026-10-17 加的 (主人: 「余额查询只能用户主动在 ball 菜单主动查询」): 宿主往那份文件里写了
+// 新数**不再是上屏的理由** —— 成功那一档从前没有闸, 于是它自己刷出来的那一份会悄没声地长在回答后面
+const readBalance = overlay.slice(
+  overlay.indexOf('private fun readBalance()'),
+  overlay.indexOf('private fun balanceLine('),
+)
+check(
+  '文件到了也不许自己上屏: 成功那一档与失败那一档合用一个「主人刚要过」的闸',
+  [
+    readBalance.includes('val asked = balanceAskedAt > 0'),
+    readBalance.includes('BALANCE_ASK_WINDOW_MS'),
+    readBalance.includes('if (!asked) return'),
+    // 「正在取…」被真数顶掉那一条仍在 (点菜单那条路照旧, 屏上不会留两行)
+    readBalance.includes('replaceInfo(balanceLine(snapshot))'),
+  ],
+  [true, true, true, true],
 )
 
 /* ── 三、文件约定两侧一致 (字段 + 两个窗口数) ─────────────────────────── */
@@ -235,14 +254,27 @@ check(
   ],
   [true, true, true],
 )
+// 那三条自己起来的触发 2026-10-17 全部拿掉 (见下面那条判据): 起点是 startBalance 那个函数体
+const balanceFeed = plugin.slice(
+  plugin.indexOf('function startBalance(ctx)'),
+  plugin.indexOf('function registerVoiceInput(ctx)'),
+)
 check(
-  '起来那一刻 llm 目录可能还没就绪: 前三拍补刷 (只补"上一拍答的是不支持"那一种)',
+  '余额只有「主人点菜单」那一条触发 (起来那几拍 / 每轮结束那两条都不许回来)',
   [
-    plugin.includes('const BALANCE_WARMUP_MS = [3000, 10000, 30000]'),
-    plugin.includes('balanceLast = payload'),
-    plugin.includes('if (balanceLast !== null && balanceLast.unsupported !== true) return'),
+    balanceFeed.includes('balanceRequested()'),
+    balanceFeed.includes('PLUGIN_POLL_MS'),
+    // 一个记号只刷一次 (30 s 窗口配 3 s 轮询, 不记住处理过哪个就是点一次问十遍)
+    balanceFeed.includes('stamp <= handled'),
+    !balanceFeed.includes('onSessionEvent'),
+    !plugin.includes('BALANCE_WARMUP_MS'),
+    !plugin.includes('BALANCE_MIN_INTERVAL_MS'),
+    !plugin.includes('balanceLast'),
+    // `ctx.locale` 直接点会抛 (没 inject 那个服务时), 只有 ctx.get 这条路走得通
+    plugin.includes("ctx.get('locale')"),
+    !plugin.includes('ctx.locale?.'),
   ],
-  [true, true, true],
+  [true, true, true, true, true, true, true, true, true],
 )
 check(
   '地址与凭据都从 dsh 自己那份配置里读 (settings.describe + credentials.resolve)',
@@ -322,13 +354,13 @@ check(
 /* ── 七、会话事件看得见本机的轮次 (2026-10-15 真机: 「正在想」与回复框都是空的) ── */
 
 check(
-  '五条 session/event 订阅一律走 onSessionEvent, 而且真的带 { global: true }',
+  '四条 session/event 订阅一律走 onSessionEvent, 而且真的带 { global: true } (余额那条 2026-10-17 拿掉了)',
   [
     [...plugin.matchAll(/^\s*ctx\.on\('session\/event'/gm)].length,
     [...plugin.matchAll(/^\s*onSessionEvent\(ctx, \(session, event\) => \{/gm)].length,
     plugin.includes("ctx.on('session/event', listener, { global: true })"),
   ],
-  [0, 5, true],
+  [0, 4, true],
 )
 check(
   '投影判据两边都归一 (DSH_HOME 写 /data/user/0, 影子会话的 cwd 写 /data/data)',
@@ -342,7 +374,7 @@ check(
   [true, true, true, true, true],
 )
 check(
-  'sep 真的导入了 —— 少了它 isPeerProjection 一抛, 五条会话钩子全静默死掉',
+  'sep 真的导入了 —— 少了它 isPeerProjection 一抛, 几条会话钩子全静默死掉',
   [
     /^import \{[^}]*\bsep\b[^}]*\} from 'node:path'$/m.test(plugin),
     plugin.includes('root + sep'),
@@ -355,7 +387,7 @@ check(
     plugin.includes('realpathSync'),
     [...plugin.matchAll(/onSessionEvent\(ctx, \(session, event\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(event\.type/g)].length,
   ],
-  [false, 5],
+  [false, 4],
 )
 check(
   '回复框排在朗读开关前面 (关掉朗读也要有框), 正文有限长',

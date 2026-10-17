@@ -136,6 +136,24 @@ foreach ($commit in $commits) {
     $committer = Iso $Matches[1] $Matches[2] $Matches[3]
     $subject = ($message -split "`n")[0]
 
+    # GitHub 网页上改过的提交带 gpgsig (GitHub 的 PGP 签名), 而签名是**提交对象的一部分** ——
+    # 少了它重建出来的 SHA 必然不同 (2026-10-16 实测: 51ae7ea "Update README.md" 卡在这里,
+    # 前面 23 个提交都 byte-for-byte 对上了)。Git Data API 的 commits 端点收 `signature` 字段,
+    # 内容就是 armored 签名原文 (去掉 "gpgsig " 前缀、以及续行那个前导空格, 再拼回来)
+    $signature = $null
+    $headerLines = $header -split "`n"
+    for ($i = 0; $i -lt $headerLines.Count; $i++) {
+        if ($headerLines[$i] -notlike 'gpgsig *') { continue }
+        $sig = [System.Collections.Generic.List[string]]::new()
+        $sig.Add($headerLines[$i].Substring('gpgsig '.Length))
+        for ($j = $i + 1; $j -lt $headerLines.Count; $j++) {
+            if ($headerLines[$j] -notlike ' *') { break }
+            $sig.Add($headerLines[$j].Substring(1))
+        }
+        $signature = ($sig -join "`n")
+        break
+    }
+
     $created = $null
     foreach ($candidate in @($message, $message.TrimEnd("`n"))) {
         $body = @{
@@ -146,7 +164,9 @@ foreach ($commit in $commits) {
             parents   = @($parts[1..($parts.Count - 1)])
             author    = $author
             committer = $committer
-        } | ConvertTo-Json -Depth 6 -Compress
+        }
+        if ($null -ne $signature) { $body.signature = $signature }
+        $body = $body | ConvertTo-Json -Depth 6 -Compress
         [IO.File]::WriteAllText($jsonFile, $body, $utf8)
         $created = (& $Gh api -X POST "repos/$Repo/git/commits" --input $jsonFile --jq '.sha').Trim()
         if ($created -eq $commit) { break }

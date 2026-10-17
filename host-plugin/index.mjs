@@ -128,7 +128,7 @@ export function apply(ctx) {
   }
 
   // 「看余额」那一档 (2026-10-16): 账号缝里那个数只有宿主拿得到, 落成文件应用才看得见 ——
-  // 起来刷一次 / 每轮结束刷一次 / 应用点「看余额」的请求记号一出现就刷 (见 startBalance)
+  // **只有应用点「看余额」写出来的那个请求记号能触发它** (见 startBalance), 宿主自己不按节拍刷
   try {
     startBalance(ctx)
   } catch (error) {
@@ -7043,29 +7043,12 @@ function startBallPhase(ctx) {
 /* ── 余额 (2026-10-16, 「看余额」那一档) ──────────────────────────────────── */
 
 /**
- * 两次自己刷之间至少隔多久
- *
- * 每轮结束都去问一次账号缝等于把 Platform 那个接口当成心跳, 没有这个必要 —— 余额平时自己按这个
- * 节拍走; 应用那边点「看余额」的请求记号不算在这里, 那一条是"主人正看着呢"
+ * 应用那个请求记号多久之内算数 (与应用那侧 `BalanceFile.requestFresh` 同一个数, 谁都不许单边改)
  */
-const BALANCE_MIN_INTERVAL_MS = 3 * 60 * 1000
-
-/** 应用那个请求记号多久之内算数 (与应用那侧 `BalanceFile.requestFresh` 同一个数, 谁都不许单边改) */
 const BALANCE_REQUEST_FRESH_MS = 30 * 1000
 
 /** 一次取数最多等多久: 主人正看着那块框, 网络不通也要尽快给个答案 (失败也是答案) */
 const BALANCE_TIMEOUT_MS = 8000
-
-/**
- * 起来之后补刷的那几拍 (毫秒)
- *
- * 这一拍挂在命令行覆盖层上, 而 llm 的目录是 web bundle 那边注册的 —— **起来那一刻
- * `listConfigurableProviders()` 还是空的**, 于是"当前模型"认不出余额源, 第一份文件写出去的就是
- * 「不支持」。2026-10-17 真机上量到的正是这个: 18:43:18 那一份是 `unsupported: true`, 八秒后
- * 再刷一次就是 `¥343.61`。所以按这三拍各补一次, 而且**只补"上一拍答的是不支持"那一种** ——
- * 与模型目录那条同一个理由 (见 [writeModelCatalog] 的 3 / 10 / 30 秒三次重试)
- */
-const BALANCE_WARMUP_MS = [3000, 10000, 30000]
 
 /**
  * 试 DeepSeek 登录账号那条缝的 route (dsh 的 `llm-deepseek-account` 注册的那一个)
@@ -7084,11 +7067,6 @@ const DEEPSEEK_ROUTES = ['deepseek-official', 'deepseek-account', 'deepseek']
 /** 那条账号缝的服务名 */
 const ACCOUNT_SEAM = 'deepseekAccount'
 
-let balanceLastAt = 0
-
-/** 上一次写出去的那一份 (补刷那几拍要看它: 已经答出数了就不补) */
-let balanceLast = null
-
 /** 那份文件: `$DSH_HOME/lw/balance.json` (与应用那侧的 `BalanceFile` 是同一个约定) */
 function balancePath() {
   const home = process.env.DSH_HOME
@@ -7101,16 +7079,21 @@ function balanceRequestPath() {
   return home ? join(home, 'lw', 'balance-request.json') : null
 }
 
-/** 那个记号是不是主人刚写的 (30 s 之内) */
+/**
+ * 那个记号的时间戳 (主人刚写的那一下), 没有 / 过期就是 0
+ *
+ * **同一个记号只算一次** (判据在 [startBalance] 里那个 handled): 记号在 [BALANCE_REQUEST_FRESH_MS]
+ * 之内一直"新鲜", 而这条轮询是 3 s 一拍 —— 按布尔读的话, 点一次「看余额」会在半分钟里问十遍账号缝
+ */
 async function balanceRequested() {
   const path = balanceRequestPath()
-  if (!path) return false
+  if (!path) return 0
   try {
     const at = JSON.parse(await readFile(path, 'utf8'))?.at
     const age = Date.now() - at
-    return typeof at === 'number' && age >= 0 && age <= BALANCE_REQUEST_FRESH_MS
+    return typeof at === 'number' && age >= 0 && age <= BALANCE_REQUEST_FRESH_MS ? at : 0
   } catch {
-    return false
+    return 0
   }
 }
 
@@ -7389,9 +7372,12 @@ async function readAccountBalance(ctx, payload, note = '') {
     return
   }
   // client 元数据与 GUI 那一侧同一个形状 (version / locale / 时区偏移): 凭据不过这一层
+  // **`ctx.locale` 不能直接点** (2026-10-17 模拟器上量到的): 插件没 inject 那个服务时, 代理在
+  // 取属性的那一刻就抛 `cannot get property "locale" without inject`, `?.` 一个都挡不住 ——
+  // 现象是「看余额」在"没配 API Key、退账号缝"那一档永远失败, `⚠` 上念的还是这句内部话
   const client = {
     version: process.env.DSH_CLIENT_VERSION || 'luwi',
-    locale: ctx.locale?.getSnapshot?.()?.active || 'zh-CN',
+    locale: ctx.get('locale')?.getSnapshot?.()?.active || 'zh-CN',
     timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
   }
   const result = await account.getBalance(client)
@@ -7421,13 +7407,12 @@ async function readAccountBalance(ctx, payload, note = '') {
  * - 不在表里 (或连"当前模型"都取不到) → `unsupported: true`, 应用说「当前模型不支持查询余额」
  * - 取数本身失败 (没配 key / 网络 / 那家答的东西读不出来) → `ok: false` + 一句原话, 应用照念
  *
+ * 应用那一侧点「看余额」才会走到这儿 ([startBalance] 那条轮询看见请求记号), 所以这里没有节流那一层
+ *
  * @param ctx 宿主上下文 (拿服务与 locale)
- * @param force 请求记号那一路传 true —— "主人正看着呢"不吃节流
  */
-async function refreshBalance(ctx, force = false) {
+async function refreshBalance(ctx) {
   const now = Date.now()
-  if (!force && now - balanceLastAt < BALANCE_MIN_INTERVAL_MS) return
-  balanceLastAt = now
   const path = balancePath()
   if (path === null) return
   const payload = {
@@ -7479,8 +7464,6 @@ async function refreshBalance(ctx, force = false) {
   } catch (error) {
     payload.reason = `fetching the balance failed: ${error?.message ?? error}`
   }
-  // 补刷那几拍要看"上一拍答的是什么": 这一份在任何一条返回路径上都要记下来
-  balanceLast = payload
   const temporary = `${path}.tmp`
   try {
     await mkdir(dirname(path), { recursive: true })
@@ -7492,35 +7475,31 @@ async function refreshBalance(ctx, force = false) {
 }
 
 /**
- * 余额那条喂给应用的四条触发
+ * 余额那一条**唯一的**触发: 应用写出来的那个请求记号
  *
- * 起来刷一次 (应用的文本框一开就有数可看), **起来后按 [BALANCE_WARMUP_MS] 补几拍** (起来那一刻
- * llm 的目录可能还没注册完, 那时只能答"不支持"), 每轮结束刷一次 (它本来就是"用完顺手看一眼"的数),
- * 以及应用那个请求记号: 自己一条 3 s 的轮询盯着它 (与应用侧那条插件轮询同一个节拍, unref 掉不挡退出)
+ * 2026-10-17 主人: 「余额查询只能用户主动在 ball 菜单主动查询」。从前这里还有三条自己起的 —— 起来刷
+ * 一次、起来后 3 / 10 / 30 s 各补一拍、每轮结束 (`turn/end`) 刷一次 —— 它们一起拿掉了, 两个理由:
+ *
+ *   1. **那三条查出来的数一个字都不会被主人看见**: 应用那一侧只在"他刚点过菜单"那 30 s 里才把那份
+ *      文件写进框 ([OverlayService.readBalance]), 于是那些刷新只是白问一次
+ *   2. **它们本来也不该问**: 每轮结束都去问一次账号缝等于把 Platform 那个接口当成心跳, 起来那三拍更
+ *      是"刚开机就先替你查一次钱" —— 这两件事都不该由应用替主人决定
+ *
+ * 所以链路收成一条: 点「看余额」→ 应用写 `balance-request.json` → 这条轮询看见 → 查一次 → 落
+ * `balance.json` → 应用当场把「正在取…」换成真数。**同一个记号只认一次** (30 s 的新鲜窗口配一拍 3 s 的
+ * 轮询, 不记住处理过哪个就会点一次问十遍), 一次取数最多 [BALANCE_TIMEOUT_MS]
  */
 function startBalance(ctx) {
-  onSessionEvent(ctx, (session, event) => {
-    if (event.type !== 'turn/end') return
-    if (session.meta?.origin === 'subagent') return
-    // 对端投影每折一条回答都会发一个 turn/end: 拿它当"这一轮用完了"去问一次余额是白跑的桥往返
-    if (isPeerProjection(session)) return
-    void refreshBalance(ctx)
-  })
+  /** 已经处理过的那个记号: 同一个只刷一次 ([balanceRequested] 那 30 s 窗口里它会一直被读成"新鲜") */
+  let handled = 0
   const timer = setInterval(() => {
-    void balanceRequested().then((wanted) => {
-      if (wanted) void refreshBalance(ctx, true)
+    void balanceRequested().then((stamp) => {
+      if (stamp === 0 || stamp <= handled) return
+      handled = stamp
+      void refreshBalance(ctx)
     })
   }, PLUGIN_POLL_MS)
   if (typeof timer.unref === 'function') timer.unref()
-  void refreshBalance(ctx)
-  // 起来那一下可能太早 (llm 的目录那时还没注册完), 按这几拍补一补 —— 见 [BALANCE_WARMUP_MS]
-  for (const delay of BALANCE_WARMUP_MS) {
-    const warmup = setTimeout(() => {
-      if (balanceLast !== null && balanceLast.unsupported !== true) return
-      void refreshBalance(ctx, true)
-    }, delay)
-    if (typeof warmup.unref === 'function') warmup.unref()
-  }
 }
 
 /**

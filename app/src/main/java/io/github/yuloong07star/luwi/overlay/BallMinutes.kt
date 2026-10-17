@@ -27,6 +27,27 @@ internal object BallMinutes {
     const val PEEK_IDLE_MS = 5_000L
 
     /**
+     * 休闲那一档 (半隐) 的不透明度
+     *
+     * **就是以前那个数** (0.35): 从前它是"半透明开着 (0.7) 又半藏着 (×0.5)"叠出来的值, 也就是主人
+     * 最常看到的那颗休闲球 —— 2026-10-17 他点名"透明度用之前的"并直接给了这个数。现在半隐独立成
+     * 一档, 那个 0.35 就是它自己的值, 不再靠两个乘数凑
+     *
+     * 与半藏那一档**没有关系**: 半藏只挪位置, 不再顺手把球压暗 —— 关掉半隐时, 半藏就是一颗
+     * **全不透明**的球 (同一批主人那句"当半透明关闭时, 半隐藏可以不透明显示")
+     */
+    const val TRANSLUCENT_ALPHA = 0.35f
+
+    /**
+     * 球这一刻的不透明度
+     *
+     * **只吃"半透明那一档"一个参数**: 半隐 (`peek`) 传都传不进来 —— 两个状态就是这样解耦的
+     * (2026-10-17 主人: "改的应该是状态而不是时间")。从前的算式是 `0.7 × 0.5`, 于是"只开半隐藏"的
+     * 机器永远得不到一颗亮的半藏球, 而"只开半透明"的机器也得先半藏才看得见淡
+     */
+    fun alphaFor(translucent: Boolean): Float = if (translucent) TRANSLUCENT_ALPHA else 1f
+
+    /**
      * 状态提示 (球上那三个字) 显示多久
      *
      * 主人 2026-10-05 点过名: **3 秒**。它管的是"多久之后不再拿状态词当主角", 与 [PEEK_IDLE_MS]
@@ -683,6 +704,12 @@ internal object BallIdle {
  *
  * 这几条都**不记活动那一笔账**: 计时由 `OverlayService` 按"这一档开始 / 结束"去重写 (见
  * `OverlayService.resetIdleWait`), 因为它知道"上一拍是怎么判的"。这里只回答"现在这一档对吗"
+ *
+ * **休闲的两个状态, 这个函数一次答完** (2026-10-17 主人: "ball 的休闲应分两个阶段…", 随后又把叫法
+ * 定成「半隐」= 淡下去、「半藏」= 挪一半到屏幕外): 两者**同一个时刻到点** —— 就是 [BallMinutes.PEEK_IDLE_MS]
+ * 那一个 5 s (主人当天补的那句"时间与透明度都和以前的一样"要的正是这个数), 而各看各的开关:
+ * `translucent` 是半隐 (整颗球压到 [TRANSLUCENT_ALPHA]), `peek` 是半藏 (贴边收起一半)。上面那六条闸是**共用**的
+ * —— 球在干活时两个状态都不算, 那一刻它既不淡也不藏
  */
 internal object BallRest {
 
@@ -695,7 +722,7 @@ internal object BallRest {
      */
     const val TICK_PAD_MS = 400L
 
-    /** 球现在在干嘛 (`waiting` / `asleep` / `peeking` 三选一) */
+    /** 球现在在干嘛 (`waiting` / `asleep` / `peeking` 三选一), 以及这一刻该不该半透明 */
     fun wait(
         phase: BallPhase,
         peeked: Boolean,
@@ -705,17 +732,21 @@ internal object BallRest {
         keyboard: Boolean,
         channelOpen: Boolean,
         idleDue: Boolean,
+        translucentDue: Boolean,
     ): BallWait = when {
-        peeked -> BallWait(peek = false, reason = "asleep")
-        dragging -> BallWait(peek = false, reason = "held")
-        menuOpen -> BallWait(peek = false, reason = "menu")
-        listening -> BallWait(peek = false, reason = "listening")
-        keyboard -> BallWait(peek = false, reason = "keyboard")
-        channelOpen -> BallWait(peek = false, reason = "channel")
-        idleDue -> BallWait(peek = true, reason = "peeking")
+        // 已经半藏着: 半隐那一档跟着同一个判据走 (而回弹时 `lastActiveAt` 刚被重置, 于是这一行
+        // 也是"碰一下立刻回全亮"那条路的来源)
+        peeked -> BallWait(peek = false, translucent = translucentDue, reason = "asleep")
+        // 下面五条是"球在干活": **两档都不算** —— 那时它既不淡也不收 (见文件头那六条闸)
+        dragging -> BallWait(peek = false, translucent = false, reason = "held")
+        menuOpen -> BallWait(peek = false, translucent = false, reason = "menu")
+        listening -> BallWait(peek = false, translucent = false, reason = "listening")
+        keyboard -> BallWait(peek = false, translucent = false, reason = "keyboard")
+        channelOpen -> BallWait(peek = false, translucent = false, reason = "channel")
+        idleDue -> BallWait(peek = true, translucent = translucentDue, reason = "peeking")
         // 剩下的只有"全露着但没在听"那一档 ([BallPhase.SUMMONED]) 与还没到点的 [BallPhase.RESTED]:
-        // 后者已经在收着那一支里被 `peeked` 接住了, 所以走到这里一律是"还等着"
-        else -> BallWait(peek = false, reason = "waiting")
+        // 后者已经在收着那一支里被 `peeked` 接住了, 所以走到这里一律是"还等着" (半隐自己可能已经到点)
+        else -> BallWait(peek = false, translucent = translucentDue, reason = "waiting")
     }
 
     /** 这一档是不是"人正在用它": 是的话调用方不去动那笔空闲账 —— 账该从它**结束**那一刻起算 */
@@ -724,8 +755,15 @@ internal object BallRest {
             wait.reason == "keyboard" || wait.reason == "channel"
 }
 
-/** [BallRest.wait] 的答案: 收不收边, 以及这一拍为什么这么判 */
-internal data class BallWait(val peek: Boolean, val reason: String)
+/**
+ * [BallRest.wait] 的答案: 要不要半藏、要不要半隐, 以及这一拍为什么这么判
+ *
+ * 两个状态**各归各的** (2026-10-17 主人: 叫法定成「半隐」= 淡下去、「半藏」= 挪一半到屏幕外):
+ * [translucent] 是半隐 (整颗球压到 [OverlayService.TRANSLUCENT_ALPHA]), [peek] 是半藏 (贴边收起
+ * 一半)。它们**同一个 5 秒到点** (见 [BallMinutes.PEEK_IDLE_MS]), 而两个开关在调用处各自 `&&`
+ * 进来, 所以这里不需要知道开关 —— 它只回答"这一刻那个状态成不成立"
+ */
+internal data class BallWait(val peek: Boolean, val translucent: Boolean, val reason: String)
 
 /**
  * 设置页那个开关该画成什么 —— **纯函数, 没有设备也能量** (见 BallSwitchTest)
