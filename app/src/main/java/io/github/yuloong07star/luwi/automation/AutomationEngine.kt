@@ -1,13 +1,23 @@
 package io.github.yuloong07star.luwi.automation
 
 import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import io.github.yuloong07star.luwi.channel.LwAccessibility
 import io.github.yuloong07star.luwi.channel.LwNotificationListener
 import io.github.yuloong07star.luwi.tool.LwWakeWord
 import io.github.yuloong07star.luwi.voice.VoiceInbox
 import io.github.yuloong07star.luwi.wake.PowerWindow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
+import java.time.Instant
+import java.time.ZoneId
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -37,6 +47,12 @@ internal object AutomationEngine {
 
     /** 时间条件迟到多少还算命中 (闹钟在打盹的设备上晚几分钟是常事, 记 `late` 而不是当没发生) */
     private const val LATE_WINDOW_MINUTES = 10L
+
+    /** tick 那条 trigger 的 kind: 它不是任何监测源, 只用来把"这一轮没消息"与"某个事件来了"分开 */
+    private const val TICK = "tick"
+
+    /** 每轮都能重算的那几类子条件 (tick 只碰它们) */
+    private val STATE_KINDS = setOf("time", "light", "place", "weather", "activity")
 
     /** 事件型条件不成立时, 每多少条合并成一行历史 (不合并的话通知一来一整天全是它) */
     private const val MISS_MERGE = 20
@@ -85,6 +101,39 @@ internal object AutomationEngine {
     /** 光感那条现在的状态与"什么时候开始满足" (迟滞与 forSeconds) */
     private val lightInside = HashMap<String, Boolean>()
     private val lightSince = HashMap<String, Long>()
+
+    /**
+     * 组合规则的新鲜标记: `"规则名#子条件序号"` -> 最近一次为真的时刻 (D21)
+     *
+     * 这是组合唯一的记忆 —— 两个事件天生不同时到, 所以判据是"各自最近一次为真落在自己的窗口里",
+     * 不是"同时为真"。命中一次就把这条规则所有标记清掉, 于是同一次成立只响一声
+     */
+    private val fresh = HashMap<String, Long>()
+
+    /** 最近一次解锁 / 今天第一次解锁 (两个读数源之一, 也是 activity 的一半) */
+    private var lastUnlockAt = 0L
+    private var firstUnlockTodayAt = 0L
+
+    /** `firstUnlockTodayAt` 是哪一个本地日的 (跨日归零) */
+    private var unlockDay = ""
+
+    /** 最近一次"动过" (解锁或窗口事件), `activity` 按它算 */
+    private var lastInteractionAt = 0L
+
+    /**
+     * 状态类子条件重算时的最近读数
+     *
+     * tick 不读传感器也不去问网络: 它只拿这几份缓存重算一次, 于是"到 23:30 或 光照低于 20"这种
+     * 组合在没有任何新事件的那一分钟里也能成立
+     */
+    private var lastLux: Double? = null
+    private var lastFix: Pair<Double, Double>? = null
+    @Volatile
+    private var lastReadings: Map<String, WeatherNow> = emptyMap()
+
+    /** tick 那两个读数 (`status` 用, 风险 17) */
+    private var tickCount = 0L
+    private var lastTickAt = 0L
 
     /** 省电是不是正生效: 只在变化那一刻记一行 `paused`, 不每拍记 */
     private var paused = false
@@ -192,12 +241,17 @@ internal object AutomationEngine {
      *
      * 三条判据合起来: 这一类有启用的规则、这一类没被主人关掉、省电时轮询类不注册。**没有启用的规则
      * 就一个都不注册** —— 这一条是"低功耗"那句口径的落点
+     *
+     * 组合规则按**子条件**展开: `all{unlock, time}` 要的是解锁与时间两个监测源, 而它自己没有监测源
      */
     private fun requiredMonitors(settings: AutomationStore.Settings?): Set<String> {
         val on = settings ?: return emptySet()
         val wanted = rules.asSequence()
             .filter { it.enabled }
-            .map { it.whenKind }
+            .flatMap { rule ->
+                if (rule.whenKind in AutomationRule.COMBO_KINDS) rule.subKinds.asSequence()
+                else sequenceOf(rule.whenKind)
+            }
             .filter { on.monitor(it) }
             .toMutableSet()
         if (paused) wanted.removeAll(POLLING_KINDS)
@@ -221,7 +275,7 @@ internal object AutomationEngine {
         settings = runCatching { AutomationStore.settings(context) }
             .getOrDefault(
                 AutomationStore.Settings(
-                    monitors = AutomationRule.WHEN_KINDS.associateWith { true },
+                    monitors = AutomationRule.WATCH_KINDS.associateWith { true },
                     weatherMinutes = AutomationStore.DEFAULT_WEATHER_MINUTES,
                     placeMinutes = AutomationStore.DEFAULT_PLACE_MINUTES,
                     placeMeters = AutomationStore.DEFAULT_PLACE_METERS,
@@ -267,8 +321,11 @@ internal object AutomationEngine {
     private fun nextAlarm(now: Long = System.currentTimeMillis()): Long? =
         rules.asSequence()
             .filter {
-                it.enabled && (it.whenKind == "time" || it.whenKind == "once") &&
-                    settings?.monitor(it.whenKind) != false
+                val wanted = it.whenKind == "time" || it.whenKind == "once" ||
+                    it.whenKind in AutomationRule.COMBO_KINDS
+                if (!it.enabled || !wanted) return@filter false
+                // 组合里那一条 time 也要有"时间"这一档监测器开着才排
+                settings?.monitor(if (it.whenKind in AutomationRule.COMBO_KINDS) "time" else it.whenKind) != false
             }
             .mapNotNull { rule ->
                 val from = if (rule.whenKind == "once") now - LATE_WINDOW_MINUTES * 60_000L - 1 else now
@@ -291,9 +348,12 @@ internal object AutomationEngine {
             todayKey = key
             firedToday.clear()
             misses.clear()
+            firstUnlockTodayAt = 0L
         }
         retireMissedOnce(context, now)
         pollWeather(context, now)
+        // 组合那条 60 秒 tick: 只在有组合规则时跑, 熄屏不跑 (风险 17)
+        tickCombos(context, now)
     }
 
     /* ── 事件入口 (监测器叫它们) ─────────────────────────────────────────── */
@@ -324,6 +384,7 @@ internal object AutomationEngine {
 
     fun onLight(context: Context, lux: Double) {
         val application = context.applicationContext
+        lastLux = lux
         worker.execute {
             runCatching { evaluate(application, Trigger("light", lux = lux)) }
                 .onFailure { warn("light", it) }
@@ -332,10 +393,50 @@ internal object AutomationEngine {
 
     fun onLocation(context: Context, latitude: Double, longitude: Double) {
         val application = context.applicationContext
+        lastFix = latitude to longitude
         worker.execute {
             runCatching {
                 evaluate(application, Trigger("place", latitude = latitude, longitude = longitude))
             }.onFailure { warn("place", it) }
+        }
+    }
+
+    /**
+     * 解锁了 (2.7.8 批次 9 的第二个读数源)
+     *
+     * 今天第一次解锁那一刻记下来 ([firstUnlockTodayAt]), `unlock {firstOfDay:true}` 就是"从那一下
+     * 起算, 落在 within 窗口内"。解锁也算"动过", 于是 `activity` 一条不用另接触摸
+     */
+    fun onUnlock(context: Context) {
+        val application = context.applicationContext
+        val now = System.currentTimeMillis()
+        lastUnlockAt = now
+        lastInteractionAt = now
+        if (AutomationRule.dayKey(now) != unlockDay) {
+            unlockDay = AutomationRule.dayKey(now)
+            firstUnlockTodayAt = now
+        } else if (firstUnlockTodayAt == 0L) {
+            firstUnlockTodayAt = now
+        }
+        if (rules.none { it.enabled && it.involves("unlock") }) return
+        worker.execute {
+            runCatching { evaluate(application, Trigger("unlock")) }.onFailure { warn("unlock", it) }
+        }
+    }
+
+    /**
+     * 动了一下 (窗口事件): 只给 `activity` 当读数, 不触发别的东西
+     *
+     * 这条事件在无障碍开着时来得很勤, 所以先问一句"有没有启用中的规则在乎它", 没有就不进队列 ——
+     * 一整天白判几千次是这一条最容易付的代价
+     */
+    fun onInteraction(context: Context) {
+        lastInteractionAt = System.currentTimeMillis()
+        val application = context.applicationContext
+        if (rules.none { it.enabled && it.involves("activity") }) return
+        worker.execute {
+            runCatching { evaluate(application, Trigger("activity")) }
+                .onFailure { warn("activity", it) }
         }
     }
 
@@ -360,13 +461,24 @@ internal object AutomationEngine {
 
     /* ── 判定 ────────────────────────────────────────────────────────────── */
 
+    /**
+     * 一条 trigger 来了: 把**与它有关**的规则各判一次
+     *
+     * "有关" 是 [AutomationRule.Rule.involves]: 本身就是这个 kind, 或者组合里有这一类子条件。
+     * 从前那一版按 `whenKind == trigger.kind` 一刀切, 组合规则会一个事件都收不到 —— 于是只能靠 tick,
+     * 而 tick 看不见通知与前台应用
+     */
     private fun evaluate(context: Context, trigger: Trigger) {
         refresh(context, force = false)
         val now = System.currentTimeMillis()
-        val candidates = rules.filter { it.enabled && it.whenKind == trigger.kind }
+        val candidates = rules.filter { it.enabled && it.involves(trigger.kind) }
         if (candidates.isEmpty()) return
         if (settings?.monitor(trigger.kind) == false) return
         for (rule in candidates) {
+            if (rule.whenKind in AutomationRule.COMBO_KINDS) {
+                considerCombo(context, rule, trigger, now)
+                continue
+            }
             when (val outcome = condition(rule, trigger, now)) {
                 is Outcome.Unavailable -> record(
                     context,
@@ -379,134 +491,292 @@ internal object AutomationEngine {
         }
     }
 
-    /** 一条规则此刻算不算命中 (六条各一段, 没有共享的算术) */
-    private fun condition(rule: AutomationRule.Rule, trigger: Trigger, now: Long): Outcome = when (trigger.kind) {
-        "notice" -> {
-            val packages = AutomationRule.strings(rule.whenParams["packages"])
-            val who = trigger.packageName.orEmpty()
-            val contains = rule.string("contains")
-            val titleContains = rule.string("titleContains")
-            val body = trigger.text
-            val title = trigger.title
-            when {
-                packages.isNotEmpty() && who !in packages -> Outcome.Miss("不是这些应用发的 ($who)")
-                titleContains != null && !title.contains(titleContains) ->
-                    Outcome.Miss("标题里没有「$titleContains」")
-
-                contains != null && !body.contains(contains) && !title.contains(contains) ->
-                    Outcome.Miss("正文与标题里都没有「$contains」")
-
-                else -> Outcome.Hit("通知来自 $who" + (contains?.let { ", 里面有「$it」" } ?: ""))
+    /**
+     * 一条组合规则此刻算不算命中 (D21): 每个子条件各记 `lastTrueAt`, "此刻为真" = 落在窗口内
+     *
+     * 重算的规矩分两半: **状态类**每轮都拿缓存重算 (tick 只碰它们); **瞬态/事件类**只在它自己那一下
+     * 重算, 其余时候只读新鲜标记。窗口过了标记就等于失效, 于是"两个事件差几秒到"不再要求同时
+     */
+    private fun considerCombo(
+        context: Context,
+        rule: AutomationRule.Rule,
+        trigger: Trigger,
+        now: Long,
+    ) {
+        val subs = rule.conds
+        if (subs.isEmpty()) return
+        if (rule.subKinds.any { settings?.monitor(it) == false }) return
+        val holds = subs.mapIndexed { index, one ->
+            val kind = one["kind"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val key = comboKey(rule.name, index)
+            if (kind == trigger.kind || kind in STATE_KINDS) {
+                when (holdsOne(key, kind, one, trigger, now, asSub = true)) {
+                    is Outcome.Hit -> fresh[key] = now
+                    is Outcome.Unavailable -> Unit
+                    is Outcome.Miss -> Unit
+                }
             }
+            val at = fresh[key] ?: return@mapIndexed false
+            val window = AutomationRule.windowSeconds(kind, one) * 1000L
+            now - at <= window
         }
-
-        "foreground" -> {
-            val wanted = rule.string("package").orEmpty()
-            val resolved = resolveApp(wanted)
-            when {
-                resolved == null -> Outcome.Unavailable("这个应用名这台设备上找不到 ($wanted)")
-                resolved == trigger.packageName -> Outcome.Hit("切到了 $resolved")
-                else -> Outcome.Miss("现在是 ${trigger.packageName}")
-            }
+        val detail = subs.mapIndexed { index, one ->
+            val kind = one["kind"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            "#${index + 1} $kind " + if (holds[index]) "成立" else "不成立"
+        }.joinToString(", ")
+        if (AutomationRule.combine(rule.whenKind, holds)) {
+            act(context, rule, now, "组合 ${rule.whenKind}: $detail")
+        } else if (trigger.kind != TICK) {
+            // tick 每分钟一次, 不落"没成立"的历史 (一整天下来全是它); 事件那一路照旧合并着记
+            missed(context, rule, now, "组合 ${rule.whenKind}: $detail", trigger.kind)
         }
+    }
 
-        "light" -> {
-            val lux = trigger.lux ?: return Outcome.Unavailable("光感没有读数")
-            val below = rule.number("below")
-            val above = rule.number("above")
-            val was = lightInside[rule.name] ?: false
-            val inside = when {
-                below != null -> if (was) lux <= below * 1.1 else lux <= below
-                above != null -> if (was) lux >= above * 0.9 else lux >= above
-                else -> false
-            }
-            lightInside[rule.name] = inside
-            if (!inside) {
-                lightSince.remove(rule.name)
-                return Outcome.Miss("现在是 ${"%.0f".format(lux)} lux")
-            }
-            val seconds = (rule.int("forSeconds") ?: 0).toLong()
-            if (seconds <= 0) return Outcome.Hit("光照 ${"%.0f".format(lux)} lux")
-            val since = lightSince.getOrPut(rule.name) { now }
-            return if (now - since >= seconds * 1000) {
-                Outcome.Hit("光照 ${"%.0f".format(lux)} lux 已经持续 ${seconds} 秒")
-            } else {
-                Outcome.Miss("光照到了, 但还没持续够 $seconds 秒")
-            }
+    /**
+     * 60 秒的 tick: 只在有组合规则时跑, 熄屏不跑, 只重算状态类
+     *
+     * 三个状态类的读数都是缓存的 —— 它不读传感器也不出门问网络, 代价是每分钟一次哈希表查询
+     */
+    private fun tickCombos(context: Context, now: Long) {
+        val combos = rules.filter { it.enabled && it.whenKind in AutomationRule.COMBO_KINDS }
+        if (combos.isEmpty()) return
+        val power = context.getSystemService(PowerManager::class.java)
+        if (power?.isInteractive == false) return
+        tickCount += 1
+        lastTickAt = now
+        for (rule in combos) {
+            if (rule.subKinds.any { settings?.monitor(it) == false }) continue
+            considerCombo(context, rule, Trigger(TICK), now)
         }
+    }
 
-        "time" -> {
-            val minutes = rule.atMinutes
-            val days = rule.weekdays
-            val target = rule.nextFireAt(now - LATE_WINDOW_MINUTES * 60_000L - 1, timeZone())
-                ?: return Outcome.Miss("今天不是这一天")
-            val late = now - target
-            when {
-                days.isNotEmpty() && !days.contains(dayOfWeek(now)) -> Outcome.Miss("今天不是这一天")
-                minutes == null -> Outcome.Unavailable("这条规则没有写时间")
-                late > LATE_WINDOW_MINUTES * 60_000L -> Outcome.Miss("闹钟晚了 ${late / 60_000} 分钟")
-                late > 60_000L -> Outcome.Hit("到点了 (晚了 ${late / 60_000} 分钟)")
-                else -> Outcome.Hit("到点了")
+    /** 一条规则的一个子条件最后为真是什么时候 (`op=status` 读它) */
+    data class SubFreshness(val index: Int, val kind: String, val at: Long)
+
+    /**
+     * 一条**叶子**规则此刻算不算命中 —— 六条各一段, 没有共享的算术
+     *
+     * [key] 是这条规则 (或这个子条件) 在几本账里的名字: 光感的迟滞与"持续多少秒"按它记, 组合里的
+     * 子条件之间互不干扰
+     */
+    private fun condition(rule: AutomationRule.Rule, trigger: Trigger, now: Long): Outcome =
+        holdsOne(rule.name, rule.whenKind, rule.whenParams, trigger, now, asSub = false)
+
+    /**
+     * 一个条件 (叶子规则或组合里的子条件) 此刻真不真
+     *
+     * @param asSub 组合里的 `time` 子条件按**窗口**算 ("这个时刻最近 within 秒内"), 叶子那条仍按闹钟
+     *   迟到窗口算 —— 前者是"到点之后半小时内都算成立", 后者是"闹钟晚了几分钟也算响过"
+     */
+    private fun holdsOne(
+        key: String,
+        kind: String,
+        params: JsonObject,
+        trigger: Trigger,
+        now: Long,
+        asSub: Boolean,
+    ): Outcome {
+        fun s(key: String) = params[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        fun n(key: String) = params[key]?.jsonPrimitive?.doubleOrNull
+        fun i(key: String) = params[key]?.jsonPrimitive?.intOrNull
+        return when (kind) {
+            "notice" -> {
+                val packages = AutomationRule.strings(params["packages"])
+                val who = trigger.packageName.orEmpty()
+                val contains = s("contains")
+                val titleContains = s("titleContains")
+                val body = trigger.text
+                val title = trigger.title
+                when {
+                    packages.isNotEmpty() && who !in packages -> Outcome.Miss("不是这些应用发的 ($who)")
+                    titleContains != null && !title.contains(titleContains) ->
+                        Outcome.Miss("标题里没有「$titleContains」")
+
+                    contains != null && !body.contains(contains) && !title.contains(contains) ->
+                        Outcome.Miss("正文与标题里都没有「$contains」")
+
+                    else -> Outcome.Hit("通知来自 $who" + (contains?.let { ", 里面有「$it」" } ?: ""))
+                }
             }
-        }
 
-        "once" -> {
-            val at = rule.onceAt ?: return Outcome.Unavailable("这一条的一次性时刻读不出来")
-            val late = now - at
-            when {
-                late < 0 -> Outcome.Miss("还没到点")
-                late > LATE_WINDOW_MINUTES * 60_000L ->
-                    Outcome.Miss("晚得太多 (${late / 60_000} 分钟), 这一条不会再响")
-
-                late > 60_000L -> Outcome.Hit("到点了 (晚了 ${late / 60_000} 分钟)")
-                else -> Outcome.Hit("到点了")
+            "foreground" -> {
+                val wanted = s("package").orEmpty()
+                val resolved = resolveApp(wanted)
+                when {
+                    resolved == null -> Outcome.Unavailable("这个应用名这台设备上找不到 ($wanted)")
+                    resolved == trigger.packageName -> Outcome.Hit("切到了 $resolved")
+                    else -> Outcome.Miss("现在是 ${trigger.packageName}")
+                }
             }
-        }
 
-        "place" -> {
-            val name = rule.string("place").orEmpty()
-            val latitude = trigger.latitude ?: return Outcome.Unavailable("这一轮没有位置")
-            val longitude = trigger.longitude ?: return Outcome.Unavailable("这一轮没有位置")
-            val place = places[name] ?: return Outcome.Unavailable("地名「$name」还没解析出来")
-            val meters = AutomationRule.distanceMeters(latitude, longitude, place.latitude, place.longitude)
-            val radius = (rule.int("radiusMeters") ?: AutomationRule.DEFAULT_RADIUS_METERS).toDouble()
-            if (meters <= radius) {
-                Outcome.Hit("离「$name」还有 ${"%.0f".format(meters)} 米")
-            } else {
-                Outcome.Miss("离「$name」还有 ${"%.0f".format(meters / 1000)} 公里")
+            "light" -> {
+                val lux = trigger.lux ?: lastLux ?: return Outcome.Unavailable("光感没有读数")
+                val below = n("below")
+                val above = n("above")
+                val was = lightInside[key] ?: false
+                val inside = when {
+                    below != null -> if (was) lux <= below * 1.1 else lux <= below
+                    above != null -> if (was) lux >= above * 0.9 else lux >= above
+                    else -> false
+                }
+                lightInside[key] = inside
+                if (!inside) {
+                    lightSince.remove(key)
+                    return Outcome.Miss("现在是 ${"%.0f".format(lux)} lux")
+                }
+                val seconds = (i("forSeconds") ?: 0).toLong()
+                if (seconds <= 0) return Outcome.Hit("光照 ${"%.0f".format(lux)} lux")
+                val since = lightSince.getOrPut(key) { now }
+                return if (now - since >= seconds * 1000) {
+                    Outcome.Hit("光照 ${"%.0f".format(lux)} lux 已经持续 ${seconds} 秒")
+                } else {
+                    Outcome.Miss("光照到了, 但还没持续够 $seconds 秒")
+                }
             }
-        }
 
-        "weather" -> {
-            val name = rule.string("place").orEmpty()
-            val reading = trigger.readings[name]
-                ?: return Outcome.Unavailable("「$name」这一轮没拿到天气")
-            val metric = rule.string("metric").orEmpty()
-            val value = when (metric) {
-                "temperature" -> reading.temperature
-                "precipitation" -> reading.precipitation
-                "weatherCode" -> reading.code?.toDouble()
-                else -> null
-            } ?: return Outcome.Unavailable("「$name」这一轮没有 $metric 这个数")
-            val below = rule.number("below")
-            val above = rule.number("above")
-            val atLeast = rule.number("atLeast")
-            val said = "${metricNameOf(metric)} ${trim(value)}"
-            when {
-                below != null && value < below -> Outcome.Hit("$said < $below")
-                above != null && value > above -> Outcome.Hit("$said > $above")
-                atLeast != null && value >= atLeast -> Outcome.Hit("$said >= $atLeast")
-                else -> Outcome.Miss(
-                    when {
-                        below != null -> "$said 不满足 < $below"
-                        above != null -> "$said 不满足 > $above"
-                        else -> "$said 不满足 >= $atLeast"
-                    },
-                )
+            "time" -> {
+                val minutes = s("at")?.let { AutomationRule.minutesOf(it) }
+                val days = (params["weekdays"] as? JsonArray)
+                    ?.mapNotNull { it.jsonPrimitive.intOrNull }
+                    .orEmpty()
+                if (asSub) {
+                    val at = minutes ?: return Outcome.Unavailable("这条规则没有写时间")
+                    val target = lastTimeAt(at, days, now) ?: return Outcome.Miss("今天不是这一天")
+                    val ago = now - target
+                    val window = AutomationRule.windowSeconds(kind, params) * 1000L
+                    return when {
+                        ago <= 60_000L -> Outcome.Hit("到点了")
+                        ago <= window -> Outcome.Hit("到点了 (${ago / 60_000} 分钟前)")
+                        else -> Outcome.Miss("离 ${s("at")} 已经 ${ago / 60_000} 分钟")
+                    }
+                }
+                val target = nextTimeAtOrNull(minutes, days, now - LATE_WINDOW_MINUTES * 60_000L - 1)
+                    ?: return Outcome.Miss("今天不是这一天")
+                val late = now - target
+                when {
+                    days.isNotEmpty() && !days.contains(dayOfWeek(now)) -> Outcome.Miss("今天不是这一天")
+                    minutes == null -> Outcome.Unavailable("这条规则没有写时间")
+                    late > LATE_WINDOW_MINUTES * 60_000L -> Outcome.Miss("闹钟晚了 ${late / 60_000} 分钟")
+                    late > 60_000L -> Outcome.Hit("到点了 (晚了 ${late / 60_000} 分钟)")
+                    else -> Outcome.Hit("到点了")
+                }
             }
-        }
 
-        else -> Outcome.Miss("不认识的 condition")
+            "once" -> {
+                val at = s("at")?.let { AutomationRule.momentOf(it) }
+                    ?: return Outcome.Unavailable("这一条的一次性时刻读不出来")
+                val late = now - at
+                when {
+                    late < 0 -> Outcome.Miss("还没到点")
+                    late > LATE_WINDOW_MINUTES * 60_000L ->
+                        Outcome.Miss("晚得太多 (${late / 60_000} 分钟), 这一条不会再响")
+
+                    late > 60_000L -> Outcome.Hit("到点了 (晚了 ${late / 60_000} 分钟)")
+                    else -> Outcome.Hit("到点了")
+                }
+            }
+
+            "place" -> {
+                val name = s("place").orEmpty()
+                val latitude = trigger.latitude ?: lastFix?.first
+                    ?: return Outcome.Unavailable("这一轮没有位置")
+                val longitude = trigger.longitude ?: lastFix?.second
+                    ?: return Outcome.Unavailable("这一轮没有位置")
+                val place = places[name] ?: return Outcome.Unavailable("地名「$name」还没解析出来")
+                val meters = AutomationRule.distanceMeters(latitude, longitude, place.latitude, place.longitude)
+                val radius = (i("radiusMeters") ?: AutomationRule.DEFAULT_RADIUS_METERS).toDouble()
+                if (meters <= radius) {
+                    Outcome.Hit("离「$name」还有 ${"%.0f".format(meters)} 米")
+                } else {
+                    Outcome.Miss("离「$name」还有 ${"%.0f".format(meters / 1000)} 公里")
+                }
+            }
+
+            "weather" -> {
+                val name = s("place").orEmpty()
+                val reading = trigger.readings[name] ?: lastReadings[name]
+                    ?: return Outcome.Unavailable("「$name」这一轮没拿到天气")
+                val metric = s("metric").orEmpty()
+                val value = when (metric) {
+                    "temperature" -> reading.temperature
+                    "precipitation" -> reading.precipitation
+                    "weatherCode" -> reading.code?.toDouble()
+                    else -> null
+                } ?: return Outcome.Unavailable("「$name」这一轮没有 $metric 这个数")
+                val below = n("below")
+                val above = n("above")
+                val atLeast = n("atLeast")
+                val said = "${metricNameOf(metric)} ${trim(value)}"
+                when {
+                    below != null && value < below -> Outcome.Hit("$said < $below")
+                    above != null && value > above -> Outcome.Hit("$said > $above")
+                    atLeast != null && value >= atLeast -> Outcome.Hit("$said >= $atLeast")
+                    else -> Outcome.Miss(
+                        when {
+                            below != null -> "$said 不满足 < $below"
+                            above != null -> "$said 不满足 > $above"
+                            else -> "$said 不满足 >= $atLeast"
+                        },
+                    )
+                }
+            }
+
+            // 共享同一个"最近一次解锁": 今天第一次解锁之后 (或最近一次解锁之后) 的 within 窗口
+            "unlock" -> {
+                val first = params["firstOfDay"]?.jsonPrimitive?.booleanOrNull == true
+                val at = if (first) firstUnlockTodayAt else lastUnlockAt
+                if (at <= 0L) {
+                    return Outcome.Miss(if (first) "今天还没有解锁过" else "还没有解锁过")
+                }
+                val ago = now - at
+                val window = AutomationRule.windowSeconds(kind, params) * 1000L
+                if (ago in 0..window) {
+                    Outcome.Hit(if (first) "今天第一次解锁 (${ago / 60_000} 分钟前)" else "解锁 (${ago / 60_000} 分钟前)")
+                } else {
+                    Outcome.Miss("解锁是 ${ago / 60_000} 分钟前的事, 出了窗口")
+                }
+            }
+
+            // 最近 N 分钟里动过 (解锁或窗口事件), 状态类: 每轮拿 lastInteractionAt 重算
+            "activity" -> {
+                val minutes = (i("withinMinutes") ?: AutomationRule.ACTIVITY_DEFAULT_MINUTES)
+                    .coerceIn(1, AutomationRule.ACTIVITY_MAX_MINUTES)
+                if (lastInteractionAt <= 0L) return Outcome.Miss("还没有动过")
+                val ago = now - lastInteractionAt
+                if (ago <= minutes * 60_000L) {
+                    Outcome.Hit("${ago / 60_000} 分钟前还动过")
+                } else {
+                    Outcome.Miss("最后动过是 ${ago / 60_000} 分钟前")
+                }
+            }
+
+            else -> Outcome.Miss("不认识的 condition")
+        }
+    }
+
+    /** 组合里那条 `time`: 今天 (或昨天) 最近一次到那个时刻是什么时候, 不看"下一次" */
+    private fun lastTimeAt(minutes: Int, days: List<Int>, now: Long): Long? {
+        val date = Instant.ofEpochMilli(now).atZone(timeZone()).toLocalDate()
+        for (back in 0..1) {
+            val day = date.minusDays(back.toLong())
+            if (days.isNotEmpty() && day.dayOfWeek.value !in days) continue
+            val at = day.atStartOfDay(timeZone()).plusMinutes(minutes.toLong()).toInstant().toEpochMilli()
+            if (at <= now) return at
+        }
+        return null
+    }
+
+    /** 叶子 `time` 那条用的"下一次" (与 [AutomationRule.Rule.nextFireAt] 同一个算法) */
+    private fun nextTimeAtOrNull(minutes: Int?, days: List<Int>, from: Long): Long? {
+        val at = minutes ?: return null
+        val today = Instant.ofEpochMilli(from).atZone(timeZone()).toLocalDate()
+        for (step in 0..8) {
+            val date = today.plusDays(step.toLong())
+            if (days.isNotEmpty() && date.dayOfWeek.value !in days) continue
+            val target = date.atStartOfDay(timeZone()).plusMinutes(at.toLong()).toInstant().toEpochMilli()
+            if (target > from) return target
+        }
+        return null
     }
 
     /** 命中了: 先过五道闸, 再决定投不投 */
@@ -535,6 +805,8 @@ internal object AutomationEngine {
                 else -> "这条规则要动手, 而「允许它自己动手」关着"
             }
             noteBlocked(context, rule, blocked, said, now)
+            // 被拦下也算这一次成立用掉了: 不清标记的话冷却一过就会按同一份新鲜标记再响一次
+            clearFresh(rule)
             // 一次性规则的时刻已经过去: 拦下也算它用掉了 (不会再有下一拍)
             retireOnce(context, rule)
             return
@@ -555,8 +827,19 @@ internal object AutomationEngine {
                 delivered = seq != null,
             ),
         )
+        // 同一次成立只响一声: 组合那条把子条件的新鲜标记清一次 (叶子规则没有标记, 这里是空转)
+        clearFresh(rule)
         // 一次性规则响过一次就关掉 (它的时刻已经过去, 再留着只会让主人以为它还会响)
         retireOnce(context, rule)
+    }
+
+    /** 组合子条件的账名: "规则名#序号" */
+    private fun comboKey(rule: String, index: Int): String = "$rule#$index"
+
+    /** 把一条组合规则所有子条件的新鲜标记清掉 (一次成立之后) */
+    private fun clearFresh(rule: AutomationRule.Rule) {
+        if (rule.whenKind !in AutomationRule.COMBO_KINDS) return
+        rule.conds.indices.forEach { fresh.remove(comboKey(rule.name, it)) }
     }
 
     /**
@@ -721,6 +1004,8 @@ internal object AutomationEngine {
                 readings[name] = reading
                 synchronized(weatherLock) {
                     weather = weather + (name to AutomationWeather.describe(reading))
+                    // 组合的 tick 与"别的条件送来时"都拿这一份缓存重算天气, 不必每分钟问一次网络
+                    lastReadings = lastReadings + (name to reading)
                 }
             }
             if (readings.isNotEmpty()) {
@@ -774,13 +1059,15 @@ internal object AutomationEngine {
 
     /* ── 给 `status` 与设置页读的几件事 ─────────────────────────────────── */
 
-    /** 六个监测器此刻的状态 (一行一句) */
+    /** 九个监测器此刻的状态 (一行一句) */
     fun monitorStates(context: Context): List<Pair<String, String>> {
         val on = settings
         // 有启用的规则、却没能挂上: 那一句要说**为什么** (缺权限 / 无障碍关着 / 网络定位关着), 而不是
         // 一句"现在没有这一类启用的规则" —— 后者在主人眼里等于"这条规则被吃了"
-        val wantedKinds = rules.filter { it.enabled }.map { it.whenKind }.toSet()
-        return AutomationRule.WHEN_KINDS.map { kind ->
+        val wantedKinds = rules.filter { it.enabled }.flatMap { rule ->
+            if (rule.whenKind in AutomationRule.COMBO_KINDS) rule.subKinds else listOf(rule.whenKind)
+        }.toSet()
+        return AutomationRule.WATCH_KINDS.map { kind ->
             val enabled = on?.monitor(kind) ?: true
             val running = kind in AutomationMonitors.running()
             val why = when {
@@ -836,6 +1123,31 @@ internal object AutomationEngine {
 
     /** 今天主动说了几次 (设置页「探索」段那一行读数) */
     fun saidToday(context: Context): Int = AutomationStore.saidToday(context)
+
+    /**
+     * 一条组合规则每个子条件最近一次为真是什么时候 (0 = 还没有)
+     *
+     * `op=status` 靠它答"为什么没响": 缺这一行, 组合规则不响时只剩一句"没成立", 看不出是哪一个子条件
+     * 一直没新鲜过
+     */
+    fun subFreshness(rule: String): List<SubFreshness> {
+        val one = rules.firstOrNull { it.name == rule } ?: return emptyList()
+        if (one.whenKind !in AutomationRule.COMBO_KINDS) return emptyList()
+        return one.conds.mapIndexed { index, cond ->
+            SubFreshness(
+                index = index,
+                kind = cond["kind"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                at = fresh[comboKey(rule, index)] ?: 0L,
+            )
+        }
+    }
+
+    /** tick 跑了多少次 / 最近一次是什么时候 (风险 17 那条读数) */
+    fun tickReadings(): Pair<Long, Long> = tickCount to lastTickAt
+
+    /** 解锁与"动过"两条读数 (`status` 里那一行) */
+    fun interactionReadings(): Triple<Long, Long, Long> =
+        Triple(firstUnlockTodayAt, lastUnlockAt, lastInteractionAt)
 
     /**
      * 设置页那个「立刻跑一次」: 不走条件, 也不走冷却与静默 —— 主人自己点的那一下就是"现在做"

@@ -3047,7 +3047,7 @@ private fun QuickCreateDialog(
     }
 }
 
-/** 六个监测器的名字: 与 `AutomationRule.WHEN_KINDS` 一对一 (顺序就是那一份的顺序) */
+/** 九个监测器的名字: 与 `AutomationRule.WATCH_KINDS` 一对一 (顺序就是那一份的顺序) */
 private val AutomationMonitorTitles = linkedMapOf(
     "notice" to R.string.settings_automation_monitor_notice,
     "foreground" to R.string.settings_automation_monitor_foreground,
@@ -3055,6 +3055,8 @@ private val AutomationMonitorTitles = linkedMapOf(
     "time" to R.string.settings_automation_monitor_time,
     "place" to R.string.settings_automation_monitor_place,
     "weather" to R.string.settings_automation_monitor_weather,
+    "unlock" to R.string.settings_automation_monitor_unlock,
+    "activity" to R.string.settings_automation_monitor_activity,
     "once" to R.string.settings_automation_monitor_once,
 )
 

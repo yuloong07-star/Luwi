@@ -2,8 +2,10 @@ package io.github.yuloong07star.luwi.automation
 
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -23,14 +25,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 七个监测器: 该起来的起来, 不该起来的**一个都不留**
+ * 九个监测器: 该起来的起来, 不该起来的**一个都不留**
  *
  * 低功耗那句口径落在这一层, 形状是三条:
  *
  * 1. **按需注册**: [AutomationEngine] 每拍算出"此刻有哪几类启用的规则", 只有那几类被挂上; 规则删掉
- *    或关掉, 下一拍就摘掉 —— 一条规则都没有时, 进程里没有 sensor / location / alarm 注册
+ *    或关掉, 下一拍就摘掉 —— 一条规则都没有时, 进程里没有 sensor / location / alarm / 接收器注册
  * 2. **事件优先**: 通知与前台应用是系统推过来的 (一个钩子, 零轮询); 光感是一条 `SENSOR_DELAY_NORMAL`
- *    的监听 (最省的那一档); 时间与一次性**共用一个**闹钟 —— 所有 `time` / `once` 规则里最近的那一个
+ *    的监听 (最省的那一档); 解锁与"动过"各一条: 前者是系统广播, 后者挂在既有窗口事件链上; 时间与
+ *    一次性**共用一个**闹钟 —— 所有 `time` / `once` 规则里最近的那一个
  * 3. **轮询只剩两条**: 天气按设置页那个分钟档问一次 Open-Meteo, 位置用 `NETWORK_PROVIDER` (balanced:
  *    极少 GPS) 加"至少隔多久 / 至少移动多远"两个数; 省电生效时这两条整个不注册
  *
@@ -48,6 +51,16 @@ internal object AutomationMonitors {
     private var foreground: AutoCloseable? = null
     private var light: SensorEventListener? = null
     private var location: LocationListener? = null
+
+    /** 解锁那条: 一条动态注册的接收器 (`ACTION_USER_PRESENT` 不需要任何权限) */
+    private var unlock: BroadcastReceiver? = null
+
+    /** "动过"那条: 既有的窗口事件链 (无障碍), 与 [foreground] 同一条来源, 各挂各的回调 */
+    private var activity: AutoCloseable? = null
+
+    /** 停的时候要注销那条接收器, 而 [stopAll] 从来只收不到 Context, 所以起来时记一份 */
+    private var host: Context? = null
+
     private var alarmAt = 0L
     private var alarmExact = true
     private var wanted: Set<String> = emptySet()
@@ -65,6 +78,7 @@ internal object AutomationMonitors {
      */
     fun apply(context: Context, wanted: Set<String>, paused: Boolean) {
         this.wanted = wanted
+        host = context.applicationContext
         // 通知: 一条钩子, 零成本; 没有这一类规则时摘掉, 免得白白收一整天
         if ("notice" in wanted) {
             if (notice == null) {
@@ -84,6 +98,34 @@ internal object AutomationMonitors {
         } else {
             foreground?.close()
             foreground = null
+        }
+        // 解锁: 系统广播, 动态注册即可 (清单里声明的那种要 export, 这里反而更省)
+        if ("unlock" in wanted) {
+            if (unlock == null) {
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(from: Context, intent: Intent?) {
+                        if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                            AutomationEngine.onUnlock(context)
+                        }
+                    }
+                }
+                val registered = runCatching {
+                    context.registerReceiver(receiver, IntentFilter(Intent.ACTION_USER_PRESENT))
+                }.getOrNull()
+                if (registered != null) unlock = receiver
+            }
+        } else {
+            unlock?.let { receiver -> runCatching { context.unregisterReceiver(receiver) } }
+            unlock = null
+        }
+        // "动过": 窗口事件那条链 (无障碍开着时才有事件), 解锁那一路在引擎里另外记一笔
+        if ("activity" in wanted && LwAccessibility.running) {
+            if (activity == null) {
+                activity = LwAccessibility.watchWindows { _, _ -> AutomationEngine.onInteraction(context) }
+            }
+        } else {
+            activity?.close()
+            activity = null
         }
         // 光感: 最省的那一档
         val sensors = context.getSystemService(SensorManager::class.java)
@@ -211,6 +253,10 @@ internal object AutomationMonitors {
         notice = null
         foreground?.close()
         foreground = null
+        unlock?.let { receiver -> host?.let { runCatching { it.unregisterReceiver(receiver) } } }
+        unlock = null
+        activity?.close()
+        activity = null
         light = null
         location = null
         alarmAt = 0L
@@ -223,6 +269,8 @@ internal object AutomationMonitors {
         if (foreground != null) add("foreground")
         if (light != null) add("light")
         if (location != null) add("place")
+        if (unlock != null) add("unlock")
+        if (activity != null) add("activity")
         // 时间与一次性共用一个闹钟: 谁在这一刻的 wanted 里就报谁
         if (alarmAt != 0L) {
             if ("time" in wanted) add("time")
@@ -244,6 +292,18 @@ internal object AutomationMonitors {
             "无障碍开着, 窗口一变就知道 (不着 UsageStats)"
         } else {
             "不可用: 无障碍关着 (这一条只用无障碍事件, 不退回轮询)"
+        }
+
+        "unlock" -> if (unlock != null) {
+            "解锁广播在听 (今天第一次解锁那一刻记着)"
+        } else {
+            "不可用: 解锁广播没挂上"
+        }
+
+        "activity" -> when {
+            activity != null -> "窗口事件链在听 (解锁也记一笔)"
+            !LwAccessibility.running -> "不可用: 无障碍关着 (解锁那一路仍算)"
+            else -> "窗口事件链没挂上 (解锁那一路仍算)"
         }
 
         "light" -> {

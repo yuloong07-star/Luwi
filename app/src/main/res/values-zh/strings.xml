@@ -446,13 +446,15 @@
     <string name="settings_automation_last">上次 %1$s</string>
     <string name="settings_automation_rule_cooldown">冷却 %1$d 分钟</string>
     <string name="settings_automation_rule_no_cooldown">不冷却</string>
-    <string name="settings_automation_monitors">七个监测器: 没有启用的规则就不注册 (省电那条口径的落点)</string>
+    <string name="settings_automation_monitors">九个监测器: 没有启用的规则就不注册 (省电那条口径的落点)</string>
     <string name="settings_automation_monitor_notice">通知</string>
     <string name="settings_automation_monitor_foreground">前台应用</string>
     <string name="settings_automation_monitor_light">光感</string>
     <string name="settings_automation_monitor_time">时间</string>
     <string name="settings_automation_monitor_place">地点</string>
     <string name="settings_automation_monitor_weather">天气</string>
+    <string name="settings_automation_monitor_unlock">解锁</string>
+    <string name="settings_automation_monitor_activity">动手</string>
     <string name="settings_automation_monitor_once">只响一次</string>
     <string name="settings_automation_every_minutes">每 %1$d 分钟</string>
     <string name="settings_automation_every_meters">至少移动 %1$d 米</string>

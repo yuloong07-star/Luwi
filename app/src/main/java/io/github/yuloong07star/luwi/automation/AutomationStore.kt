@@ -71,7 +71,7 @@ internal object AutomationStore {
     /** 一次最多读回多少条历史 */
     const val MAX_HISTORY = 200
 
-    /** 七个监测器 + 频率档 + 静默时段 + "允许它自己动手" + 每天最多主动说几次 */
+    /** 九个监测器 + 频率档 + 静默时段 + "允许它自己动手" + 每天最多主动说几次 */
     data class Settings(
         val monitors: Map<String, Boolean>,
         val weatherMinutes: Int,
@@ -207,7 +207,7 @@ internal object AutomationStore {
         val root = raw?.let { runCatching { AutomationJson.parse(it) }.getOrNull() } ?: JsonObject(emptyMap())
         val monitors = AutomationRule.objectOrEmpty(root["monitors"])
         return Settings(
-            monitors = AutomationRule.WHEN_KINDS.associateWith { kind ->
+            monitors = AutomationRule.WATCH_KINDS.associateWith { kind ->
                 AutomationRule.boolOr(monitors[kind], true)
             },
             weatherMinutes = coerce(

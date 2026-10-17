@@ -110,18 +110,28 @@ check(
   [true, true],
 )
 
-/* ── 二、六个 when.kind 与两种 then.kind 在说明里都念到了 ───────────────── */
+/* ── 二、八个叶子 kind / 两种组合 / 两种 then.kind 在说明里都念到了 ──────── */
 
 const automation = pluginBody('lw_automation')
-const kinds = kotlinList(rule, 'WHEN_KINDS')
+const leaf = kotlinList(rule, 'LEAF_KINDS')
+const combo = kotlinList(rule, 'COMBO_KINDS')
+const watch = [...leaf, 'once']
+const kinds = [...watch, ...combo]
 const thenKinds = kotlinList(rule, 'THEN_KINDS')
 
-check('七个监测器是那七个 (批次 8 加了 once)', kinds, [
-  'notice', 'foreground', 'light', 'time', 'place', 'weather', 'once',
+check('八个叶子条件是那八个 (批次 9 加了 unlock / activity)', leaf, [
+  'notice', 'foreground', 'light', 'time', 'place', 'weather', 'unlock', 'activity',
 ])
 
+check('两种组合是 all 与 any', combo, ['all', 'any'])
+
+check('九个监测源 = 叶子 + once, 十一个 kind = 监测源 + 组合', [
+  /val WATCH_KINDS = LEAF_KINDS \+ "once"/.test(rule),
+  /val WHEN_KINDS = WATCH_KINDS \+ COMBO_KINDS/.test(rule),
+], [true, true])
+
 check(
-  '七个 kind 在插件说明里逐个念到 (写成 `notice {` 这样)',
+  '十一个 kind 在插件说明里逐个念到 (写成 `notice {` 这样)',
   kinds.map((kind) => automation.includes(`${kind} {`)),
   kinds.map(() => true),
 )
@@ -249,7 +259,10 @@ check(
 
 /* ── 七、一次性 once (2.7.8 批次 8) ─────────────────────────────────────── */
 
-check('once 在 Kotlin 名单里, 而且只有这一处多出来', [kinds.length, kinds.at(-1)], [7, 'once'])
+check('once 在监测源名单里, 而且组合不爱收它 (组合只收八个叶子)', [
+  watch.at(-1),
+  /sub !in LEAF_KINDS/.test(rule),
+], ['once', true])
 
 check('插件说明里念到 once 与带时区的例子', [
   automation.includes('once {at:"2026-10-18T21:30:00+08:00"}'),
@@ -306,6 +319,111 @@ check('那本账从 history.jsonl 现算 (只数 task / 投出去的 / 非手动
   /one\.delivered != false/.test(store),
   /fun saidToday\(/.test(store),
 ], [true, true, true, true])
+
+/* ── 九、「且」与「或」那一批 (2.7.8 批次 9) ─────────────────────────────── */
+
+const monitors = await read('app/src/main/java/io/github/yuloong07star/luwi/automation/AutomationMonitors.kt')
+const combineTest = await read(
+  'app/src/test/java/io/github/yuloong07star/luwi/automation/AutomationCombineTest.kt',
+)
+
+check('组合的形状校验在那一处, 而且与叶子共用 validateOne', [
+  /private fun validateCombo\(/.test(rule),
+  /conds has to hold \$COMBO_MIN_CONDS\.\.\$COMBO_MAX_CONDS/.test(rule),
+  /private fun validateOne\(when_: JsonObject, kind: String\)/.test(rule),
+  /problems \+= validateOne\(one, sub\)/.test(rule),
+], [true, true, true, true])
+
+check('两个常数是 2 与 5 (不许嵌套由 kind 那一支拦)', [
+  kotlinNumber(rule, 'COMBO_MIN_CONDS'),
+  kotlinNumber(rule, 'COMBO_MAX_CONDS'),
+  /nesting an \$sub inside \$kind is not supported/.test(rule),
+], [2, 5, true])
+
+check('新鲜的三个缺省: 1800 / 120 / 300 秒', [
+  kotlinNumber(rule, 'TIME_WINDOW_SECONDS'),
+  kotlinNumber(rule, 'EVENT_WINDOW_SECONDS'),
+  kotlinNumber(rule, 'STATE_WINDOW_SECONDS'),
+  /fun windowSeconds\(kind: String, params: JsonObject\): Int/.test(rule),
+], [1800, 120, 300, true])
+
+check('combine 是纯函数, 真值表由单测钉着', [
+  /fun combine\(kind: String, holds: List<Boolean>\): Boolean/.test(rule),
+  combineTest.includes('combine("all"'),
+  combineTest.includes('combine("any"'),
+  combineTest.includes('fun nestingIsRefusedWithAWayOut'),
+], [true, true, true, true])
+
+check('引擎按"这条 trigger 与这条规则有关"过滤, 不再按 kind 一刀切', [
+  /it\.enabled && it\.involves\(trigger\.kind\)/.test(engine),
+  /fun involves\(kind: String\): Boolean/.test(rule),
+  !/it\.whenKind == trigger\.kind \}/.test(engine),
+], [true, true, true])
+
+check('60 秒 tick: 只在有组合时跑, 熄屏不跑, 只重算状态类', [
+  /private fun tickCombos\(context: Context, now: Long\)/.test(engine),
+  /PowerManager::class\.java/.test(engine),
+  /isInteractive == false\) return/.test(engine),
+  /STATE_KINDS = setOf\("time", "light", "place", "weather", "activity"\)/.test(engine),
+  /tickCombos\(context, now\)/.test(engine),
+], [true, true, true, true, true])
+
+check('命中之后把新鲜标记清一次 (同一次成立只响一声)', [
+  /private fun clearFresh\(rule: AutomationRule\.Rule\)/.test(engine),
+  /clearFresh\(rule\)/.test(engine),
+], [true, true])
+
+check('状态类重算用缓存, 不另开轮询', [
+  /private var lastLux: Double\?/.test(engine),
+  /private var lastFix: Pair<Double, Double>\?/.test(engine),
+  /lastReadings = lastReadings \+ \(name to reading\)/.test(engine),
+  /trigger\.lux \?: lastLux/.test(engine),
+], [true, true, true, true])
+
+check('两个读数源: 解锁广播 + 窗口事件链', [
+  /Intent\.ACTION_USER_PRESENT/.test(monitors),
+  /registerReceiver\(receiver, IntentFilter\(Intent\.ACTION_USER_PRESENT\)\)/.test(monitors),
+  /unregisterReceiver\(receiver\)/.test(monitors),
+  /LwAccessibility\.watchWindows \{ _, _ -> AutomationEngine\.onInteraction\(context\) \}/.test(monitors),
+  /fun onUnlock\(context: Context\)/.test(engine),
+  /fun onInteraction\(context: Context\)/.test(engine),
+], [true, true, true, true, true, true])
+
+check('firstOfDay 与"最近 N 分钟在动"都能算', [
+  /firstUnlockTodayAt/.test(engine),
+  /lastInteractionAt/.test(engine),
+  /ACTIVITY_DEFAULT_MINUTES/.test(rule),
+], [true, true, true])
+
+const titleBlock = (screen.match(/private val AutomationMonitorTitles = linkedMapOf\(([\s\S]*?)\n\)/) ?? [])[1] ?? ''
+const titleKinds = [...titleBlock.matchAll(/"(\w+)" to R\.string\./g)].map((one) => one[1])
+check('设置页监视器名单与九个监测源对齐', titleKinds, watch)
+
+check('两份 strings 都有解锁与动手那两条', [
+  zh.includes('name="settings_automation_monitor_unlock"'),
+  en.includes('name="settings_automation_monitor_unlock"'),
+  zh.includes('name="settings_automation_monitor_activity"'),
+  en.includes('name="settings_automation_monitor_activity"'),
+], [true, true, true, true])
+
+check('settings.json 的 monitors 那张表只收监测源 (组合没有自己的开关)', [
+  /AutomationRule\.WATCH_KINDS\.associateWith/.test(store),
+], [true])
+
+check('status 多给"每个子条件最近一次为真"与 tick 两条读数', [
+  /fun subFreshness\(rule: String\): List<SubFreshness>/.test(engine),
+  /the sub-conditions of the combinations/.test(tool),
+  /fun tickReadings\(\): Pair<Long, Long>/.test(engine),
+  /combo tick/.test(tool),
+], [true, true, true, true])
+
+check('插件说明念清组合的三件事 (八档 / 不许嵌套 / 老形状不动)', [
+  automation.includes('The eight condition kinds'),
+  automation.includes('they do not nest'),
+  automation.includes('The old single-kind shape is unchanged'),
+  automation.includes('judges on **freshness**'),
+  automation.includes('within:120'),
+], [true, true, true, true, true])
 
 console.log(`\n${checks - failures} / ${checks} 条通过`)
 if (failures > 0) process.exit(1)
