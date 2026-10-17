@@ -229,6 +229,67 @@ private val CollapsedSections = listSaver<Set<String>, String>(
 )
 
 /**
+ * 缺省展开的白名单 (D1, 2026-10-17 主人拍板): 省电那一段 + 「常用」一级分组下那六段
+ *
+ * 省电为什么也算: 它排在页面上第一个、只有三行, 是"现在别听我说话"那一下子, 属于天天要碰的
+ * (主人 2026-10-08: "省电模式单独拿出来放第一排")
+ */
+internal val SettingsSectionsAlwaysOpenKeys = listOf(
+    "power", "appearance", "navigation", "channel", "ball", "wake", "speak",
+)
+
+/** 白名单的集合形态, 给 [defaultCollapsed] 算差集用 */
+internal val SettingsSectionsAlwaysOpen: Set<String> = SettingsSectionsAlwaysOpenKeys.toSet()
+
+/** 「能力」那一组的 13 段, 缺省全收着 (装完之后偶尔来调一次的那些) */
+private val AbilitySectionKeys = listOf(
+    "accessibility", "notifications", "screenshot", "look", "ocr", "lock",
+    "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
+)
+
+/**
+ * 页面上那 20 段的段名, **顺序就是从上到下**
+ *
+ * 它只为一件事存在: 算"缺省收起来的那几段" ([defaultCollapsed])。**新加一段时必须同时加到这里** ——
+ * 漏掉它不会报错, 只是那一段会恰好展开着 (与 D2 那条"新加的段就收着"相反), 界面上一点异常都看不出来,
+ * 所以 `tools/check-settings-sections.mjs` 把这一份与下面那些 `settingsSection(key = …)` 逐个对齐 (顺序也管)
+ */
+internal val SettingsSectionKeys: List<String> = SettingsSectionsAlwaysOpenKeys + AbilitySectionKeys
+
+/**
+ * 缺省收起来的那几段 = 页面上所有段 - 白名单
+ *
+ * **D2**: 按"不在白名单里就收着"算, 于是以后新加的一段天然是收起来的。2026-10-08 那条注释写的是
+ * 反过来 ("存的是收起来的那几段, 于是新加一段时它自己就是展开的") —— 2026-10-16 第 1 条把这条账翻了个面,
+ * 那位主人要的就是"进设置页先看见常用那几段"
+ */
+internal fun defaultCollapsed(
+    all: List<String>,
+    expanded: Set<String> = SettingsSectionsAlwaysOpen,
+): Set<String> = (all - expanded).toSet()
+
+/**
+ * 这一次应用里主人手动调过的那一份 (退出设置页再进来要接着用), **进程死了回缺省**
+ *
+ * `rememberSaveable` 只活一次界面: 转屏兜得住, 但**退出设置页再进来**是一次新建的组合, 它手上没有
+ * 上一次那份 —— 2026-10-17 在模拟器上量到的就是这个 (手动点开「通知」, 返回主页再进设置页, 它又收起
+ * 来了), 而第 1 条的判据要的是"手动点开一段再退出再进, 那一段仍是开的"。所以记一份在进程里:
+ * 它仍然**不是偏好** (不落盘, 冷启动就是缺省), 只是"这一眼怎么看"在这一次应用里记着
+ */
+private var sessionCollapsed: Set<String>? = null
+
+/**
+ * 进页面时该用那一份 `collapsed`: 主人这一次调过就照他调的, 没调过就是缺省那一份
+ *
+ * 抽成纯函数是为了那条"退出再进"的判据能在单测里量 ([SettingsSectionsTest]),
+ * 不必真的去点界面
+ */
+internal fun initialCollapsed(
+    session: Set<String>?,
+    all: List<String> = SettingsSectionKeys,
+): Set<String> = session ?: defaultCollapsed(all)
+
+/**
  * 页面上的一段: 可收起的标题 + 展开时那一坨内容
  *
  * **标题那两句话在这一层取**: [LazyListScope] 的 lambda 不是组合上下文 (它画的是"有哪些 item"),
@@ -281,14 +342,17 @@ fun SettingsScreen() {
     // 同一刻只画一个对话框, 见 AboutDialogs 的文件头
     var about by remember { mutableStateOf<AboutPage?>(null) }
     // 捐赠页那一行要跟着"刚填过的那个地址"变, 而它在偏好里 —— 对话框关掉时重新读一次
-    // 收起来的那几段 (主人 2026-10-08: "把各设置版块设置为可折叠的"): 键是段名, **缺省全展开** ——
-    // 第一次进来的人要看得见每一段里是什么。存的是"收起来的那几段"而不是"展开的那几段", 于是以后
-    // 新加一段时它自己就是展开的 (那正是新功能该有的样子)
+    // 收起来的那几段 (主人 2026-10-08: "把各设置版块设置为可折叠的"; 2026-10-16 第 1 条: 进页面只展开
+    // 省电与「常用」那六段, 能力那 13 段收着): **缺省只展开白名单那七段** ([SettingsSectionsAlwaysOpen]),
+    // 存的是"收起来的那几段"而不是"展开的那几段", 于是以后新加一段时它天然是收着的 (D2) —— 与 2026-10-08
+    // 那版相反, 那时缺省全展开, 新加的一段自然是展开的。主人手动点过的那一段 (开或收) 都记在这一份里:
+    // 转屏由 `rememberSaveable` 兜, **退出设置页再进来**由那份进程里的记忆兜 (见 [sessionCollapsed])
     var collapsed by rememberSaveable(stateSaver = CollapsedSections) {
-        mutableStateOf(emptySet<String>())
+        mutableStateOf(initialCollapsed(sessionCollapsed))
     }
     val toggleSection: (String) -> Unit = { key ->
         collapsed = if (key in collapsed) collapsed - key else collapsed + key
+        sessionCollapsed = collapsed
     }
 
     Scaffold(
