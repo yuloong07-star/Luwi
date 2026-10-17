@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.host.AppSkills
 import io.github.yuloong07star.luwi.scaffolds.LazyColumn
@@ -91,30 +92,6 @@ fun SkillsInstalledScreen() {
         },
     ) { padding ->
         LazyColumn(contentPadding = padding, scrollBehavior = scrollBehavior) {
-            // 点一条先问"卸不卸": 卡片摆在列表最上面
-            asking?.let { skill ->
-                item(key = "confirm") {
-                    ConfirmCard(
-                        title = skill.id,
-                        body = stringResource(R.string.skills_version, skill.version.ifBlank { "?" }, skill.files) +
-                            "\n" + stringResource(R.string.skills_uninstall_summary, skill.id),
-                        primary = stringResource(R.string.skills_uninstall),
-                        onPrimary = {
-                            asking = null
-                            busy = true
-                            scope.launch {
-                                val report = withContext(Dispatchers.IO) {
-                                    AppSkills.remove(context, listOf(skill.id))
-                                }
-                                message = context.getString(R.string.skills_removed, report.wrote.size)
-                                revision += 1
-                                busy = false
-                            }
-                        },
-                        onCancel = { asking = null },
-                    )
-                }
-            }
             item {
                 ArrowPreference(
                     title = stringResource(R.string.skills_check_updates),
@@ -180,6 +157,27 @@ fun SkillsInstalledScreen() {
             }
             if (message.isNotBlank()) item { Notice(message) }
         }
+    }
+
+    // 点一条先问"卸不卸": **真弹窗** (主人 2026-10-17: 不要固定在顶部, 要真的弹出来)
+    asking?.let { skill ->
+        ConfirmDialog(
+            title = skill.id,
+            body = stringResource(R.string.skills_version, skill.version.ifBlank { "?" }, skill.files) +
+                "\n" + stringResource(R.string.skills_uninstall_summary, skill.id),
+            primary = stringResource(R.string.skills_uninstall),
+            onPrimary = {
+                asking = null
+                busy = true
+                scope.launch {
+                    val report = withContext(Dispatchers.IO) { AppSkills.remove(context, listOf(skill.id)) }
+                    message = context.getString(R.string.skills_removed, report.wrote.size)
+                    revision += 1
+                    busy = false
+                }
+            },
+            onCancel = { asking = null },
+        )
     }
 }
 
@@ -257,43 +255,6 @@ fun SkillsAvailableScreen() {
         },
     ) { padding ->
         LazyColumn(contentPadding = padding, scrollBehavior = scrollBehavior) {
-            // 点一条先问"装不装 / 升不升"
-            asking?.let { ask ->
-                val skill = ask.skill
-                item(key = "confirm") {
-                    ConfirmCard(
-                        title = skill.title,
-                        body = skillSummary(context, skill, skill.id in installed),
-                        primary = stringResource(
-                            if (ask.upgrade) {
-                                R.string.settings_skills_browse_upgrade
-                            } else {
-                                R.string.settings_skills_browse_install
-                            },
-                        ),
-                        onPrimary = {
-                            asking = null
-                            if (ask.upgrade) runUpgrade(skill, false) else runInstall(skill)
-                        },
-                        onCancel = { asking = null },
-                    )
-                }
-            }
-            // 升级时"这几个文件本地改过": 同一张确认卡
-            edited?.let { (skill, files) ->
-                item(key = "edited") {
-                    ConfirmCard(
-                        title = stringResource(R.string.settings_skills_browse_edited_title),
-                        body = stringResource(R.string.settings_skills_browse_edited_summary, files.joinToString(", ")),
-                        primary = stringResource(R.string.settings_skills_browse_edited_overwrite),
-                        onPrimary = {
-                            edited = null
-                            runUpgrade(skill, true)
-                        },
-                        onCancel = { edited = null },
-                    )
-                }
-            }
             item {
                 SuperTextField(
                     value = query,
@@ -364,6 +325,37 @@ fun SkillsAvailableScreen() {
             }
             if (message.isNotBlank()) item { Notice(message) }
         }
+    }
+
+    // 点一条先问"装不装 / 升不升": **真弹窗**
+    asking?.let { ask ->
+        val skill = ask.skill
+        ConfirmDialog(
+            title = skill.title,
+            body = skillSummary(context, skill, skill.id in installed),
+            primary = stringResource(
+                if (ask.upgrade) R.string.settings_skills_browse_upgrade else R.string.settings_skills_browse_install,
+            ),
+            onPrimary = {
+                asking = null
+                if (ask.upgrade) runUpgrade(skill, false) else runInstall(skill)
+            },
+            onCancel = { asking = null },
+        )
+    }
+
+    // 升级时"这几个文件本地改过": 同一份弹窗
+    edited?.let { (skill, files) ->
+        ConfirmDialog(
+            title = stringResource(R.string.settings_skills_browse_edited_title),
+            body = stringResource(R.string.settings_skills_browse_edited_summary, files.joinToString(", ")),
+            primary = stringResource(R.string.settings_skills_browse_edited_overwrite),
+            onPrimary = {
+                edited = null
+                runUpgrade(skill, true)
+            },
+            onCancel = { edited = null },
+        )
     }
 }
 
@@ -567,9 +559,15 @@ fun SkillBrowseDialog(
     }
 }
 
-/** 「要不要装 / 要不要卸」那一张确认卡 (摆在列表最上面, 不依赖窗口层级) */
+/**
+ * 「要不要装 / 要不要卸」那一份**真弹窗**
+ *
+ * 用 `androidx.compose.ui.window.Dialog` 而不是 Miuix 的 OverlayDialog: 后者在 `navigator.push`
+ * 出来的页面里挂不上窗口 (2026-10-17 在模拟器上量到的现象是"点了一条什么都没发生"), 而这一份在
+ * 任何一层都能弹出来
+ */
 @Composable
-private fun ConfirmCard(
+private fun ConfirmDialog(
     title: String,
     body: String,
     primary: String,
@@ -577,29 +575,35 @@ private fun ConfirmCard(
     onCancel: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text(text = title, color = colorScheme.onSurface)
-            Text(text = body, color = colorScheme.onSurfaceVariantActions, modifier = Modifier.padding(top = 6.dp))
-            Row(modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
-                TextButton(
-                    text = primary,
-                    onClick = {
-                        haptic.confirm()
-                        onPrimary()
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
+    Dialog(onDismissRequest = onCancel) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(text = title, color = colorScheme.onSurface)
+                Text(
+                    text = body,
+                    color = colorScheme.onSurfaceVariantActions,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
-                Spacer(Modifier.width(12.dp))
-                TextButton(
-                    text = stringResource(R.string.button_cancel),
-                    onClick = {
-                        haptic.contextClick()
-                        onCancel()
-                    },
-                    modifier = Modifier.weight(1f),
-                )
+                Row(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                    TextButton(
+                        text = primary,
+                        onClick = {
+                            haptic.confirm()
+                            onPrimary()
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    TextButton(
+                        text = stringResource(R.string.button_cancel),
+                        onClick = {
+                            haptic.contextClick()
+                            onCancel()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }

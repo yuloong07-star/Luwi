@@ -148,6 +148,13 @@ check('原来那份「浏览 app-skill 仓库」弹窗还在 (点行选中 / 底
   screens.includes('R.string.settings_skills_browse_close'),
 ], [true, true, true])
 
+check('确认是**真弹窗** (androidx Dialog, 不是列表顶上的卡片)', [
+  screens.includes('import androidx.compose.ui.window.Dialog'),
+  screens.includes('private fun ConfirmDialog('),
+  (screens.match(/ConfirmDialog\(/g) ?? []).length >= 4,
+  !screens.includes('private fun ConfirmCard('),
+], [true, true, true, true])
+
 check('已装那一页: 检测更新 / 一键升级 / 卸载 三件都在', [
   screens.includes('fun SkillsInstalledScreen('),
   screens.includes('AppSkills.updates(context'),
