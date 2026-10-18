@@ -1013,6 +1013,8 @@ OS2.0.12.0 实测), 而 `adb install` 与带 `-i` 的 pm 安装之一能过, 两
 (正常 232 MB), `tools/apk-bytes.py` 一量就是上一条那种空洞 (旧 apk 还在时新包被追加写进去)。
 先 `Remove-Item app\build\outputs\apk\debug\app-debug.apk` 再 build 就回到正常体积
 
+**发版只发 debug 包, 而且发之前必须过 `tools/lw-release-check.ps1`** (2026-10-18 定): `assembleDebug` 出来的 `app-debug.apk` 一直用 `D:\apk\.android\debug.keystore` 签, 能覆盖升级; 而 `release` 变体从前**没有挂签名**, `assembleRelease` 会直接出 `app-release-unsigned.apk` —— 装到设备上是 `INSTALL_PARSE_FAILED_NO_CERTIFICATES` ("该安装包未包含任何证书"). 现在 release 也挂同一把 key 兜底, 但**发布流程只认 app-debug.apk**: 上传前跑 `pwsh -File tools\lw-release-check.ps1`, 它核三件事 (文件名 / apksigner 验签 / 证书必须是固定那把 `65:20:84:A9…`), 不过就不许传. 换 key 等于所有人卸载重装、`files/dsh-home` 一起没
+
 ### 常用命令
 
 | 动作 | 命令 |

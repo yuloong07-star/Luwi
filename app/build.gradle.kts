@@ -255,6 +255,13 @@ android {
             optimization {
                 enable = false
             }
+            // 2026-10-18: release 变体从前没有挂签名, assembleRelease 会直接出
+            // app-release-unsigned.apk —— 装到设备上是 INSTALL_PARSE_FAILED_NO_CERTIFICATES
+            // ("该安装包未包含任何证书"). 这里挂上与 debug 同一把 key (D:\apk\.android\debug.keystore),
+            // 于是就算谁误跑了 release, 出来的包也签过名, 且与已发出去的 debug 包同签名能覆盖升级.
+            // 这不是"改发 release": 发版仍然只认 assembleDebug 的 app-debug.apk,
+            // 发布前的闸在 tools\lw-release-check.ps1
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
