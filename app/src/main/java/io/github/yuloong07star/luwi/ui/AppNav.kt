@@ -170,8 +170,17 @@ fun LuwiApp() {
             // 而这一行排在 `NavDisplay` 后面, 于是库里那个"还有上一页就 pop"的 handler 永远轮不到 ——
             // 现象就是**系统返回键在设置页与捐赠页上什么都不做** (只能点左上角那个 ←, 或者开着"横滑
             // 返回"时右滑)。原来那句注释以为这里登记得比库早, 那是错的
+            //
+            // **主页那一层还要先问网页一句** (2026-10-18): 点一条网页链接会开在右栏那个浏览器格里,
+            // 而手机上那一格是全屏的, 会话被整个盖住 —— 那时按返回只会弹「再按一次退出」。网页里
+            // 收得掉这一层就把这一下交给它 (见 [PageBack]), 收不掉才走下面那条
             BackHandler {
-                if (backStack.size > 1) navigator.pop() else onBack()
+                if (backStack.size > 1) {
+                    navigator.pop()
+                    return@BackHandler
+                }
+                val page = PageBack.handle
+                if (page == null) onBack() else page { onBack() }
             }
         }
     }

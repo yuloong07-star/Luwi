@@ -49,11 +49,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -105,6 +107,7 @@ import top.yukonga.miuix.kmp.icon.extended.Remove
 import top.yukonga.miuix.kmp.icon.extended.Tune
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -727,14 +730,21 @@ private fun HostWebView(url: String, modifier: Modifier = Modifier) {
                 // The page is the whole product surface, so its own failures need somewhere to
                 // show up: status codes, load errors, and browser console lines all go to logcat
                 webViewClient = object : WebViewClient() {
-                    // Only the host's own pages belong in this view. Anything else - a mail or
-                    // app scheme in a rendered link - would leave through the platform, which
-                    // answers with an "open with" chooser over the GUI, so a non-page scheme is
-                    // refused here and named in the log instead
+                    // Only the host's own pages belong in this view: everything here is one document,
+                    // so a link that navigates this view away **replaces the whole GUI** and there is
+                    // no way back to the session (2026-10-18: 轨迹 那个详情预览里的链接就是一例, 点完
+                    // 屏幕上只剩那个网站). 别处的链接交给系统浏览器 (主人手机上一直这么用), 非页面
+                    // 的 scheme (mail / app) 一律拒掉并记一行, 免得平台弹一个"打开方式"盖住 GUI
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val target = request.url
-                        if (target.scheme == "http" || target.scheme == "https") return false
-                        Log.w(WEB_TAG, "blocked navigation to $target")
+                        if (target.scheme != "http" && target.scheme != "https") {
+                            Log.w(WEB_TAG, "blocked navigation to $target")
+                            return true
+                        }
+                        if (sameOrigin(target, Uri.parse(url))) return false
+                        val problem = openPage(view.context, target.toString())
+                        if (problem == null) Log.i(WEB_TAG, "handed $target to the system browser")
+                        else Log.w(WEB_TAG, problem)
                         return true
                     }
 
@@ -854,6 +864,24 @@ private fun HostWebView(url: String, modifier: Modifier = Modifier) {
                 if (continuation.isActive) continuation.resume(answer.orEmpty())
             }
         }
+    }
+
+    // 返回键先问页面一句 (见 [PageBack]): 网页里那一层 (右栏的浏览器格, 手机上它是全屏的) 收得掉就
+    // 收掉, 收不掉把这一下还回去。超时按 [PAGE_BACK_MS] 而不是 `ask` 那个 5 s —— 返回键不能挂着等
+    val scope = rememberCoroutineScope()
+    DisposableEffect(page) {
+        val view = page
+        PageBack.handle = view?.let { target ->
+            { nothing ->
+                scope.launch {
+                    val answer = withTimeoutOrNull(PAGE_BACK_MS) { ask(target, PAGE_BACK_JS) }
+                    val closed = answer?.contains("closed") == true
+                    Log.i(WEB_TAG, if (closed) "back: the page closed its own layer" else "back: the page had nothing to close")
+                    if (!closed) nothing()
+                }
+            }
+        }
+        onDispose { PageBack.handle = null }
     }
 
     // 「回应用」那一跳 (**在 dsh 里也一定有反馈**, 主人 2026-10-07): 请求一来就切到那一场 —— 需要就
@@ -1091,6 +1119,16 @@ private val WINDOW_START_TOP = 120.dp
 private const val WEB_TAG = "DshWebView"
 
 /**
+ * 这一跳是不是宿主自己那一页 (scheme 与 host:port 都一样)
+ *
+ * 这个 WebView 里从头到尾**只有一个文档**: 会话界面。别处的页面一旦在这里导航成功, GUI 就被顶掉
+ * 了 —— 而它没有"历史后退"那条路可走 (dsh 的客户端根本没有用 `history`, 见 `PAGE_BACK_JS` 那一
+ * 段), 屏幕上只剩那个网站。判据只比 origin, 不比路径: 宿主自己的路由与静态资源都在同一个 origin 上
+ */
+private fun sameOrigin(target: Uri, host: Uri): Boolean =
+    target.scheme == host.scheme && target.host == host.host && target.port == host.port
+
+/**
  * 「回应用」那一跳的耐心: 等一次重载落地多久 / 等一次 JS 回话多久, 以及最多试几次
  *
  * 两次的代价是"重载两遍页面", 而收益是"一次没成不会静默什么都不发生" —— 在 dsh 里那一下本来就是
@@ -1099,6 +1137,38 @@ private const val WEB_TAG = "DshWebView"
 private const val RETURN_WAIT_MS = 15_000L
 private const val RETURN_ASK_MS = 5_000L
 private const val RETURN_TRIES = 2
+
+/**
+ * 返回键问页面那一句最多等多久
+ *
+ * `evaluateJavascript` 是同步进渲染进程的, 正常几毫秒就回; 这个上限只兜"页面正忙 / 已经不在了"
+ * 那一档 —— 挂得比它久就等于把返回键吃掉了, 而没答话时调用方会把这一下还给「再按一次退出」
+ */
+private const val PAGE_BACK_MS = 500L
+
+/**
+ * 返回键那一下该按页面上的哪个东西: 右栏那个展开着的格右上角的「收起」
+ *
+ * 手机上 (视口窄于 768 px) 那一格是**全屏**的, 点一条网页链接之后会话连同顶栏一起被它盖住, 而系统
+ * 返回键原来只会在主页上弹「再按一次退出」—— 用户的原话是"网页全屏, 无法返回会话" (2026-10-18)
+ *
+ * 判据只用 dsh 自己写在那块面板上的两个 `data` 属性, 不猜类名也不按文字认: `data-sidebar-right-open`
+ * 说明它现在展开着 (`fullscreen` 与 `push` 两档都算, 后者在横屏与平板上就是半屏那一块),
+ * `data-sidebar-right-toggle` 就是面板上那颗「收起」(见 dsh 的 `ui-sidebar-right` 里 PanelChrome,
+ * 两个属性都由它自己写, 与界面语言无关)
+ *
+ * 回 `closed` / `none`: 后者是"这一页没有可收的层", 调用方据此把返回键还回去
+ */
+private const val PAGE_BACK_JS = """
+(function () {
+  var panel = document.querySelector('[data-sidebar-right-panel][data-sidebar-right-open]')
+  if (!panel) return 'none'
+  var collapse = panel.querySelector('[data-sidebar-right-toggle]')
+  if (!collapse) return 'none'
+  collapse.click()
+  return 'closed'
+})()
+"""
 
 /** Shell facts worth logging after a load: boot globals, DOM size, and whatever text rendered */
 private const val SHELL_PROBE = """
