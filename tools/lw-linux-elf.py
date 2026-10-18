@@ -15,7 +15,7 @@ patchelf 是 Linux 工具, 这台 Windows 构建机上跑不了, 而这一套改
 没人看, 这是 in-place 改名安全的原因 (patchelf 换短名字时做的也是这件事)
 
 用法:
-  python tools/lwlinux-elf.py <文件> [--needed 旧名=新名]... [--soname 新名] [--runpath 新值]
+  python tools/lw-linux-elf.py <文件> [--needed 旧名=新名]... [--soname 新名] [--runpath 新值]
 """
 
 import argparse
@@ -35,7 +35,7 @@ DT_RUNPATH = 29
 
 
 def fail(message):
-    sys.exit(f"lwlinux-elf: {message}")
+    sys.exit(f"lw-linux-elf: {message}")
 
 
 class Elf64:

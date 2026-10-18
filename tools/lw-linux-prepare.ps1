@@ -3,13 +3,13 @@
 # 为什么必须归一: AGP 会静默丢掉带点的 native lib 名 (`libtalloc.so.2` 那种进不了 APK), 所以四个
 # 文件都改成 `liblw*.so` 的形制, **同时**把动态段里的字符串一起改掉 —— 只改文件名会让 proot 满世界
 # 找 `libtalloc.so.2`, 而 RUNPATH 里写死的 Termux 路径同理要换成 `$ORIGIN` (让加载器在这个对象
-# 自己所在的目录里找, 也就是 nativeLibraryDir). ELF 那一半由 tools/lwlinux-elf.py 做
+# 自己所在的目录里找, 也就是 nativeLibraryDir). ELF 那一半由 tools/lw-linux-elf.py 做
 #
 # 用法 (先 `. D:\apk\env.ps1`):
-#   pwsh -File tools\lwlinux-prepare.ps1 -Packages D:\apk\.lwtmp\lwlinux-build
+#   pwsh -File tools\lw-linux-prepare.ps1 -Packages D:\apk\.lwtmp\lwlinux-build
 #
 # 产物: liblwproot.so / liblwprootloader.so / liblwtalloc.so / liblwshmem.so
-# 默认落进 `app\src\main\jniLibs\arm64-v8a` (产物提交进仓库), 中间产物在 `build\lwlinux-prepare`
+# 默认落进 `app\src\main\jniLibs\arm64-v8a` (产物提交进仓库), 中间产物在 `build\lw-linux-prepare`
 #
 # 输入 (Termux 包, 从 packages.termux.dev 取; P0 用的那一套留在 D:\apk\.lwtmp\lwlinux-build):
 #   proot_*.deb / libtalloc_*.deb / libandroid-shmem_*.deb, 按 -Abi 取 aarch64 / x86_64 那一份
@@ -30,8 +30,8 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $termux = if ($Abi -eq 'arm64-v8a') { 'aarch64' } else { 'x86_64' }
 if (-not $Out) { $Out = Join-Path $repo "app\src\main\jniLibs\$Abi" }
-if (-not $Work) { $Work = Join-Path $repo 'build\lwlinux-prepare' }
-$elf = Join-Path $PSScriptRoot 'lwlinux-elf.py'
+if (-not $Work) { $Work = Join-Path $repo 'build\lw-linux-prepare' }
+$elf = Join-Path $PSScriptRoot 'lw-linux-elf.py'
 
 # 一个 deb 里的源路径 -> 最终名字, 外加要改的动态段字符串 (loader 是静态的, 没有动态段可改)
 $specs = @(
@@ -105,7 +105,7 @@ foreach ($spec in $specs) {
     Copy-Item -LiteralPath $source -Destination $target -Force
     if ($spec.Patch.Count -gt 0) {
         & $Python $elf $target @($spec.Patch)
-        if ($LASTEXITCODE -ne 0) { throw "lwlinux-elf.py failed on $target" }
+        if ($LASTEXITCODE -ne 0) { throw "lw-linux-elf.py failed on $target" }
     }
     Write-Output ("{0}  {1} bytes" -f $spec.To, (Get-Item -LiteralPath $target).Length)
 }

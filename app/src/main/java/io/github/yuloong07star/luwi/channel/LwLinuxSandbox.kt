@@ -311,7 +311,7 @@ internal object LwLinuxSandbox {
         "/dev/pts",
     )
 
-    /** 随包的 proot 三个名字, 与 jniLibs 里的一致 (见 tools/lwlinux-prepare.ps1) */
+    /** 随包的 proot 三个名字, 与 jniLibs 里的一致 (见 tools/lw-linux-prepare.ps1) */
     const val PROOT_NAME = "liblwproot.so"
     const val LOADER_NAME = "liblwprootloader.so"
 

@@ -16,7 +16,7 @@
 这次换标记主人点名"图案占比要和现在的一样", 所以这个数一个字节没动
 
 用法 (两步, 顺序不能反):
-  python tools/trace-mark.py                                # 描边 -> 写回那份 XML
+  python tools/vector-trace.py                              # 描边 -> 写回那份 XML
   python tools/vector-ink.py --write --ink-width 0.46       # 解尺寸 -> 再写一次那份 XML
 
 **不进构建**: 与 `tools/make-icons.py` 一样是手工跑一次的工具, 产物提交进仓库
@@ -45,7 +45,7 @@ TOLERANCE = 1.5
 TEMPLATE = '''<?xml version="1.0" encoding="utf-8"?>
 <!-- Luwi 自己的标记: 一圈水花里一只鲸尾 (主人 2026-10-10 换的, 原来这里是 dsh 那只鲸鱼)
 
-     它由 tools/trace-mark.py 从 tools/brand/luwi-mark.png 描出来, 那一份是白底单色的水彩画。
+     它由 tools/vector-trace.py 从 tools/brand/luwi-mark.png 描出来, 那一份是白底单色的水彩画。
      **不要手改 pathData**: 要改样子就换品牌图再跑那两步 (描边, 再用 vector-ink.py 的 write 旗标)。
      这一份同时被三处用: 自适应图标的前景与单色层 (mipmap-anydpi/ic_launcher.xml), 以及球上那个
      染白的标记 (overlay/Ball.kt) —— 只吃 alpha 的位图在单色层那一处不够用, 所以是矢量。

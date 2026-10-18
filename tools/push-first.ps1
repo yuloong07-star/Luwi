@@ -1,4 +1,4 @@
-# api-push-first.ps1 -- 把本地一棵**全新的**历史用 API 补种到一个刚建好的 GitHub 仓库上
+# push-first.ps1 -- 把本地一棵**全新的**历史用 API 补种到一个刚建好的 GitHub 仓库上
 #
 # 为什么需要它: 本机 `github.com:443` 被 SNI 挡住 (记录在 Luwi\tools\lw-api-push.ps1 的文件头),
 # 而 `api.github.com` 通 —— 所以走 gh 的 REST: 先建 blob -> 建 tree -> 建 commit -> 最后才动 ref。
@@ -10,7 +10,7 @@
 # 每一个对象都与本地算出的 SHA 逐字节比对, 任何一处不对就中止, 远端一个字不改。
 #
 # 用法:
-#   pwsh -File api-push-first.ps1 -RepoRoot <目录> -Repo <owner/name> -Parent <远端初始提交>
+#   pwsh -File push-first.ps1 -RepoRoot <目录> -Repo <owner/name> -Parent <远端初始提交>
 #   ... 加 -Apply 才真的移动 main 并打 tag
 param(
     [Parameter(Mandatory = $true)][string]$RepoRoot,

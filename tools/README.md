@@ -32,7 +32,7 @@
 | `check-voice-inbox.mjs` | 投递队列那三条真值: 第一次跑不倒历史 / 投递成功才前移 / 断线要留话 |
 | `check-shot-params.mjs` | 取景与截图那几个数字的**唯一口径** (`docs/shot-params.md`) 与插件 / Kotlin / 提示词 / 技能 / 预置五处逐项对照 |
 | `check-video-gate.mjs` | 视频模式那两道闸 (屏幕类工具一律拒 / 相机同时只许一场会话用) 的判据表, 临时 `DSH_HOME` 自己搭 |
-| `check-explore.mjs` | 探索那一档的判据表 (2.7.8 批次 7): 预设那一段与 mobile-use 逐行相同 / persona 那三条红线与五节摘要 / 预算常数与 `exploreBudget` 真值表 / 工作区与预设回退 / 省电闸 / 数步只数不拒 / `lw_explore` 的工具面 / 摘要与候选卡的文件形状 (抽那几段纯函数真跑) |
+| `check-explore.mjs` | 探索那一档的判据表 (2.7.8 批次 7): 预设那一段的 19 行 / persona 那三条红线与五节摘要 / 预算常数与 `exploreBudget` 真值表 / 工作区与预设回退 / 省电闸 / 数步只数不拒 / `lw_explore` 的工具面 / 摘要的文件形状 (抽那几段纯函数真跑) / 候选卡已下线 |
 | `check-bare-percent.py` | 扫 `strings.xml` 里的裸 `%` (`Resources.getString` 会把它当转换符, 主线程崩) |
 | `check-tools.mjs` | 扫本目录自己: 命名 / 用法段 / 根目录落位 (就是本文那三条约定) |
 | `gen-keycodes.mjs` | 从 Android 自己的头文件重新生成 `channel/KeyCodes.kt` 那张名字表 |

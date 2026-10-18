@@ -5,12 +5,13 @@
  *
  *   1. **预设那一段** (`presets/explore/cordis.patch.yml`): 行 id / id / order 与 plugins 那 19 行 ——
  *      plugins 少一行就是"探索里有一类工具用不了", 而 persona 换掉就是"三条红线不在那一档里"
- *   2. **persona 与摘要口径**: 三条红线、软红线、五节摘要、候选卡那几条 —— 它们是**这一档唯一的闸**
+ *   2. **persona 与摘要口径**: 三条红线、软红线、五节摘要、记忆那几条 (2026-10-18 起候选卡下线,
+ *      值得留下的由它自己用记忆插件写) —— 它们是**这一档唯一的闸**
  *      (D9 拍板闸在提示词层), 漂开一个字都没有第二道闸兜住
  *   3. **预算**: 30 / 60 / 3 / 两个范围 / 8000 字 / 留 30 份, 以及 [exploreBudget] 那张真值表
  *      (59 / 60 / 61 步, 到点前一拍与当拍, over 之后不再判)
  *   4. **落位与收尾**: 工作区注册路 / 省电闸 / 数步只数不拒 / `lw_explore` 的工具面 /
- *      摘要与候选卡的文件形状
+ *      摘要的文件形状
  *
  * 跑法: `node tools/check-explore.mjs`
  * 它**直接取 `host-plugin/index.mjs` 里那一段源码来跑** (不复制第二份), 所以测的是上线那一份
@@ -49,7 +50,7 @@ const EXPECTED_PLUGINS = [
   'delegation', 'tool-ask-user', 'tool-todo', 'tool-web', 'present', 'tool-plugin-manager',
 ]
 
-/* ── 抽那一段纯函数 (预算 / 摘要名 / 开场正文 / 候选卡) ─────────────────── */
+/* ── 抽那一段纯函数 (预算 / 摘要名 / 开场正文) ─────────────────────────── */
 
 const start = host.indexOf('/* ── 探索 (2.7.8 批次 7')
 const end = host.indexOf('/* ── 余额 (2026-10-16')
@@ -59,10 +60,9 @@ const section = host.slice(start, end)
 const api = new Function(
   'readFile', 'readdir', 'join', 'dirname', 'mkdir', 'writeFile', 'rename', 'rm',
   `${section}\nreturn { exploreBudget, exploreClamp, exploreSummaryName, exploreStartLine,`
-    + ' exploreCandidateBody, exploreDayKey, EXPLORE_MINUTES_DEFAULT, EXPLORE_MINUTES_RANGE,'
+    + ' exploreDayKey, EXPLORE_MINUTES_DEFAULT, EXPLORE_MINUTES_RANGE,'
     + ' EXPLORE_STEPS_DEFAULT, EXPLORE_STEPS_RANGE, EXPLORE_SAID_DEFAULT, EXPLORE_SUMMARY_CHARS,'
-    + ' EXPLORE_SUMMARIES_KEPT, EXPLORE_CANDIDATES_MAX, EXPLORE_CANDIDATES_KEPT, EXPLORE_FACT_MAX,'
-    + ' EXPLORE_KINDS, EXPLORE_SENSITIVITY, EXPLORE_TICK_MS, EXPLORE_WORKSPACE_NAME,'
+    + ' EXPLORE_SUMMARIES_KEPT, EXPLORE_TICK_MS, EXPLORE_WORKSPACE_NAME,'
     + ' EXPLORE_PRESET, EXPLORE_TASK_FILE, EXPLORE_TASK_CHARS, EXPLORE_STATE_FILE,'
     + ' proactiveSaidCount }',
 )(() => '', async () => [], () => '', () => '', async () => {}, async () => {}, async () => {}, async () => {})
@@ -132,8 +132,8 @@ needed('下一场建议优先探索')
 needed('风险与拦截记录')
 needed('证据引用')
 needed('不要用别的工具写这份摘要')
-needed('不要自己往长期记忆里写')
-needed('一律 sensitivity: high')
+needed('memory_save')
+needed('sensitivity: high')
 needed('临时界面状态')
 // 2.7.8 批次 8: 收尾写下一场任务卡 + 那条主动对话走自动指令 (不走 schedule_create)
 needed('nextTask')
@@ -163,13 +163,10 @@ check('缺省 30 分钟 / 60 步 / 每天 3 次', [
   api.EXPLORE_SAID_DEFAULT,
 ], [30, 60, 3])
 check('两个范围就是 1..180 与 1..1000', [api.EXPLORE_MINUTES_RANGE, api.EXPLORE_STEPS_RANGE], [[1, 180], [1, 1000]])
-check('摘要 8000 字 / 留 30 份 / 一次最多 5 张卡 / 目录留 100 张 / 一张 200 字', [
+check('摘要 8000 字 / 留 30 份', [
   api.EXPLORE_SUMMARY_CHARS,
   api.EXPLORE_SUMMARIES_KEPT,
-  api.EXPLORE_CANDIDATES_MAX,
-  api.EXPLORE_CANDIDATES_KEPT,
-  api.EXPLORE_FACT_MAX,
-], [8000, 30, 5, 100, 200])
+], [8000, 30])
 check('到点那一拍是 5 秒', api.EXPLORE_TICK_MS, 5000)
 check('工作区名是 Luwi (D10 改口径), 预设 id 是 explore', [
   api.EXPLORE_WORKSPACE_NAME,
@@ -272,10 +269,11 @@ check('步数用尽的正文点名 op=finish 并说"不要再开新的事"', [
 
 check("宿主里注册了 'lw_explore'", host.includes("name: 'lw_explore'"), true)
 check('op 就是 status / finish 两个 (2.7.8 批次 8 撤掉了手动 start)', /enum: \['status', 'finish'\]/u.test(toolFace), true)
-check('candidates 的参数表在, 四个 kind 都在说明里', [
-  /candidates:/u.test(toolFace),
-  ['fact', 'preference', 'todo', 'date'].every((one) => toolFace.includes(one)),
-], [true, true])
+check('候选卡那一套从工具面撤了 (参数留着只为旧 prompt 不报错)', [
+  toolFace.includes('ignored: the candidate-card list was removed'),
+  !toolFace.includes('candidate cards below'),
+  toolFace.includes('memory_save'),
+], [true, true, true])
 check('nextTask 的参数表与说明都在 (下一场任务卡)', [
   /nextTask:/u.test(toolFace),
   toolFace.includes('NEXT exploration'),
@@ -302,9 +300,9 @@ check('宿主收尾写卡: 原子写 + nextTask 只收非空', [
 check('收尾回执念到下一场那张卡', [
   section.includes("next task: no nextTask was given") || section.includes('next task:'),
 ], [true])
-check('候选目录就在摘要目录底下', [
-  /const EXPLORE_CANDIDATES_DIR = 'explore\/candidates'/u.test(section),
+check('摘要目录就在 lw 底下 (候选目录 2026-10-18 已删)', [
   /const EXPLORE_SUMMARY_DIR = 'explore'/u.test(section),
+  !/explore\/candidates/u.test(section),
 ], [true, true])
 check('探索状态是合并式原子写 (未知键留着, .tmp + rename)', [
   /\.\.\.base,/u.test(section),
@@ -359,10 +357,11 @@ check('摘要写文件时截 8000 字并记 truncated', [
   /'truncated: true'/u.test(section),
 ], [true, true])
 check('目录只留最近 30 份 (prune 到 EXPLORE_SUMMARIES_KEPT)', /explorePrune\(directory, '\.md', EXPLORE_SUMMARIES_KEPT\)/u.test(section), true)
-check('兜底那一份桩摘要不写候选卡', [
+check('兜底那一份桩摘要记 stub 且不带候选卡', [
   /async function exploreStub\(\)/u.test(section),
-  /candidates: \[\],\n {4}ended: 'deadline',\n {4}stub: true,/u.test(section),
-], [true, true])
+  /ended: 'deadline',\n {4}stub: true,/u.test(section),
+  !/candidates:/u.test(section),
+], [true, true, true])
 check(
   '同一场再交一次 finish 时如实说"已经落过了" (真机 2026-10-17: 到点取消之后还会再交一次)',
   [
@@ -374,30 +373,15 @@ check(
   [true, true, true, true],
 )
 
-/* ── 十一、候选卡 ─────────────────────────────────────────────────────── */
+/* ── 十一、候选卡已下线 (2026-10-18 主人拍板) ────────────────────────────── */
 
-const card = (over) => ({ fact: '主人周五晚上通常打游戏', kind: 'preference', ...over })
-check('合法的一张: low 是缺省', (() => {
-  const one = api.exploreCandidateBody(card({}), { at: '2026-10-18T21:30:00+08:00', session: 's1' })
-  return [one.kind, one.sensitivity, one.error ?? null]
-})(), ['preference', 'low', null])
-check('date 类一律 high (写错一次很难补回来)', (() => {
-  const one = api.exploreCandidateBody({ fact: '妈妈的生日是 5 月 3 日', kind: 'date' }, {})
-  return [one.kind, one.sensitivity]
-})(), ['date', 'high'])
-check('date 类写了 low 也还是 high', api.exploreCandidateBody({ fact: '到期日 12 月 1 日', kind: 'date', sensitivity: 'low' }, {}).sensitivity, 'high')
-check('非法 kind 整条丢掉 (报错, 不改写)', (() => {
-  const one = api.exploreCandidateBody({ fact: 'x', kind: 'guess' }, {})
-  return typeof one.error === 'string' && one.body === undefined
-})(), true)
-check('非法 sensitivity 也整条丢掉', typeof api.exploreCandidateBody({ fact: 'x', kind: 'fact', sensitivity: 'medium' }, {}).error, 'string')
-check('没有 fact 也丢掉', typeof api.exploreCandidateBody({ kind: 'fact' }, {}).error, 'string')
-check('一张卡最多 200 字 (超出截断)', api.exploreCandidateBody({ fact: '一'.repeat(500), kind: 'fact' }, {}).fact.length, 200)
-check('正文带 frontmatter 那六个键', (() => {
-  const body = api.exploreCandidateBody({ fact: 'a', kind: 'todo', confidence: 0.6, evidence: 'lw_ui' }, { at: 'T', session: 'S' }).body
-  return ['at: T', 'session: S', 'kind: todo', 'sensitivity: low', 'confidence: 0.6', 'evidence: lw_ui']
-    .every((one) => body.includes(one))
-})(), true)
+check('宿主里没有候选卡那一套了 (没有读取方, 也没人再写)', [
+  !/EXPLORE_CANDIDATES/u.test(host),
+  !/exploreCandidateBody/u.test(host),
+  !/exploreCandidatesDir/u.test(host),
+  !/candidates\//u.test(host),
+], [true, true, true, true])
+check('摘要 frontmatter 不再记 candidates 那一行', !/candidates: \$\{/u.test(section), true)
 
 /* ── 十二、探索卡与排期 (2.7.8 批次 8) ─────────────────────────────────── */
 

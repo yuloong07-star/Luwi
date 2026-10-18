@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Luwi 自己的标记: 一圈水花里一只鲸尾 (主人 2026-10-10 换的, 原来这里是 dsh 那只鲸鱼)
 
-     它由 tools/trace-mark.py 从 tools/brand/luwi-mark.png 描出来, 那一份是白底单色的水彩画。
+     它由 tools/vector-trace.py 从 tools/brand/luwi-mark.png 描出来, 那一份是白底单色的水彩画。
      **不要手改 pathData**: 要改样子就换品牌图再跑那两步 (描边, 再用 vector-ink.py 的 write 旗标)。
      这一份同时被三处用: 自适应图标的前景与单色层 (mipmap-anydpi/ic_launcher.xml), 以及球上那个
      染白的标记 (overlay/Ball.kt) —— 只吃 alpha 的位图在单色层那一处不够用, 所以是矢量。

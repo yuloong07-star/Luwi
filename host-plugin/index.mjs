@@ -3613,15 +3613,12 @@ const TOOLS = [
       + ' lines (no irreversible act on an app, no writing any existing file, no sending anything)'
       + ' live in this preset\'s prompt text, not in this tool: **this call cannot enforce them and'
       + ' does not check them.** The summary has to come through op=finish, and the host is what'
-      + ' writes it to $DSH_HOME/lw/explore/<time>.md together with the candidate cards below'
-      + ' `candidates/` - **do not write that report or those cards with any other tool**, and do'
-      + ' not put it into long-term memory yourself: promotion is the host\'s and the user\'s call.'
+      + ' writes it to $DSH_HOME/lw/explore/<time>.md - **do not write that report with any other'
+      + ' tool.** Anything worth keeping next time goes into the memory plugin yourself (memory_save):'
+      + ' there is no candidate-card list any more (2026-10-18), the report is the only file this'
+      + ' call writes.'
       + ' Write the summary in five sections - 已确认事实 / 仍不确定的点 / 下一场建议优先探索 /'
       + ' 风险与拦截记录 / 证据引用 - at most 8000 characters (longer is cut and marked truncated).'
-      + ' A candidate card is ONE sentence worth having next time (kind fact / preference / todo /'
-      + ' date, plus sensitivity low or high, confidence, evidence) - **not a snapshot of the'
-      + ' screen**: battery level or "it is on this page" is not a card. A date (birthday,'
-      + ' anniversary, due date) is always sensitivity high, and at most 5 cards go in one finish.'
       + ' op=finish also takes `nextTask`: the task for the NEXT exploration, one short paragraph,'
       + ' decided from this run, the previous summary and the memory you already have. The host'
       + ' writes it over the task card, so the next scheduled run starts from it - leave it out and'
@@ -3641,9 +3638,8 @@ const TOOLS = [
       candidates: {
         type: 'array',
         items: { type: 'object', additionalProperties: true },
-        description: 'finish only: at most 5 cards, each {fact, kind, sensitivity, confidence,'
-          + ' evidence}. kind is fact / preference / todo / date; sensitivity is low or high'
-          + ' (date is always high)',
+        description: 'ignored: the candidate-card list was removed on 2026-10-18, so nothing is'
+          + ' written from this. Save what is worth keeping with memory_save instead',
       },
       nextTask: {
         type: 'string',
@@ -3662,7 +3658,6 @@ const TOOLS = [
       if (op === 'finish') {
         const outcome = await finishExplore(hostCtx, {
           summary: args?.summary,
-          candidates: args?.candidates,
           nextTask: args?.nextTask,
         }, sessionIdOf(exec))
         return exploreFinishText(outcome)
@@ -7607,15 +7602,16 @@ function startBallPhase(ctx) {
 /* ── 探索 (2.7.8 批次 7, 需求第 6 条) ────────────────────────────────────────
  *
  * 一次探索 = 落在 `Luwi` 工作区的一场会话: 宿主给它一小段预算 (缺省 30 分钟 / 60 步), 它只读地自由
- * 探索这台手机, 最后折成一份结构化摘要 (外加若干记忆候选卡) 落盘, 下一场先读它接着看
+ * 探索这台手机, 最后折成一份结构化摘要落盘, 下一场先读它接着看
  *
  * 四件事的边界先写清 (D9 / D10 / D13 / D14):
  *  - **"只读"只是提示词层**: 三条红线写在 persona 里, 宿主**不加硬拦**、不叠 read-only 权限档, 也不
  *    deny 工具 —— 越没越界靠验收里那一趟如实记 (见方案 §8 的已知边界)
  *  - **预算由宿主数**: 工具调用次数 (`ctx.tools.guard`, 同步, 只数不拒) 与墙钟 (5 s 一拍),
  *    模型自报的一律不算
- *  - **一场只允许一场**: `op` 只有 status / start / finish, 没有 resume —— 结束之后靠摘要接上
- *  - **摘要只走 op=finish**: 宿主落文件与候选卡; 批次 7 只落卡, 不晋升、不读、不删 (闸门留批次 8)
+ *  - **一场只允许一场**: `op` 只有 status / finish, 没有 resume —— 结束之后靠摘要接上
+ *  - **摘要只走 op=finish**: 宿主落文件; 值得留下的东西由它自己用记忆插件写 (2026-10-18 主人拍板:
+ *    候选卡整条下线 —— 没有读取方, 而 `@modusensus/dsh-mneme` 本来就在这个 profile 上)
  *
  * 判据在 `tools/check-explore.mjs`: 它用 `new Function` 把下面那几段纯函数抽出来真跑, 测的是上线这份
  */
@@ -7640,20 +7636,10 @@ const EXPLORE_TASK_FILE = 'explore-card.md'
 const EXPLORE_TASK_CHARS = 8000
 const EXPLORE_STATE_FILE = 'explore.json'
 const EXPLORE_SUMMARY_DIR = 'explore'
-const EXPLORE_CANDIDATES_DIR = 'explore/candidates'
 
 /** 摘要正文上限 (超出截断并在 frontmatter 记 `truncated: true`) 与只留最近多少份 */
 const EXPLORE_SUMMARY_CHARS = 8000
 const EXPLORE_SUMMARIES_KEPT = 30
-
-/** 一次 finish 最多交几张候选卡, 候选目录只留最近多少张, 一张卡最多几个字 */
-const EXPLORE_CANDIDATES_MAX = 5
-const EXPLORE_CANDIDATES_KEPT = 100
-const EXPLORE_FACT_MAX = 200
-
-/** 候选卡的 `kind` 与 `sensitivity` 只收这几个 (不合法的那一条整条丢掉, 不静默改写) */
-const EXPLORE_KINDS = ['fact', 'preference', 'todo', 'date']
-const EXPLORE_SENSITIVITY = ['low', 'high']
 
 /** 到点那一拍: 5 s 一次 (与应用那侧 3 s 那条轮询同一个量级, 但这里只比一个数) */
 const EXPLORE_TICK_MS = 5000
@@ -7724,47 +7710,6 @@ function exploreStartLine(text, run, summaryPath) {
 }
 
 /**
- * 一张候选卡的正文 (纯函数)
- *
- * 校验三件事: `fact` 非空、`kind` 在四个里、`sensitivity` 在 low / high 里 (缺省 low) ——
- * **`date` 类一律 `high`** (生日 / 纪念日 / 到期日写错一次就很难补回来, 见 §4.4)
- *
- * 不合法的回 `{ error }`, 由调用方**整条丢掉并记读数** —— 不静默改写成 low: 那会把"模型写错了"
- * 变成一个看起来合法的低敏事实
- */
-function exploreCandidateBody(card, extra = {}) {
-  const fact = String(card?.fact ?? '').trim()
-  if (fact === '') return { error: 'the card has no fact' }
-  const kind = String(card?.kind ?? '').trim()
-  if (!EXPLORE_KINDS.includes(kind)) {
-    return { error: `kind "${kind}" is not one of ${EXPLORE_KINDS.join(' / ')}` }
-  }
-  const asked = String(card?.sensitivity ?? '').trim()
-  if (asked !== '' && !EXPLORE_SENSITIVITY.includes(asked)) {
-    return { error: `sensitivity "${asked}" is not low or high` }
-  }
-  const sensitivity = kind === 'date' ? 'high' : asked === '' ? 'low' : asked
-  const confidence = Number(card?.confidence)
-  const kept = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : null
-  const evidence = String(card?.evidence ?? '').trim()
-  const said = fact.slice(0, EXPLORE_FACT_MAX)
-  const body = [
-    '---',
-    `at: ${extra.at ?? new Date().toISOString()}`,
-    `session: ${extra.session ?? ''}`,
-    `kind: ${kind}`,
-    `sensitivity: ${sensitivity}`,
-    ...(kept === null ? [] : [`confidence: ${kept}`]),
-    `evidence: ${evidence === '' ? 'not recorded' : evidence}`,
-    '---',
-    '',
-    said,
-    '',
-  ].join('\n')
-  return { kind, sensitivity, fact: said, confidence: kept, evidence, body }
-}
-
-/**
  * 那一场探索的账: 谁在跑、预算从什么时候起、用了几步
  *
  * **内存里这一份是活的那一份**, `$DSH_HOME/lw/explore.json` 是它的镜子 —— 宿主重启之后按那份文件
@@ -7795,20 +7740,19 @@ async function ensureExploreWorkspace(ctx) {
   return ensureChannelWorkspace(ctx, EXPLORE_WORKSPACE_NAME, exploreWorkspaceState)
 }
 
-/** 这一档的读数 (给 `lw_explore op=status`, 也是"省电探针抛错"与"丢掉几张卡"的唯一落点) */
+/** 这一档的读数 (给 `lw_explore op=status`, 也是"省电探针抛错"的唯一落点) */
 const exploreState = {
   preset: null,
   presetWhy: null,
   started: 0,
   finished: 0,
   stubs: 0,
-  dropped: 0,
   refusals: 0,
   lastRefusal: null,
   powerSaveUnknown: false,
   lastError: null,
   /**
-   * 最近一次落盘的那份摘要 (`{ session, path, chars, candidates, stub, at }`)
+   * 最近一次落盘的那份摘要 (`{ session, path, chars, stub, at }`)
    *
    * 2026-10-17 真机上量到的形态: 到点那一下先取消再 followup, 而模型**在被取消那一轮里**已经把 finish
    * 交了 (摘要落盘), 紧跟的 followup 又交一次 —— 第二次那时 run 已经清掉, 回执是 "no exploration is
@@ -7832,11 +7776,6 @@ function exploreStatePath() {
 function exploreSummaryDir() {
   const home = process.env.DSH_HOME
   return home ? join(home, 'lw', EXPLORE_SUMMARY_DIR) : null
-}
-
-function exploreCandidatesDir() {
-  const home = process.env.DSH_HOME
-  return home ? join(home, 'lw', EXPLORE_CANDIDATES_DIR) : null
 }
 
 /** 探索那张任务卡 (批次 8): `$DSH_HOME/lw/explore-card.md` —— 应用排期到点读它, 收尾时由这里改写 */
@@ -7969,13 +7908,6 @@ async function exploreLatestSummary() {
   return names.length === 0 ? '' : join(directory, names[names.length - 1])
 }
 
-/** 候选目录里现在有几张卡 (`op=status` 那一行读数) */
-async function exploreCandidatesCount() {
-  const directory = exploreCandidatesDir()
-  if (directory === null) return 0
-  return (await readdir(directory).catch(() => [])).filter((one) => one.endsWith('.md')).length
-}
-
 /** 只留最近 `keep` 份: 目录按文件名排序 (那就是时间序), 多出来的从最旧的删起 */
 async function explorePrune(directory, extension, keep) {
   const names = (await readdir(directory).catch(() => [])).filter((one) => one.endsWith(extension)).sort()
@@ -8086,38 +8018,18 @@ async function exploreTick(ctx) {
 }
 
 /**
- * 写一份摘要 (+ 逐条落候选卡), 然后清 run
+ * 写一份摘要, 然后清 run
  *
- * 两件事都**只由宿主做**: persona 第 16 条明说不要用别的工具写 (那会撞红线 2), 所以这里也是唯一
- * 落 `$DSH_HOME/lw/explore/` 的地方。桩摘要 (`stub`) 不写候选卡 —— 没有正文就没有可晋升的东西
+ * 只由宿主做: persona 第 16 条明说不要用别的工具写 (那会撞红线 2), 所以这里也是唯一
+ * 落 `$DSH_HOME/lw/explore/` 的地方 (候选卡 2026-10-18 下线, 值得留下的由它自己用记忆插件写)
  */
-async function exploreWriteSummary({ summary, candidates = [], ended = 'finish', stub = false }) {
+async function exploreWriteSummary({ summary, ended = 'finish', stub = false }) {
   const directory = exploreSummaryDir()
   if (directory === null) return { error: 'this host has no DSH_HOME, so the summary has nowhere to go' }
   const at = new Date().toISOString()
   const text = String(summary ?? '')
   const truncated = text.length > EXPLORE_SUMMARY_CHARS
   const body = truncated ? text.slice(0, EXPLORE_SUMMARY_CHARS) : text
-  const asked = Array.isArray(candidates) ? candidates : []
-  const kept = []
-  const dropped = []
-  if (!stub) {
-    if (asked.length > EXPLORE_CANDIDATES_MAX) {
-      dropped.push({
-        index: 0,
-        why: `${asked.length - EXPLORE_CANDIDATES_MAX} card(s) over the ${EXPLORE_CANDIDATES_MAX}`
-          + ' one finish may hand in were not taken',
-      })
-    }
-    for (const card of asked.slice(0, EXPLORE_CANDIDATES_MAX)) {
-      const one = exploreCandidateBody(card, { at, session: exploreRun.session })
-      if (one.error) {
-        dropped.push({ index: kept.length + dropped.length + 1, why: one.error })
-        continue
-      }
-      kept.push(one)
-    }
-  }
   const front = [
     '---',
     `at: ${at}`,
@@ -8127,7 +8039,6 @@ async function exploreWriteSummary({ summary, candidates = [], ended = 'finish',
     `steps: ${exploreRun.stepLimit}`,
     `usedSteps: ${exploreRun.steps}`,
     `ended: ${ended}`,
-    `candidates: ${kept.length}`,
     ...(truncated ? ['truncated: true'] : []),
     ...(stub ? ['stub: true'] : []),
     '---',
@@ -8141,41 +8052,21 @@ async function exploreWriteSummary({ summary, candidates = [], ended = 'finish',
   } catch (error) {
     return { error: `the summary could not be written: ${error?.message ?? error}` }
   }
-  let cards = 0
-  if (kept.length > 0) {
-    const cardsDir = exploreCandidatesDir()
-    try {
-      await mkdir(cardsDir, { recursive: true })
-      for (const [index, one] of kept.entries()) {
-        const cardFile = join(cardsDir, `${name}-${index + 1}.md`)
-        await writeFile(cardFile, one.body)
-        cards += 1
-      }
-      await explorePrune(cardsDir, '.md', EXPLORE_CANDIDATES_KEPT)
-    } catch (error) {
-      dropped.push({ index: 0, why: `the candidate cards could not be written: ${error?.message ?? error}` })
-    }
-  }
   await explorePrune(directory, '.md', EXPLORE_SUMMARIES_KEPT)
-  exploreState.dropped += dropped.length
-  if (dropped.length > 0) {
-    console.warn(`luwi-channel: ${dropped.length} explore candidate card(s) were dropped - ${JSON.stringify(dropped)}`)
-  }
   // 记一份"刚落到哪" (见 [exploreState] 的 lastSaved): 同一场再交一次时如实回"已经落过了"
   exploreState.lastSaved = {
     session: exploreRun.session,
     path: file,
     chars: body.length,
-    candidates: cards,
     stub,
     at: Date.now(),
   }
   exploreReset()
   await exploreStateWrite()
-  return { path: file, chars: body.length, truncated, candidates: cards, dropped }
+  return { path: file, chars: body.length, truncated }
 }
 
-/** 兜底: 到点了, 那一轮结束了而模型没交摘要 —— 写一份桩 (不写候选卡) */
+/** 兜底: 到点了, 那一轮结束了而模型没交摘要 —— 写一份桩 */
 async function exploreStub() {
   if (exploreRun.session === null) return
   const sessionId = exploreRun.session
@@ -8183,7 +8074,6 @@ async function exploreStub() {
   console.log(`luwi-channel: exploration ${sessionId} ended without a summary - a stub was written instead`)
   const saved = await exploreWriteSummary({
     summary: '(这一场没有留下摘要: 到点/到步时没有调 lw_explore op=finish)',
-    candidates: [],
     ended: 'deadline',
     stub: true,
   })
@@ -8305,7 +8195,7 @@ async function chooseExplorePreset(ctx) {
   }
 }
 
-/** 收尾: 交摘要与候选卡 (唯一的出口) */
+/** 收尾: 交摘要 (唯一的出口) */
 async function finishExplore(_ctx, args = {}, sessionId = '') {
   // 下一场那张卡 (批次 8): 收尾时模型交一段话, 宿主覆盖 `lw/explore-card.md`。**先算出来**,
   // 因为"已经落过了"那条分支也允许补交一次 nextTask (第二次 finish 常常是子代理发的)
@@ -8338,8 +8228,6 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
         path: saved.path,
         chars: saved.chars,
         truncated: false,
-        candidates: saved.candidates,
-        dropped: [],
         nextTask: task,
       }
     }
@@ -8352,7 +8240,6 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
   const ended = exploreRun.over === true ? 'deadline' : exploreRun.reminded === true ? 'steps' : 'finish'
   const saved = await exploreWriteSummary({
     summary,
-    candidates: Array.isArray(args?.candidates) ? args.candidates : [],
     ended,
     stub: false,
   })
@@ -8363,10 +8250,7 @@ async function finishExplore(_ctx, args = {}, sessionId = '') {
     console.log(`luwi-channel: the next exploration's task card now says ${task.chars} characters`)
   }
   exploreState.finished += 1
-  console.log(
-    `luwi-channel: exploration finished -> ${saved.path} (${saved.chars} chars,`
-      + ` ${saved.candidates} candidate card(s), ${saved.dropped.length} dropped)`,
-  )
+  console.log(`luwi-channel: exploration finished -> ${saved.path} (${saved.chars} chars)`)
   return { saved: true, ...saved, nextTask: task }
 }
 
@@ -8423,7 +8307,6 @@ async function proactiveSaid(now = Date.now()) {
 async function exploreStatus(ctx) {
   const budget = exploreBudget(exploreRun)
   const latest = await exploreLatestSummary()
-  const cards = await exploreCandidatesCount()
   const readings = await voiceWorkspaceReadings(ctx, exploreRun.session ?? '', exploreWorkspaceState)
   const power = await explorePowerSave()
   const said = await proactiveSaid()
@@ -8452,7 +8335,6 @@ async function exploreStatus(ctx) {
     powerSaveKnown: power.known,
     powerSaveWhy: power.why,
     summary: latest,
-    candidates: cards,
     said: said.today,
     saidToday: said.today,
     saidLimit: said.limit,
@@ -8463,7 +8345,6 @@ async function exploreStatus(ctx) {
     started: exploreState.started,
     finished: exploreState.finished,
     stubs: exploreState.stubs,
-    dropped: exploreState.dropped,
     refusals: exploreState.refusals,
     lastRefusal: exploreState.lastRefusal,
     powerSaveUnknown: exploreState.powerSaveUnknown,
@@ -8492,11 +8373,10 @@ async function exploreStatusText(ctx) {
     `power save: ${readings.powerSaveKnown ? String(readings.powerSave) : `unknown (${readings.powerSaveWhy})`}`
       + `${readings.powerSaveUnknown ? ', the probe failed once this run' : ''}`,
     `latest summary: ${readings.summary || '(none yet)'}`,
-    `candidate cards: ${readings.candidates} in all`,
     `said today: ${readings.saidToday} of ${readings.saidLimit} (task rules only; a manual run does not count)`,
     `next task card: ${readings.nextTask.path || '(none yet)'} (${readings.nextTask.chars} chars)`,
     `this run: ${readings.started} started, ${readings.finished} finished, ${readings.stubs} stub(s),`
-      + ` ${readings.refusals} refused, ${readings.dropped} card(s) dropped`,
+      + ` ${readings.refusals} refused`,
     `preset: ${readings.preset ?? '(the registry default)'}${readings.presetWhy ? ` - ${readings.presetWhy}` : ''}`,
   ]
   if (readings.lastRefusal) {
@@ -8517,7 +8397,7 @@ function exploreFinishText(outcome) {
   if (outcome.already === true) {
     return [
       `this exploration's summary was already saved: ${outcome.path}`,
-      `body: ${outcome.chars} characters, candidate cards: ${outcome.candidates} written`,
+      `body: ${outcome.chars} characters`,
       'nothing was written a second time - do not hand the same report in again',
       nextTask,
     ].join('\n')
@@ -8526,8 +8406,6 @@ function exploreFinishText(outcome) {
   return [
     `exploration finished: ${outcome.path}`,
     `body: ${outcome.chars} characters${outcome.truncated ? ' (cut at the 8000-character limit)' : ''}`,
-    `candidate cards: ${outcome.candidates} written`
-      + `${outcome.dropped.length > 0 ? `, ${outcome.dropped.length} dropped (see the log)` : ''}`,
     nextTask,
   ].join('\n')
 }

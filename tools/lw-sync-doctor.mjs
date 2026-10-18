@@ -14,9 +14,9 @@
  * dsh 的注入表 (③ 层) 只活在 Host 进程里, 裸 node 复现不出来。权威读数是宿主里的 `/sync doctor`
  *
  * 用法:
- *   node tools/luwi-sync-doctor.mjs                       # 默认看 $DSH_HOME/profiles/desktop
- *   node tools/luwi-sync-doctor.mjs --profile <目录>
- *   node tools/luwi-sync-doctor.mjs --json
+ *   node tools/lw-sync-doctor.mjs                         # 默认看 $DSH_HOME/profiles/desktop
+ *   node tools/lw-sync-doctor.mjs --profile <目录>
+ *   node tools/lw-sync-doctor.mjs --json
  */
 
 import { spawnSync } from 'node:child_process'
