@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit
  *   拒掉 —— 所以这里自己发 GET (同一个 OkHttp 客户端的形状: https only, 1 MB 上限)
  * - **地址是一条多镜像的表**: jsDelivr 的几个等价域 (2026-10-13 本机实测: `cdn` 不通而
  *   `fastly`/`gcore` 通), 逐条试, 全失败把每一条的原因拼进那一句话; 上一份内容 tag 留作兜底
- *   (索引换了内容 tag 之后, 旧的 tag 还在 —— 现在这对是 `index-7` 与 `index-6`)
+ *   (索引换了内容 tag 之后, 旧的 tag 还在 —— 现在这对是 `index-8` 与 `index-7`)
  * - **装走与「从链接装入」完全同一条链**: 下字节用 [PluginDownload.fetch], 校验是 [PluginInstaller]
  *   的那十一档 —— 索引只多做两件它才有资格做的事: 装之前核整包 sha256 与大小
  */
@@ -50,10 +50,10 @@ internal object PluginIndex {
     private const val USER_AGENT = "Luwi-plugin-index"
 
     /** 内容 tag: 索引换了内容就换新 tag (jsDelivr 对旧 tag 的边缘缓存刷不掉, 见 packages/README.md) */
-    private const val REF_CURRENT = "index-7"
+    private const val REF_CURRENT = "index-8"
 
     /** 上一份内容 tag: 兜底 (新 tag 还没推上去 / 新 tag 那条链路坏了时, 旧的一份照样能用) */
-    private const val REF_PREVIOUS = "index-6"
+    private const val REF_PREVIOUS = "index-7"
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
