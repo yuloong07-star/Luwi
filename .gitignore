@@ -40,3 +40,6 @@ logcat.log
 # sherpa-onnx AAR 平时由构建任务从上游 Release 取（sha256 写死在 app/build.gradle.kts），
 # 离线或用自己编的版本时才放到这里覆盖。36.9 MB 的二进制不进历史
 /app/libs/
+
+# docx-preview 打包器第一次跑时 npm install 的依赖 (tools/build-docx-preview.mjs), 产物是 lib/client.js
+/presets/docx-preview/.deps/

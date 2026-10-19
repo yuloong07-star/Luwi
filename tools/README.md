@@ -34,7 +34,7 @@
 | `check-video-gate.mjs` | 视频模式那两道闸 (屏幕类工具一律拒 / 相机同时只许一场会话用) 的判据表, 临时 `DSH_HOME` 自己搭 |
 | `check-explore.mjs` | 探索那一档的判据表 (2.7.8 批次 7): 预设那一段的 19 行 / persona 那三条红线与五节摘要 / 预算常数与 `exploreBudget` 真值表 / 工作区与预设回退 / 省电闸 / 数步只数不拒 / `lw_explore` 的工具面 / 摘要的文件形状 (抽那几段纯函数真跑) / 候选卡已下线 |
 | `check-bare-percent.py` | 扫 `strings.xml` 里的裸 `%` (`Resources.getString` 会把它当转换符, 主线程崩) |
-| `check-docx-preview.mjs` | docx 试探那一包 (2.7.9 T8) 的判据表: 包形状 / 装载 id 与包名一字不差 / `extension` 档与那条**末尾不能带 `$`** 的模式 / 正文挂在 keyed seat 上 / 两张覆盖层表各一行且不在 `PluginRows` / 树里那份与源一字不差 |
+| `check-docx-preview.mjs` | Office 预览那一包 (2.7.9 第 6 条 T8/T9) 的判据表: 包形状 / 装载 id 与包名一字不差 / `extension` 档与那两条**末尾不能带 `$`** 的模式 / 读字节走 `remote.workspaceFiles` / 渲染进 `sandbox` iframe / 10 MB 闸与三种失败 / `lib/client.js` 是打包产物 / 两张覆盖层表各一行且不在 `PluginRows` |
 | `check-tools.mjs` | 扫本目录自己: 命名 / 用法段 / 根目录落位 (就是本文那三条约定) |
 | `gen-keycodes.mjs` | 从 Android 自己的头文件重新生成 `channel/KeyCodes.kt` 那张名字表 |
 
@@ -85,6 +85,7 @@
 | `pack-host.mjs` | 把 dsh 的 host 树真正落成 APK 能带的那一份 (平铺 `npm install`) | Gradle 的 `packHostTree` |
 | `zip-host.mjs` | 把 host 树打成一个归档 + 一份版本戳 (app 首次启动解它) | Gradle |
 | `push-host.mjs` | 直接推一份 host 树进 debug 应用的沙箱, 改一行不必重打 APK | 人 |
+| `build-docx-preview.mjs` | 把 `presets/docx-preview/src/` 打成交付那份 `lib/client.js` (docx-preview + jszip 打进来, `react` 留 external; 产物提交, 不进 Gradle) | 人 (改了 src 就要重打) |
 | `ocr/build-models.ps1` | 重建随包发的那三个 OCR 文件 (det / rec / 字典) | 人 |
 | `ocr/rewrite_onnx.py` | 把 PaddleOCR 的导出改成 QNN 建得出来的样子 (钉死 shape) | 上面那个 |
 | `ocr/extract_dict.py` | 从官方 `inference.yml` 里抽出识别器的字表 | 上面那个 |

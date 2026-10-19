@@ -2,7 +2,7 @@
   "name": "lw-docx-preview",
   "version": "0.1.0",
   "private": true,
-  "description": "Luwi 的 docx 试探: 往右栏注册一个只画 hello 卡的类型, 判 extension 档抢不抢得过上游那个 fallback 文本预览",
+  "description": "Luwi 的 Office 行内预览: docx 走 docx-preview, pptx 自解 OOXML 抽文字与图; 正文进 sandbox iframe (2.7.9 第 6 条)",
   "type": "module",
   "main": "index.mjs",
   "exports": {

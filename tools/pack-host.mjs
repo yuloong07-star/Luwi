@@ -629,6 +629,9 @@ console.log(`pack-host: installed the Luwi CSS overlay from ${uiFix}`)
 const docxPreview = fileURLToPath(new URL('../presets/docx-preview', import.meta.url))
 const docxPreviewInstalled = join(out, 'node_modules', 'lw-docx-preview')
 cpSync(docxPreview, docxPreviewInstalled, { recursive: true })
+// 只发那三样: 包声明 / 宿主那一半 / 打好的客户端。**`.deps` 一定要先裁掉** —— 那是打包器
+// `npm install` 用的 (esbuild 的二进制 + docx-preview 的解包), 拷进树里会让 APK 白胖 14 MB
+for (const name of ['.deps', 'src']) rmSync(join(docxPreviewInstalled, name), { recursive: true, force: true })
 console.log(`pack-host: installed the Luwi docx preview probe from ${docxPreview}`)
 
 // 真把这个包 import 一次, 数一数注册出来几个工具
