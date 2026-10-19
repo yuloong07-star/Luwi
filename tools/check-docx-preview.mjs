@@ -78,13 +78,17 @@ check('react 留成 external, 由宿主的模块表给 (不打第二份进来)',
 
 /* ── 二、类型与模式 ────────────────────────────────────────────────────── */
 
-const patterns = /patterns: (\[[^\n]+\])/.exec(source)?.[1] ?? ''
-check('类型是 extension 档, 认 docx 与 pptx 两条后缀', [
+// 数组里每个模式自己就带 `[\s\S]`, 所以不能停在第一个 `]` 上 —— 一直取到 `\n  ],` 那行
+const patterns = /patterns: (\[[\s\S]*?\n  \])/.exec(source)?.[1] ?? ''
+const sourceCode = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+check('类型是 extension 档, 认 docx / pptx / doc / ppt 四条后缀', [
   /priority: 'extension'/.test(source),
   patterns.includes('\\.docx'),
   patterns.includes('\\.pptx'),
+  patterns.includes('\\.doc'),
+  patterns.includes('\\.ppt'),
   (patterns.match(/dsh-resource:\/\/file\//g) ?? []).length,
-], [true, true, true, 2])
+], [true, true, true, true, true, 4])
 check('模式末尾不许带 `$` (picomatch 里它是字面字符, 带了就一条地址都命中不了)', [
   patterns.includes('$'),
   // 正文那个 kind 与 id 各管一件事
@@ -150,6 +154,43 @@ check('pptx 自己解 OOXML: 按 sldIdLst 排页, 只收图片关系, 有上限'
   pptx.includes("endsWith('/image')"),
   pptx.includes('MAX_SLIDES'),
 ], [true, true, true, true])
+
+/* ── 三之二、老格式 (.doc / .ppt): 保留失败文字 + 交给系统打开 ──────────── */
+
+const hostScreen = await read('app/src/main/java/io/github/yuloong07star/luwi/ui/HostScreen.kt')
+const openFile = await read('app/src/main/java/io/github/yuloong07star/luwi/tool/OpenFile.kt')
+const stringsEn = await read('app/src/main/res/values/strings.xml')
+const stringsZh = await read('app/src/main/res/values-zh/strings.xml')
+
+check('老格式只读一个字节的窗口拿绝对路径, 不把整份二进制读进内存', [
+  source.includes("const LEGACY = /\\.(doc|ppt)$/i"),
+  source.includes("{ range: { offset: 0, length: 1 } }"),
+  source.includes("phase: 'legacy'"),
+], [true, true, true])
+check('老格式那颗按钮走窄通道 luwi-open:, 页面自己不碰 FileProvider', [
+  source.includes('luwi-open://file?path='),
+  source.includes("'data-lw-office-open'"),
+  source.includes('用文件管理器打开'),
+  // 页面里不许出现 intent / FileProvider 这些应用侧的东西 (注释里写它们不算)
+  /FileProvider|startActivity|Intent\(/.test(sourceCode),
+], [true, true, true, false])
+check('HostScreen 接住 luwi-open:, 且只放行工作区与 $DSH_HOME', [
+  hostScreen.includes('private const val OPEN_SCHEME = "luwi-open"'),
+  hostScreen.includes('openWithSystem(view.context, target.getQueryParameter(OPEN_PATH_PARAM))'),
+  hostScreen.includes('OpenFile.allowed(context, it)'),
+], [true, true, true])
+check('OpenFile: FileProvider 的 authority 与清单一致, intent 带读授权', [
+  openFile.includes('"${context.packageName}.lw.files"'),
+  openFile.includes('Intent.FLAG_GRANT_READ_URI_PERMISSION'),
+  openFile.includes('Intent(Intent.ACTION_VIEW)'),
+  // 工作区可能是 /sdcard/DSH, 也可能是应用媒体目录或沙箱, 三个根都要认
+  openFile.includes('Workspace.resolve(context).directory'),
+  openFile.includes('File(context.filesDir, "DSH")'),
+], [true, true, true, true, true])
+check('两颗 Toast 的字符串两份都在', [
+  stringsEn.includes('name="preview_open_refused"') && stringsEn.includes('name="preview_open_missing"'),
+  stringsZh.includes('name="preview_open_refused"') && stringsZh.includes('name="preview_open_missing"'),
+], [true, true])
 
 /* ── 四、挂在哪一层 ────────────────────────────────────────────────────── */
 

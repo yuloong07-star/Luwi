@@ -783,5 +783,8 @@
 
     <string name="notification_channel_tools">工具通知</string>
     <string name="notification_channel_tools_description">模型用 lw_notify 发出来的通知</string>
+
+    <string name="preview_open_refused">这个文件不在工作区里</string>
+    <string name="preview_open_missing">这台设备上没有能打开它的应用</string>
 </resources>
 

@@ -784,5 +784,8 @@
 
     <string name="notification_channel_tools">Tool notifications</string>
     <string name="notification_channel_tools_description">Notifications the model posts with lw_notify</string>
+
+    <string name="preview_open_refused">That file is outside the workspace</string>
+    <string name="preview_open_missing">No app on this device can open that file</string>
 </resources>
 

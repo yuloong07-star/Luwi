@@ -90,6 +90,7 @@ import io.github.yuloong07star.luwi.overlay.OverlayState
 import io.github.yuloong07star.luwi.sync.SyncSetting
 import io.github.yuloong07star.luwi.tool.LwSpeak
 import io.github.yuloong07star.luwi.tool.LwWakeWord
+import io.github.yuloong07star.luwi.tool.OpenFile
 import androidx.core.content.ContextCompat
 import io.github.yuloong07star.luwi.wake.WakeWordDownload
 import io.github.yuloong07star.luwi.voice.VoiceState
@@ -737,6 +738,13 @@ private fun HostWebView(url: String, modifier: Modifier = Modifier) {
                     // 的 scheme (mail / app) 一律拒掉并记一行, 免得平台弹一个"打开方式"盖住 GUI
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val target = request.url
+                        // 预览里那颗「用系统文件管理器打开」: 文档是老格式 (.doc/.ppt), 网页读不了,
+                        // 把**已经授权过的绝对路径**交回来, 由这里换成 content:// 再交给系统
+                        // (页面自己拿不到 FileProvider, 也不该直接拿到一条 startActivity 的路)
+                        if (target.scheme == OPEN_SCHEME) {
+                            openWithSystem(view.context, target.getQueryParameter(OPEN_PATH_PARAM))
+                            return true
+                        }
                         if (target.scheme != "http" && target.scheme != "https") {
                             Log.w(WEB_TAG, "blocked navigation to $target")
                             return true
@@ -1117,6 +1125,46 @@ private val WINDOW_START_TOP = 120.dp
 
 /** Logcat tag for what the embedded browser reports */
 private const val WEB_TAG = "DshWebView"
+
+/**
+ * 预览里那颗「用系统文件管理器打开」用的自定义 scheme
+ *
+ * 网页那一半只知道**工作区的相对路径**, 而交给系统要的是一条能读的 `content://`。两条路都不该让页面
+ * 自己走: FileProvider 在应用这一侧, `startActivity` 更不是页面能调的东西。于是约定一条窄通道 ——
+ * 页面把"读字节时拿到的绝对路径"塞进 `luwi-open://file?path=…`, 由这里换成 intent
+ * (`OpenFile.allowed` 只放行工作区与 `$DSH_HOME` 之下, 文档里夹一条这样的链接也递不出别的路径)
+ */
+private const val OPEN_SCHEME = "luwi-open"
+private const val OPEN_PATH_PARAM = "path"
+
+/**
+ * 把一个工作区文件交给系统里接这个类型的那个应用
+ *
+ * 没有应用能接是常态 (模拟器上就没有 Office), 那一档给一句 Toast 而不是静默 —— 主人点的是
+ * "用系统文件管理器打开", 什么都没发生会被当成按钮坏了
+ * @param context 用来发 intent 与弹 Toast 的上下文
+ * @param path 页面交回来的绝对路径
+ */
+private fun openWithSystem(context: Context, path: String?) {
+    val file = path?.let { OpenFile.allowed(context, it) }
+    if (file == null) {
+        Log.w(WEB_TAG, "open-with-system refused ${path ?: "(no path)"}")
+        Toast.makeText(context, context.getString(R.string.preview_open_refused), Toast.LENGTH_SHORT).show()
+        return
+    }
+    val intent = OpenFile.viewIntent(context, file)
+    val problem = try {
+        context.startActivity(intent)
+        Log.i(WEB_TAG, "handed ${file.name} to the system")
+        null
+    } catch (error: ActivityNotFoundException) {
+        "no app opens ${file.extension}"
+    }
+    if (problem != null) {
+        Log.w(WEB_TAG, problem)
+        Toast.makeText(context, context.getString(R.string.preview_open_missing), Toast.LENGTH_SHORT).show()
+    }
+}
 
 /**
  * 这一跳是不是宿主自己那一页 (scheme 与 host:port 都一样)

@@ -14,9 +14,7 @@ import android.os.Environment
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
-import androidx.core.content.FileProvider
 import io.github.yuloong07star.luwi.MainActivity
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.util.Capability
@@ -306,15 +304,11 @@ internal object LwNotify {
         )
     }
 
-    /** 一个路径变成对方能读的 uri, 顺带猜一个 mime */
+    /** 一个路径变成对方能读的 uri, 顺带猜一个 mime (与网页里那颗按钮同一份实现) */
     private fun fileUri(context: Context, path: String): Pair<Uri, String> {
         val file = File(path)
         if (!file.isFile) throw IllegalArgumentException("there is no file at $path")
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.lw.files", file)
-        val mime = context.contentResolver.getType(uri)
-            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
-            ?: "application/octet-stream"
-        return uri to mime
+        return OpenFile.uriAndType(context, file)
     }
 }
 

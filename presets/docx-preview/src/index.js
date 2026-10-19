@@ -35,8 +35,11 @@ const KIND = 'lw-office'
 /** 大小闸: 超过 10 MB 直接说"太大", 不去解 */
 const MAX_BYTES = 10 * 1024 * 1024
 
-/** 认这两个后缀 —— 与 `patterns` 两条一一对应 */
-const CLAIMED = /\.(docx|pptx)$/i
+/** 认这四个后缀 —— 前两个能读, 后两个只能交给系统 (与 `patterns` 一一对应) */
+const CLAIMED = /\.(docx|pptx|doc|ppt)$/i
+
+/** 老格式: 这里读不了, 只能交给系统里的应用 */
+const LEGACY = /\.(doc|ppt)$/i
 
 /** 地址形如 `dsh-resource://file/session/<sid>/<相对工作区的路径>` */
 const ADDRESS = 'dsh-resource://file/session/'
@@ -88,7 +91,12 @@ function titleOf(address) {
 const definition = {
   id: ID,
   kind: KIND,
-  patterns: ['dsh-resource://file/[\\s\\S]+\\.docx', 'dsh-resource://file/[\\s\\S]+\\.pptx'],
+  patterns: [
+    'dsh-resource://file/[\\s\\S]+\\.docx',
+    'dsh-resource://file/[\\s\\S]+\\.pptx',
+    'dsh-resource://file/[\\s\\S]+\\.doc',
+    'dsh-resource://file/[\\s\\S]+\\.ppt',
+  ],
   priority: 'extension',
   canOpen: (address) => typeof address === 'string' && CLAIMED.test(address),
   title: titleOf,
@@ -202,13 +210,24 @@ function OfficeBody(props) {
     const controller = new AbortController()
     const run = async () => {
       setState({ phase: 'loading' })
-      const file = parseAddress(address)
-      if (file === null) {
-        setState({ phase: 'failed', message: '这个地址不认识, 打不开' })
-        return
-      }
       try {
-        const result = await props.readBytes(file.sessionId, file.path, controller.signal)
+        const file = parseAddress(address)
+        if (file === null) {
+          setState({ phase: 'failed', message: '这个地址不认识, 打不开' })
+          return
+        }
+        if (LEGACY.test(file.path)) {
+          // 老格式: 只要绝对路径 (一个字节的窗口足够), 然后交给系统里的应用
+          const probe = await props.readBytes(file.sessionId, file.path, controller.signal, { range: { offset: 0, length: 1 } })
+          if (cancelled) return
+          if (!probe.ok) {
+            setState({ phase: 'failed', message: '读取失败：' + failureText(probe.error) })
+            return
+          }
+          setState({ phase: 'legacy', path: probe.value.absolutePath, name: file.path.split('/').pop() ?? file.path })
+          return
+        }
+        const result = await props.readBytes(file.sessionId, file.path, controller.signal, {})
         if (cancelled) return
         if (!result.ok) {
           setState({ phase: 'failed', message: '读取失败：' + failureText(result.error) })
@@ -334,6 +353,32 @@ function OfficeBody(props) {
   if (state.phase === 'loading') {
     return React.createElement('div', { 'data-lw-office-state': 'loading', style: { padding: '16px', opacity: '0.7' } }, '正在读取…')
   }
+  if (state.phase === 'legacy') {
+    // 老格式 (.doc / .ppt): 这一档读不了, 保留那句失败文字, 把「重试」换成「用文件管理器打开」
+    return React.createElement(
+      'div',
+      { 'data-lw-office-state': 'legacy', style: { padding: '16px', lineHeight: '1.7' } },
+      React.createElement('div', { 'data-lw-office-message': '' }, '读取失败：Office 预览不可用。'),
+      React.createElement(
+        'div',
+        { style: { marginTop: '4px', opacity: '0.7' } },
+        `这份 ${state.name.split('.').pop()} 是老式二进制格式，这里读不了，只能用系统里的应用打开。`,
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          'data-lw-office-open': '',
+          onClick: () => {
+            // 这条窄通道由 HostScreen 接: 页面没有 FileProvider, 也不该自己 startActivity
+            location.href = `luwi-open://file?path=${encodeURIComponent(state.path)}`
+          },
+          style: { marginTop: '12px', padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(128,128,128,.5)', background: 'transparent', color: 'inherit', cursor: 'pointer' },
+        },
+        '用文件管理器打开',
+      ),
+    )
+  }
   if (state.phase === 'failed') {
     return React.createElement(
       'div',
@@ -388,13 +433,15 @@ export function apply(ctx) {
     key: ID,
     inject: () => ({
       /**
-       * 读一个工作区文件的全部字节
+       * 读一个工作区文件的字节
        * @param {string} addressSessionId 地址里那一场 (不是当前页签所在会话)
        * @param {string} path 相对工作区的路径
        * @param {AbortSignal} signal 页签生命周期
+       * @param {object} options 端点选项 (`{}` = 整个文件; 老格式只要一个字节的窗口拿绝对路径)
        * @returns {Promise<object>} 宿主那条 RemoteResult
        */
-      readBytes: (addressSessionId, path, signal) => ctx.remote.workspaceFiles.readBytes(addressSessionId, path, {}, signal),
+      readBytes: (addressSessionId, path, signal, options) =>
+        ctx.remote.workspaceFiles.readBytes(addressSessionId, path, options ?? {}, signal),
     }),
   }, OfficeBody)), 'lw-docx-preview: office body')
 }
