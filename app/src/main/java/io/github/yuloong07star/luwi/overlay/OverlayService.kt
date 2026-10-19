@@ -50,6 +50,7 @@ import io.github.yuloong07star.luwi.tool.LwSpeak
 import io.github.yuloong07star.luwi.tool.LwWakeWord
 import io.github.yuloong07star.luwi.voice.VoiceCommands
 import io.github.yuloong07star.luwi.voice.VoiceInbox
+import io.github.yuloong07star.luwi.voice.VoiceLive
 import io.github.yuloong07star.luwi.voice.VoiceState
 import io.github.yuloong07star.luwi.wake.WakeWordService
 import io.github.yuloong07star.luwi.wake.WakeWordState
@@ -2829,6 +2830,27 @@ class OverlayService : Service() {
             resident = residentVoice && WakeWordState.listening && !WakeWordState.powerSave,
         )
         val changed = word != lastWord
+        // **语音状态那份文件 (T16)**: 与球上那三个字同一套判据, 只在真的跳变时写一次 (见 [VoiceLive]).
+        // 写成"念 > 想 > 听 > 待机" —— 契约里只有这四个, 而「失败」是刚刚发生的一件事, 不是状态
+        VoiceLive.publish(
+            this,
+            when (word) {
+                BallWord.SPEAKING -> VoiceLive.SPEAKING
+                BallWord.THINKING -> VoiceLive.THINKING
+                BallWord.LISTENING -> VoiceLive.LISTENING
+                else -> VoiceLive.IDLE
+            },
+        ) {
+            // session: 念的时候是"这一句念的是哪一场的回答" (那一笔账在 [noteEdges] 里记), 想的时候是
+            // 正在跑的那一场, 听的时候是浮标那场对话 (宿主写的那本账, 见 [VoiceInbox.currentSession])。
+            // **只在跳变时取值**: 上面那个纯状态比较先过一遍, 状态没变它根本不会被调用
+            when (word) {
+                BallWord.SPEAKING -> OverlayState.readingSession.ifBlank { OverlayState.runningSession() }
+                BallWord.THINKING -> OverlayState.runningSession()
+                BallWord.LISTENING -> VoiceInbox.currentSession(this)
+                else -> null
+            }
+        }
         // **环色也得算进"变了没有"**: 两个会话轮流在想时那个字一直是「正在想」, 而颜色要跟着换
         val ring = ringOf(word)
         // **外观也算** (协议 10.1): 设置页里换了一套外观, 这一拍就该重画, 不必等状态变化
