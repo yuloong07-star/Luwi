@@ -52,14 +52,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 
 /**
- * ⋮ 菜单里那三件事的界面: 检测更新 / 捐赠 / 关于 (2026-10-08, 第 4 条)
+ * ⋮ 菜单里那几件事的界面: 检测更新 / sync 签到 / 关于 (2026-10-08 第 4 条; 捐赠页 2026-10-19 下线)
  *
  * 四个对话框排成一个"页" ([AboutPage]), 而**同一时刻只开一个** —— 由调用方 (设置页) 拿着那一个
  * [AboutPage] 变量决定画哪一个。这样从"关于"里点进"更新源"再关掉时不会叠两层窗, 也免得两个
  * `OverlayDialog` 同时挂在树上 (它们的窗口层级不是我们能摆的)
  *
- * 三条口径与开发计划 2.4 一致: **只检测不代装** (去下载交给系统浏览器), **捐赠页由主人自己填**
- * (没有缺省值, 没填就直说), **更新源可改** (缺省是 GitHub 的 Release API, 另有一条镜像)
+ * 三条口径与开发计划 2.4 一致: **只检测不代装** (去下载交给系统浏览器), **更新源可改** (缺省是
+ * GitHub 的 Release API, 另有一条镜像), 以及 **sync 那一页这一版只有壳** (后端没接上时如实说未连接)
  */
 internal enum class AboutPage {
     /** 关于: 版本号 + 那三条入口 */
@@ -82,7 +82,7 @@ internal enum class AboutPage {
 internal fun AboutDialog(
     onDismissRequest: () -> Unit,
     onOpen: (AboutPage) -> Unit,
-    onDonate: () -> Unit,
+    onSync: () -> Unit,
 ) {
     val context = LocalContext.current
     val version = remember { UpdateCheck.localVersionOf(context) }
@@ -106,9 +106,9 @@ internal fun AboutDialog(
                 onClick = { onOpen(AboutPage.SOURCE) },
             )
             ArrowPreference(
-                title = stringResource(R.string.settings_about_donate),
-                summary = stringResource(R.string.settings_menu_donate_summary),
-                onClick = onDonate,
+                title = stringResource(R.string.settings_about_sync),
+                summary = stringResource(R.string.settings_menu_sync_summary),
+                onClick = onSync,
             )
         }
         DialogButtons(

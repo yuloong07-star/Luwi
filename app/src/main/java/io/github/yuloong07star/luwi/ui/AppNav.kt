@@ -40,9 +40,9 @@ sealed interface Screen : NavKey {
     @Serializable
     data object Settings : Screen
 
-    /** 捐赠那一页: 随包发进来的 `assets/donate.html` (见 [DonateScreen]) */
+    /** sync 签到那一页 (2.7.9 第 4 条): 账号 / 到期 / 签到 / 充值 / 解绑, 这一版只有壳 (见 [SyncScreen]) */
     @Serializable
-    data object Donate : Screen
+    data object Sync : Screen
 
     /** 设置 → 技能 → 已装的那一页 (2.7.8 批次 5): 检测更新 / 一键升级 / 卸载 */
     @Serializable
@@ -160,7 +160,7 @@ fun LuwiApp() {
             ) {
                 entry<Screen.Home>(swipeDismiss = swipe) { HostScreen() }
                 entry<Screen.Settings>(swipeDismiss = swipe) { SettingsScreen() }
-                entry<Screen.Donate>(swipeDismiss = swipe) { DonateScreen() }
+                entry<Screen.Sync>(swipeDismiss = swipe) { SyncScreen() }
                 entry<Screen.SkillsInstalled>(swipeDismiss = swipe) { SkillsInstalledScreen() }
                 entry<Screen.SkillsAvailable>(swipeDismiss = swipe) { SkillsAvailableScreen() }
                 entry<Screen.PluginDetail>(swipeDismiss = swipe) { key -> PluginDetailScreen(key.id) }

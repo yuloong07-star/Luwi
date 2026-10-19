@@ -26,10 +26,23 @@
     <string name="settings_restart_host_summary">For when what the host reads once (where the workspace lands, the LAN switch) changed</string>
 
     <string name="settings_menu_update">Check for updates</string>
-    <string name="settings_menu_donate">Donate</string>
-    <string name="settings_menu_donate_summary">Opens the bundled donation page</string>
+    <string name="settings_menu_sync">Sync check-in</string>
+    <string name="settings_menu_sync_summary">Account, expiry and check-in</string>
     <string name="settings_menu_about">About</string>
     <string name="settings_close">Close</string>
+    <string name="settings_sync_account_title">Sync check-in</string>
+    <string name="settings_sync_account_not_connected">No account connected</string>
+    <string name="settings_sync_account_note">Check-in, credit and unbinding all wait for the sync backend; this page is only a shell for now and does not show made-up numbers</string>
+    <string name="settings_sync_account_expiry_line">Expires: %1$s</string>
+    <string name="settings_sync_account_sign_in">Check in</string>
+    <string name="settings_sync_account_sign_in_summary">A check-in adds a day (once the backend is connected)</string>
+    <string name="settings_sync_account_topup">Top up</string>
+    <string name="settings_sync_account_topup_summary">CNY 1 for 7 days / 3 for 30 / 30 for 365 (once the backend is connected)</string>
+    <string name="settings_sync_account_unbind">Unbind this device</string>
+    <string name="settings_sync_account_unbind_summary">Clears this device only; the account itself is untouched</string>
+    <string name="settings_sync_account_backend_missing">The backend is not connected yet, so this step cannot run</string>
+    <string name="settings_sync_account_nothing_bound">This device has no bound account</string>
+    <string name="settings_sync_account_unbound">This device was unbound</string>
 
     <string name="settings_group_common">Everyday</string>
     <string name="settings_group_ability">Abilities</string>
@@ -46,7 +59,7 @@
     <string name="settings_about_update_summary">Reads the tag of the newest release on GitHub and compares it</string>
     <string name="settings_about_source">Update source</string>
     <string name="settings_about_source_default">The built-in one</string>
-    <string name="settings_about_donate">Donate</string>
+    <string name="settings_about_sync">Sync check-in</string>
 
     <string name="settings_update_title">Check for updates</string>
     <string name="settings_update_summary">It only looks, it never installs: a newer release opens the browser and you decide</string>
@@ -63,7 +76,6 @@
 
     <string name="settings_source_title">Update source</string>
     <string name="settings_source_summary">The GitHub release API URL, for example %1$s; empty goes back to the built-in one</string>
-    <string name="settings_donate_title">Donate</string>
 
     <string name="settings_section_appearance">Appearance</string>
     <string name="settings_section_appearance_summary">Colours, corners and how dark it is</string>

@@ -396,11 +396,10 @@ fun SettingsScreen() {
                                     },
                                 ),
                                 DropdownItem(
-                                    text = stringResource(R.string.settings_menu_donate),
-                                    summary = stringResource(R.string.settings_menu_donate_summary),
-                                    // 直接开随包那一页: **没有可填的地址**, 那一页是作者自己的捐赠项目
-                                    // (主人 2026-10-08), 别人不该有机会把它指到别处
-                                    onClick = { navigator.push(Screen.Donate) },
+                                    text = stringResource(R.string.settings_menu_sync),
+                                    summary = stringResource(R.string.settings_menu_sync_summary),
+                                    // 2.7.9 第 4 条: 捐赠页下线, 这个位置换成 sync 签到 (那一页这一版只有壳)
+                                    onClick = { navigator.push(Screen.Sync) },
                                 ),
                                 DropdownItem(
                                     text = stringResource(R.string.settings_menu_about),
@@ -718,10 +717,10 @@ fun SettingsScreen() {
             AboutPage.ABOUT -> AboutDialog(
                 onDismissRequest = { about = null },
                 onOpen = { about = it },
-                // 「关于」里那一行捐赠也是同一个去处: 先把对话框收掉, 再把随包那一页推出来
-                onDonate = {
+                // 「关于」里那一行 sync 签到也是同一个去处: 先把对话框收掉, 再把那一页推出来
+                onSync = {
                     about = null
-                    navigator.push(Screen.Donate)
+                    navigator.push(Screen.Sync)
                 },
             )
 
