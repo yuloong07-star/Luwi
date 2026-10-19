@@ -193,7 +193,7 @@
 
     <string name="mode_phone">手机模式</string>
     <string name="mode_video">视频模式</string>
-    <string name="settings_section_wake">唤醒词</string>
+    <string name="settings_section_wake">唤醒</string>
     <string name="settings_section_wake_summary">喊一声就开始听</string>
     <string name="settings_wake_status">监听状态</string>
     <string name="settings_wake_state_listening">正在听「%1$s」; 喊一声或者点一下浮标就听你说一句</string>

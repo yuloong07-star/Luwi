@@ -194,7 +194,7 @@
 
     <string name="mode_phone">phone mode</string>
     <string name="mode_video">video mode</string>
-    <string name="settings_section_wake">Wake word</string>
+    <string name="settings_section_wake">Wake</string>
     <string name="settings_section_wake_summary">Say the word and it listens</string>
     <string name="settings_wake_status">Listening</string>
     <string name="settings_wake_state_listening">Listening for %1$s; a hit or a tap on the ball listens for one sentence</string>
