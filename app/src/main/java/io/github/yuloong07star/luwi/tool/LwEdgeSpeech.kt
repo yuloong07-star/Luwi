@@ -1,6 +1,4 @@
 package io.github.yuloong07star.luwi.tool
-
-import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -11,8 +9,7 @@ import kotlin.math.roundToInt
  * 「Edge 在线」那条引擎的纯算术: GEC 令牌、连接地址、SSML、时间戳、以及从二进制帧里挑出音频
  *
  * 这条引擎是**免费的**: 用微软 Edge 朗读那条 WebSocket 接口, 不要密钥、不要账号, 代价是它随时可能改
- * 协议 (2025 年起它拿 `Sec-MS-GEC` 当门: 那个数是"当前时间取整到 5 分钟 + 固定客户端令牌"的 SHA-256,
- * 见 [gec])。
+ * 协议 (2025 年起它拿 `Sec-MS-GEC` 当门: 2026-10 起那个令牌是 v2 (`CS64-SHA256`), 算法在 [EdgeDrm])。
  *
  * 协议是从 `rany2/edge-tts` 的 Python 实现核出来的 (2026-10): 先发一条 `Path:speech.config` 说输出
  * 格式, 再发一条 `Path:ssml` 说文本与音色, 然后收若干二进制帧 (前两字节是大端头长度, 头里有
@@ -28,6 +25,12 @@ internal object LwEdgeSpeech {
 
     /** 服务端会看这个版本号; 跟不上的时候报的是 403, 所以它要跟上游一起走 */
     const val CHROMIUM_VERSION = "143.0.3650.75"
+
+    /**
+     * `Sec-MS-GEC-Version` 的前缀是 **2** (2026-10-20 改): 上游 edge-tts 7.3.1 起令牌换成 v2, 服务端
+     * 按这个前缀挑算法 —— 还发 `1-…` 的话握手直接 403
+     */
+    const val SEC_MS_GEC_VERSION = "2-$CHROMIUM_VERSION"
 
     const val ENDPOINT = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
 
@@ -80,30 +83,19 @@ internal object LwEdgeSpeech {
         return "the service closed the connection (code $code)" + if (why.isEmpty()) "" else ": $why"
     }
 
-    /** Windows FILETIME 纪元到 Unix 的秒差 (1601-01-01 → 1970-01-01) */
-    private const val WINDOWS_EPOCH_SECONDS = 11_644_473_600.0
-
     /**
-     * 那个门 (`Sec-MS-GEC`): 当前时间取整到 5 分钟、换成 Windows 的 100ns 计数, 拼上客户端令牌做
-     * SHA-256, 十六进制大写
+     * 那个门 (`Sec-MS-GEC`): 当前时间取整到 5 分钟、换成 Windows 的 100 ns 计数, 拼上客户端令牌做
+     * **v2 令牌** (`CS64-SHA256`, 算法与常数在 [EdgeDrm])
      *
-     * 取整是刻意的: 5 分钟以内的请求用同一个数, 服务端与客户端各自算各自的
+     * 2026-10 之前这里是普通 SHA-256 的十六进制; 微软换了算法之后那一种只换来 403 (见 [EdgeDrm])
      */
-    fun gec(epochMillis: Long): String {
-        var seconds = epochMillis / 1000.0 + WINDOWS_EPOCH_SECONDS
-        seconds -= seconds % 300.0
-        val ticks = (seconds * 10_000_000.0).toLong()
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest("$ticks$TRUSTED_CLIENT_TOKEN".toByteArray(Charsets.US_ASCII))
-        return digest.joinToString("") { byte -> (byte.toInt() and 0xFF).toString(16).padStart(2, '0') }
-            .uppercase(Locale.ROOT)
-    }
+    fun gec(epochMillis: Long): String = EdgeDrm.token(epochMillis)
 
     /** 连一次的地址: 令牌、门、版本号与这次连接的 id 都在查询串里 */
     fun connectionUrl(connectionId: String, epochMillis: Long): String =
         "$ENDPOINT?TrustedClientToken=$TRUSTED_CLIENT_TOKEN" +
             "&Sec-MS-GEC=${gec(epochMillis)}" +
-            "&Sec-MS-GEC-Version=1-$CHROMIUM_VERSION" +
+            "&Sec-MS-GEC-Version=$SEC_MS_GEC_VERSION" +
             "&ConnectionId=$connectionId"
 
     /** JS 那种时间戳 (这条接口就是这么写的, 与服务端对得上就行) */

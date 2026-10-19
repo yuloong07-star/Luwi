@@ -19,7 +19,7 @@ class LwEdgeSpeechTest {
     @Test
     fun `固定时间的 GEC 与外部实现对得上`() {
         assertEquals(
-            "70AED27457006C255086B4F079B9FE44A4D10827C4AFDFC3C45583B6F40D7DDF",
+            "6D50DDDB91812C33-DD68EFB01898B0750C9797D51A5FF93471DFDAE6888A1039D532CBDCCE54545D",
             LwEdgeSpeech.gec(1_760_000_000_000L),
         )
     }
@@ -38,7 +38,7 @@ class LwEdgeSpeechTest {
         assertTrue(url, url.startsWith("wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?"))
         assertTrue(url, url.contains("TrustedClientToken=${LwEdgeSpeech.TRUSTED_CLIENT_TOKEN}"))
         assertTrue(url, url.contains("Sec-MS-GEC="))
-        assertTrue(url, url.contains("Sec-MS-GEC-Version=1-${LwEdgeSpeech.CHROMIUM_VERSION}"))
+        assertTrue(url, url.contains("Sec-MS-GEC-Version=2-${LwEdgeSpeech.CHROMIUM_VERSION}"))
         assertTrue(url, url.contains("ConnectionId=abc-123"))
     }
 
