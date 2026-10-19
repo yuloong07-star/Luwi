@@ -136,6 +136,14 @@ check('"按手机宽度重排"那段排在 docx-preview 自己的样式之后 (A
   // 页面容器必须从 flex + center 改成块级: 页比容器宽时 flex 会让它**两边一起**溢出, 左边被裁
   source.includes('.lw-docx-wrapper { display: block !important'),
 ], [true, true, true, true])
+check('视窗式放大: 版面按容器宽排 (width 跟倍率走), 指下那一点按 ratio 摆回原处', [
+  source.includes('host.style.width = `${String(100 * clamped)}%`'),
+  source.includes('width: `${String(100 * zoom)}%`'),
+  source.includes('container.scrollLeft = ox * ratio - cx'),
+  source.includes('container.scrollTop = oy * ratio - cy'),
+  // 重排那一套 (表格 width:100% / 单元格折行) 已经撤掉, 版面应当原样保留
+  source.includes('table-layout: auto !important'),
+], [true, true, true, true, false])
 check('pptx 自己解 OOXML: 按 sldIdLst 排页, 只收图片关系, 有上限', [
   pptx.includes("from 'jszip'"),
   pptx.includes('p:sldId'),

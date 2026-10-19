@@ -117,12 +117,11 @@ body { margin: 0; padding: 16px; font: 14px/1.65 system-ui, -apple-system, "Noto
  */
 const FIT_CSS = `
 /* docx-preview 把页面容器摆成 flex + align-items:center; 页面比容器宽时它**两边一起溢出** ——
-   左边被裁掉, 就是"放大后左边看不见" (2026-10-19 量到 section.left = -112)。改成块级, 页面贴左 */
+   左边被裁掉, 就是"放大后左边看不见" (2026-10-19 量到 section.left = -112)。改成块级, 页面
+   在放得下时用 margin:auto 居中 (块级布局里超宽时 auto 外侧距算 0, 只往右边溢出, 不会再裁左边) */
 .lw-docx-wrapper { display: block !important; width: auto !important; padding: 0 !important; }
 section.lw-docx { width: auto !important; min-width: 0 !important; min-height: 0 !important;
-  padding: 12px 14px !important; margin: 0 0 12px !important; box-shadow: none !important; }
-section.lw-docx table { width: 100% !important; max-width: 100% !important; table-layout: auto !important; }
-section.lw-docx td, section.lw-docx th { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  padding: 12px 14px !important; margin: 0 auto 12px !important; box-shadow: none !important; }
 section.lw-docx img { max-width: 100% !important; height: auto !important; }
 `
 
@@ -258,13 +257,15 @@ function OfficeBody(props) {
     if (state.phase !== 'ready' || container === null) return
 
     /**
-     * 改一份文档的缩放, 纵向留在捏合那一处, **横向一律回到左边缘**
+     * 改一份文档的缩放 —— **视窗式**: 版面一点不动, 放大的是整页 (文字、表格、图片一起),
+     * 捏合/双击那一处留在指下, 然后靠拖动看其余部分
      *
-     * 2026-10-19 主人报"放大后, 左边部分看不见": 原来横向也跟着捏合中心走 (那是图像类预览的惯例),
-     * 而文档是重排的 —— 每一行都从左边开始读, 一放大就看不见行首, 很难受。文档这一档就以"行首
-     * 永远可见"为准, 右边放不下的内容自己拖过去
+     * 两条算式是配套的, 少一条就成"重排":
+     * 1. 宿主那份文档 `zoom: z` **并且** `width: (100·z)%` (在 zoom 里百分比按容器宽/z 折算,
+     *    于是改写之后布局宽仍是容器宽 —— 版面不变, 只是画得更大)
+     * 2. 滚动静止位置按 `布局点 × 新倍率 - 屏幕点` 摆, 于是指下那一点不跳
      * @param {number} next 目标倍率
-     * @param {{ x: number, y: number } | undefined} anchor 屏幕坐标上的锚点 (只用它的纵坐标)
+     * @param {{ x: number, y: number } | undefined} anchor 屏幕坐标上的锚点
      */
     const apply = (next, anchor) => {
       const host = hostRef.current
@@ -273,12 +274,15 @@ function OfficeBody(props) {
       const ratio = clamped / zoomRef.current
       if (Math.abs(ratio - 1) < 0.001) return
       const box = container.getBoundingClientRect()
+      const cx = (anchor === undefined ? box.width / 2 : anchor.x - box.left)
       const cy = (anchor === undefined ? box.height / 2 : anchor.y - box.top)
+      const ox = container.scrollLeft + cx
       const oy = container.scrollTop + cy
       zoomRef.current = clamped
       host.style.zoom = String(clamped)
-      // 读一次 scrollTop 之前浏览器必须先把新布局算出来, 之后再摆位置
-      container.scrollLeft = container.scrollLeft * ratio
+      host.style.width = `${String(100 * clamped)}%`
+      // 读一次 scrollTop 之前浏览器必须先把新布局算出来, 之后再把同一点摆回指下
+      container.scrollLeft = ox * ratio - cx
       container.scrollTop = oy * ratio - cy
       setZoom(clamped)
     }
@@ -356,8 +360,9 @@ function OfficeBody(props) {
     React.createElement('div', {
       ref: containerRef,
       // 单指拖动照旧是原生滚动; **双指不交给浏览器** (否则整页连标签栏一起放大)
+      // 视窗式放大: 版面按容器宽排 (所以 width 跟着倍率走), `zoom` 只把它画大
       style: { position: 'absolute', inset: '0', overflow: 'auto', touchAction: 'pan-x pan-y', WebkitOverflowScrolling: 'touch' },
-    }, React.createElement('div', { ref: hostRef, style: { zoom: String(zoom), width: '100%' } })),
+    }, React.createElement('div', { ref: hostRef, style: { zoom: String(zoom), width: `${String(100 * zoom)}%` } })),
     zoom > 1.05
       ? React.createElement('button', {
         type: 'button',
