@@ -6135,6 +6135,11 @@ async function voiceReadNew(inbox) {
       at: Number(record.at) || 0,
       wake: record.wake === true,
       to,
+      // 探索那一档的每场预算 (2.7.9 T4/T5): **这一处不原样带过去, startExplore 就永远拿不到**
+      // —— 2026-10-19 量到的正是这个: 收件箱那一行写着 5 分 / 10 步, 而宿主开出来的那一场是 30 / 60
+      // (这个对象是逐键构造的, 不是整条 record)。别的来源传了也不影响: 只有 explore 那一支会读它
+      minutes: record.minutes,
+      steps: record.steps,
     })
   }
   // 留一条"还没确认投出去"的记号, 见 voiceUnchanged: 它让失败的那句话下一次还被读出来
@@ -7866,6 +7871,14 @@ async function exploreStateWriteNow() {
     v: 1,
     updatedAt: Date.now(),
     run: exploreRun.session === null ? null : { ...exploreRun },
+    // 设置页要看的那四项 (2.7.9 T5): 它们原来只在内存里, 也就是只在 `lw_explore op=status`
+    // 里出现; 写进这份文件之后应用那一侧不用问模型也看得见 (F20)
+    status: {
+      preset: exploreState.preset,
+      presetWhy: exploreState.presetWhy,
+      lastError: exploreState.lastError,
+      powerSaveUnknown: exploreState.powerSaveUnknown,
+    },
   }
   const temporary = `${path}.tmp`
   try {
@@ -8443,6 +8456,18 @@ function startExploreClock(ctx) {
       return exploreTick(ctx)
     })
     .catch((error) => warn(ctx, `the explore state could not be read: ${error?.message ?? error}`))
+    .finally(() => {
+      // 宿主起来就把探索那条工作区注册上 (2.7.9 T5, 与 dsh-ball 同一条幂等注册路): 于是「Luwi」
+      // 不必等第一次探索成功才出现在会话列表里; 顺带把 status 那四项写进读数文件, 设置页才有得看。
+      // **放在 restore 之后**: 这一步的写会覆盖 `run`, 抢在 restore 前面就把"上一场"抹掉了
+      void ensureExploreWorkspace(ctx)
+        .then((workspace) => {
+          // 一行证据: 工作区不必等第一次探索成功才出现 (2.7.9 T5), 而这一行就是"它真的在"
+          console.log(`luwi-channel: the explore workspace at startup is ${workspace?.path ?? '(not registered)'}`)
+          return exploreStateWrite()
+        })
+        .catch((error) => warn(ctx, `the explore workspace could not be registered at startup: ${error?.message ?? error}`))
+    })
   onSessionEvent(ctx, (session, event) => {
     if (event.type !== 'turn/end') return
     if (exploreRun.session === null || session.id !== exploreRun.session) return

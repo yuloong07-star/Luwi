@@ -76,6 +76,7 @@ import io.github.yuloong07star.luwi.lock.LockSecret
 import io.github.yuloong07star.luwi.lock.LockSecretData
 import io.github.yuloong07star.luwi.lock.LockSetting
 import io.github.yuloong07star.luwi.tool.ExploreSchedule
+import io.github.yuloong07star.luwi.tool.ExploreStatus
 import io.github.yuloong07star.luwi.tool.ExploreTask
 import io.github.yuloong07star.luwi.tool.LwCamera
 import io.github.yuloong07star.luwi.tool.LwAutomation
@@ -84,6 +85,7 @@ import io.github.yuloong07star.luwi.tool.LwModel
 import io.github.yuloong07star.luwi.tool.LwQuick
 import io.github.yuloong07star.luwi.tool.VideoLooks
 import io.github.yuloong07star.luwi.tool.bytes
+import java.io.File
 import io.github.yuloong07star.luwi.voice.VoiceInbox
 import io.github.yuloong07star.luwi.constants.UiSpacing
 import io.github.yuloong07star.luwi.host.AppSkills
@@ -3121,6 +3123,7 @@ private fun ExploreItems() {
     var revision by remember { mutableIntStateOf(0) }
     var editingAt by rememberSaveable { mutableStateOf(false) }
     var editingCard by rememberSaveable { mutableStateOf(false) }
+    var editingSummary by rememberSaveable { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
     val plan = remember(revision) { ExploreSchedule.plan(context) }
@@ -3252,6 +3255,27 @@ private fun ExploreItems() {
         }
         PlaceholderItems(said)
     }
+    // 宿主那四项读数 (2.7.9 T5): 预设 / 为什么是它 / 省电探针读没读到 / 上一次出错 —— 它们原来只在
+    // `lw_explore op=status` 里, 现在宿主每次落盘都写进 `lw/explore.json` 的 `status` 段
+    val status = remember(revision) { ExploreStatus.read(context) }
+    status?.let { reading ->
+        reading.preset?.let { PlaceholderItems(context.getString(R.string.settings_explore_preset, it)) }
+        reading.presetWhy?.let { PlaceholderItems(context.getString(R.string.settings_explore_preset_why, it)) }
+        if (reading.powerSaveUnknown) {
+            PlaceholderItems(context.getString(R.string.settings_explore_power_unknown))
+        }
+        reading.lastError?.let { PlaceholderItems(context.getString(R.string.settings_explore_reading_error, it)) }
+    }
+    // 最近一份摘要 (轻量档, 施工单 §2.6 T4): 摘要在 `lw/explore/<yyyyMMdd-HHmm>.md`, 这里只读最新那份
+    val summaryFile = remember(revision) { ExploreStatus.latestSummary(context) }
+    ArrowPreference(
+        title = stringResource(R.string.settings_explore_summary_open),
+        summary = summaryFile?.name ?: stringResource(R.string.settings_explore_summary_missing),
+        onClick = {
+            haptic.contextClick()
+            if (summaryFile != null) editingSummary = true
+        },
+    )
     PlaceholderItems(message ?: stringResource(R.string.settings_explore_card_note))
     PlaceholderItems(stringResource(R.string.settings_explore_note))
 
@@ -3284,6 +3308,51 @@ private fun ExploreItems() {
                 revision += 1
             },
         )
+    }
+    if (editingSummary && summaryFile != null) {
+        ExploreSummaryDialog(file = summaryFile, onDismiss = { editingSummary = false })
+    }
+}
+
+/**
+ * 最近那份摘要的窗 (2.7.9 T5 轻量档): 只是把文件读出来给人看
+ *
+ * 不做 markdown 渲染: 应用里没有一条现成的渲染路 (dsh 那个右栏预览在网页那一侧), 而这一行要的只是
+ * "这一场留下了什么"; 全文就在那个文件里, 标题底下写着它的名字
+ */
+@Composable
+private fun ExploreSummaryDialog(file: File, onDismiss: () -> Unit) {
+    val body = remember(file.path) {
+        runCatching { file.readText() }.getOrNull()
+    }
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_explore_summary_title),
+        summary = stringResource(R.string.settings_explore_summary_note, file.name),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismiss,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = body ?: stringResource(
+                    R.string.settings_explore_summary_failed,
+                    "这份文件读不出来",
+                ),
+                fontSize = 12.sp,
+                color = if (body == null) colorScheme.error else colorScheme.onSurfaceVariantSummary,
+            )
+        }
+        Button(
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+        ) {
+            Text(text = stringResource(R.string.settings_close))
+        }
     }
 }
 

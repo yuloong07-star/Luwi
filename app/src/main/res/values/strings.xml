@@ -399,6 +399,16 @@
     <string name="settings_explore_steps">Steps per run</string>
     <string name="settings_explore_steps_summary">At most %1$d steps per run (1-1000, 60 by default)</string>
     <string name="settings_explore_budget">budget %1$d min / %2$d steps</string>
+    <string name="settings_explore_preset">Preset: %1$s</string>
+    <string name="settings_explore_preset_why">Why this one: %1$s</string>
+    <string name="settings_explore_power_unknown">The power-save probe could not be read this time, so it ran as if not in power save</string>
+    <string name="settings_explore_reading_error">Last problem: %1$s</string>
+    <string name="settings_explore_summary_open">Open the latest summary</string>
+    <string name="settings_explore_summary_missing">No summary yet (the first run has not finished)</string>
+    <string name="settings_explore_summary_title">Latest summary</string>
+    <string name="settings_explore_summary_note">The whole file is %1$s</string>
+    <string name="settings_explore_summary_failed">This file could not be read: %1$s</string>
+    <string name="settings_explore_not_started">This exploration did not start</string>
     <string name="settings_explore_card">The next exploration\'s task</string>
     <string name="settings_explore_card_empty">(empty: it will explore the phone freely)</string>
     <string name="settings_explore_card_dialog_summary">This is the opening task of the next run; she also rewrites it at the end of every exploration</string>

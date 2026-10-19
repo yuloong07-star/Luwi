@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.automation.AutomationRule
 import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.host.HostStatus
@@ -247,6 +248,8 @@ internal object ExploreSchedule {
         if (skip != null) {
             Log.i(TAG, "the scheduled exploration at ${current.at} was skipped: $skip")
             save(context, current.copy(last = Last(now, "skipped", skip)))
+            // 只写文件的话, 主人要等下次打开设置页才知道这一场没开成 (2.7.9 T5)
+            report(context, skip)
             return
         }
         val card = ExploreTask.read(context)
@@ -263,6 +266,7 @@ internal object ExploreSchedule {
         if (seq == null) {
             Log.w(TAG, "the scheduled exploration could not be queued")
             save(context, current.copy(last = Last(now, "failed", "收件箱写不进去")))
+            report(context, "收件箱写不进去")
             return
         }
         val why = if (card.isEmpty()) "卡是空的, 按自由探索投的" else null
@@ -280,6 +284,24 @@ internal object ExploreSchedule {
         "skipped" -> "没跑: ${last.why.orEmpty()}"
         "failed" -> "没投出去: ${last.why.orEmpty()}"
         else -> last.outcome
+    }
+
+    /**
+     * 「这次探索没开成: 原因」那一条通知 (2.7.9 T5)
+     *
+     * 走 [LwNotify] 与模型发通知同一条渠道: 一个固定 id, 再加一次只更新那一条, 不会堆一屏; 通知权限
+     * 没给 (或这台机器没有通知栏) 时静默 —— 排期这一趟不该因为一句提示失败
+     */
+    private fun report(context: Context, why: String) {
+        runCatching {
+            LwNotify.notify(
+                context,
+                buildJsonObject {
+                    put("title", context.getString(R.string.settings_explore_not_started))
+                    put("text", why)
+                },
+            )
+        }
     }
 }
 

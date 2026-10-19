@@ -14,6 +14,8 @@
  *      摘要的文件形状
  *   5. **预算透传** (2.7.9 第 8 条 T4): 排期文件的两个键 → 收件箱那一行 → 宿主 `startExplore`,
  *      三处的键名 / 缺省 / 范围必须一致, 老文件 (没有那两个键) 仍落 30 / 60
+ *   6. **工作区与读数** (2.7.9 T5): 宿主起来就注册 `Luwi` 工作区、status 四项写进 `explore.json`、
+ *      设置页读得到、排期没开成时有一条通知、最近一份摘要能在应用里打开
  *
  * 跑法: `node tools/check-explore.mjs`
  * 它**直接取 `host-plugin/index.mjs` 里那一段源码来跑** (不复制第二份), 所以测的是上线那一份
@@ -518,6 +520,16 @@ check('宿主那一支把这两个值透传给 startExplore', [
   /const minutes = exploreClamp\(options\?\.minutes, EXPLORE_MINUTES_RANGE, EXPLORE_MINUTES_DEFAULT\)/u.test(section),
   /const stepLimit = exploreClamp\(options\?\.steps, EXPLORE_STEPS_RANGE, EXPLORE_STEPS_DEFAULT\)/u.test(section),
 ], [true, true, true, true])
+// 2026-10-19 量到的: 收件箱那一行写着 5 / 10, 宿主开出来的是 30 / 60 —— 读那一行时对象是逐键构造的,
+// `voiceReadNew` 不加这两个键, 后面整条链再对也没用
+const voiceReadNew = host.slice(
+  host.indexOf('async function voiceReadNew(inbox)'),
+  host.indexOf('function startVoiceInbox(ctx, deliver)'),
+)
+check('读收件箱那一关把 minutes / steps 也带过去 (T4 在这里漏过一次)', [
+  /minutes: record\.minutes,/u.test(voiceReadNew),
+  /steps: record\.steps,/u.test(voiceReadNew),
+], [true, true])
 check('老行没有这两个键时仍落 30 / 60', [
   api.exploreClamp(undefined, api.EXPLORE_MINUTES_RANGE, api.EXPLORE_MINUTES_DEFAULT),
   api.exploreClamp(undefined, api.EXPLORE_STEPS_RANGE, api.EXPLORE_STEPS_DEFAULT),
@@ -537,6 +549,58 @@ check('设置页那两条在 (分钟用滑块 / 步数用档位), 仍然没有�
   !exploreItems.includes('settings_explore_start'),
 ], [true, true, true, true, true, true, true])
 check('段首那句读数带上预算 (分 / 步)', screen.includes('R.string.settings_explore_budget'), true)
+
+/* ── 十四、工作区与读数 (2.7.9 T5) ─────────────────────────────────────── */
+
+check('宿主起来就注册探索那条工作区 (与投递那条同一条幂等路)', [
+  /void ensureExploreWorkspace\(ctx\)\n\s*\.then\(\(workspace\) => \{[\s\S]*?return exploreStateWrite\(\)/u.test(host),
+  // 一次在 apply 启动那一段, 一次在投递时 (startExplore) —— 少哪一次都不对
+  (host.match(/ensureExploreWorkspace\(ctx\)/gu) ?? []).length >= 2,
+], [true, true])
+check('注册与那一次写排在 restore 之后 (抢在前面会把上一场抹掉)', [
+  host.indexOf('void ensureExploreWorkspace(ctx)')
+    > host.indexOf('the explore state could not be read'),
+], [true])
+
+const stateWrite = host.slice(
+  host.indexOf('async function exploreStateWriteNow()'),
+  host.indexOf('async function exploreStateRestore()'),
+)
+check('status 那四项写进读数文件 (设置页才有得看, F20)', [
+  /status: \{/.test(stateWrite),
+  /preset: exploreState\.preset/.test(stateWrite),
+  /presetWhy: exploreState\.presetWhy/.test(stateWrite),
+  /lastError: exploreState\.lastError/.test(stateWrite),
+  /powerSaveUnknown: exploreState\.powerSaveUnknown/.test(stateWrite),
+], [true, true, true, true, true])
+
+const exploreStatus = await read('app/src/main/java/io/github/yuloong07star/luwi/tool/ExploreStatus.kt')
+check('应用这一侧有一个只读那四项的读数 (纯解析 + 最近一份摘要)', [
+  /internal object ExploreStatus/.test(exploreStatus),
+  /class Snapshot\(/.test(exploreStatus),
+  /fun snapshotOf\(root: JsonObject\)/.test(exploreStatus),
+  /root\["status"\] as\? JsonObject/.test(exploreStatus),
+  /fun latestSummary\(context: Context\)/.test(exploreStatus),
+], [true, true, true, true, true])
+check('设置页显示那四项 + 最近一份摘要那一行', [
+  /ExploreStatus\.read\(context\)/.test(exploreItems),
+  /settings_explore_preset/.test(exploreItems),
+  /settings_explore_power_unknown/.test(exploreItems),
+  /settings_explore_reading_error/.test(exploreItems),
+  /settings_explore_summary_open/.test(exploreItems),
+  /ExploreSummaryDialog\(/.test(exploreItems),
+], [true, true, true, true, true, true])
+check('摘要窗真的把文件读出来 (读不出来也如实说)', [
+  /runCatching \{ file\.readText\(\) \}/.test(screen),
+  /settings_explore_summary_failed/.test(screen),
+], [true, true])
+
+check('排期没开成时给一条通知 (不只是写文件)', [
+  /LwNotify\.notify\(/.test(schedule),
+  /settings_explore_not_started/.test(schedule),
+  // 两条"没开成"的路径各调一次: 三条闸跳过的 skipped 与收件箱写不进去的 failed
+  (schedule.match(/report\(context, /gu) ?? []).length >= 2,
+], [true, true, true])
 
 /* ── 收尾 ─────────────────────────────────────────────────────────────── */
 

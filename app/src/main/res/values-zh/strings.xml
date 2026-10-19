@@ -399,6 +399,16 @@
     <string name="settings_explore_steps">每场多少步</string>
     <string name="settings_explore_steps_summary">每场最多 %1$d 步 (1~1000, 缺省 60)</string>
     <string name="settings_explore_budget">预算 %1$d 分 / %2$d 步</string>
+    <string name="settings_explore_preset">预设: %1$s</string>
+    <string name="settings_explore_preset_why">为什么是它: %1$s</string>
+    <string name="settings_explore_power_unknown">省电那一步这次没读到, 按不省电放行</string>
+    <string name="settings_explore_reading_error">上一次出错: %1$s</string>
+    <string name="settings_explore_summary_open">看最近一份摘要</string>
+    <string name="settings_explore_summary_missing">还没有摘要 (第一场还没收尾)</string>
+    <string name="settings_explore_summary_title">最近一份摘要</string>
+    <string name="settings_explore_summary_note">全文在 %1$s</string>
+    <string name="settings_explore_summary_failed">这一份读不出来: %1$s</string>
+    <string name="settings_explore_not_started">这次探索没开成</string>
     <string name="settings_explore_card">下一次探索的任务</string>
     <string name="settings_explore_card_empty">(空: 到点会自由探索这台手机)</string>
     <string name="settings_explore_card_dialog_summary">这一份就是下一场的开场任务; 她每次探索结束也会按那一趟改写它</string>
