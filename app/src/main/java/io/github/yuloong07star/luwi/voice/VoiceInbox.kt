@@ -133,6 +133,9 @@ internal object VoiceInbox {
      *
      * [to] 是**回复框点名的那一场会话** (见文件头): 空 / 空白就是"没点名", 那样连键都不写 ——
      * 宿主那一侧读不到这个键与读到空串是一个意思
+     *
+     * [minutes] / [steps] 是**探索那一档的每场预算** (2.7.9 第 8 条 T1): 只给 `source:explore` 那一行写,
+     * 别的来源传了也不写 —— 宿主那一侧只认探索那一条支, 而老行没有这两个键时它落 30 / 60 的缺省
      */
     fun append(
         context: Context,
@@ -140,10 +143,13 @@ internal object VoiceInbox {
         source: String = "voice",
         fresh: Boolean = false,
         to: String? = null,
+        minutes: Int? = null,
+        steps: Int? = null,
     ): Long? {
         val line = text.trim()
         if (line.isEmpty()) return null
         val pointed = to?.trim().orEmpty()
+        val exploring = source == SOURCE_EXPLORE
         val target = file(context)
         synchronized(lock) {
             return try {
@@ -158,6 +164,10 @@ internal object VoiceInbox {
                     put("source", source)
                     if (fresh) put("wake", true)
                     if (pointed.isNotEmpty()) put("to", pointed)
+                    if (exploring) {
+                        minutes?.let { put("minutes", it) }
+                        steps?.let { put("steps", it) }
+                    }
                 }
                 target.appendText("$record\n")
                 nextSeq

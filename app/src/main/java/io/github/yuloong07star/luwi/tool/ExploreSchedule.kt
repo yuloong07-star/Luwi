@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
@@ -32,8 +33,8 @@ import java.util.concurrent.Executors
  * 1. 主人设定 `HH:mm` 与总开关 (缺省关)
  * 2. [arm] 把下一次排进 `AlarmManager` (精确优先, 退 `setAndAllowWhileIdle`)
  * 3. 到点 [fire]: 宿主没在跑 / 省电 / 上一场还在跑 → 跳过并记读数; 否则读 [ExploreTask] 的卡
- *    (空就是"自由探索这台手机"), 写一行收件箱 (`source:"explore"`) —— 宿主那边照批次 7 的
- *    `startExplore` 开一场, 预算 / `Luwi` 工作区 / `explore` 预设都不变
+ *    (空就是"自由探索这台手机"), 写一行收件箱 (`source:"explore"`, 带着每场预算 `minutes` / `steps`)
+ *    —— 宿主那边照批次 7 的 `startExplore` 开一场, `Luwi` 工作区 / `explore` 预设都不变
  * 4. 不管跑没跑, 都写一份 `last` 读数并重排明天
  *
  * 配置与读数都落在 `$DSH_HOME/lw/explore-schedule.json` (应用单写者); `explore.json` 是宿主的账,
@@ -49,6 +50,17 @@ internal object ExploreSchedule {
     /** 缺省时刻: 夜里 (探索本身不发声, 不打扰人) */
     const val DEFAULT_AT = "03:00"
 
+    /**
+     * 每场预算的缺省与范围 (2.7.9 第 8 条 T2)
+     *
+     * 四个数与宿主那侧 `EXPLORE_MINUTES_DEFAULT` / `EXPLORE_STEPS_DEFAULT` 与两个范围**必须一样** ——
+     * 应用只是把这几个数交给收件箱, 真正的夹取仍由宿主做; `tools/check-explore.mjs` 钉着这一对
+     */
+    const val MINUTES_DEFAULT = 30
+    const val STEPS_DEFAULT = 60
+    val MINUTES_RANGE = 1..180
+    val STEPS_RANGE = 1..1000
+
     /** 与自动指令那个闹钟 (41) 分开, 两边互不覆盖 */
     private const val REQUEST = 42
 
@@ -61,8 +73,25 @@ internal object ExploreSchedule {
     /** 上一次排期的那一趟 (给人看的三个值) */
     data class Last(val at: Long, val outcome: String, val why: String?)
 
-    /** 排期配置: 开没开 / 每天几点 / 上一趟 */
-    data class Plan(val enabled: Boolean, val at: String, val last: Last?)
+    /** 排期配置: 开没开 / 每天几点 / 每场预算 / 上一趟 */
+    data class Plan(
+        val enabled: Boolean,
+        val at: String,
+        val last: Last?,
+        val minutes: Int = MINUTES_DEFAULT,
+        val steps: Int = STEPS_DEFAULT,
+    )
+
+    /**
+     * 夹进范围 (与宿主 `exploreClamp` 同一个口径: 认不出来给缺省, 出来的数四舍五入再夹)
+     *
+     * 两份纯函数 (带 null / 不带 null) 是为了 `planOf` 与 `save` 各用得到的那一档, 判据在
+     * [ExploreScheduleTest]
+     */
+    fun clamp(value: Int?, range: IntRange, fallback: Int): Int =
+        (value ?: fallback).coerceIn(range.first, range.last)
+
+    fun clamp(value: Int, range: IntRange): Int = value.coerceIn(range.first, range.last)
 
     fun file(context: Context): File = File(File(context.filesDir, DshHost.HOME_DIR), "$DIRECTORY/$FILE")
 
@@ -75,7 +104,7 @@ internal object ExploreSchedule {
         return planOf(root)
     }
 
-    /** 一份 JSON -> 配置 (纯函数; 坏 `at` 退回缺省, 不认识的键不看) */
+    /** 一份 JSON -> 配置 (纯函数; 坏 `at` 退回缺省, 预算按宿主那两个范围夹, 不认识的键不看) */
     fun planOf(root: JsonObject): Plan {
         val enabled = root["enabled"]?.jsonPrimitive?.booleanOrNull ?: false
         val asked = root["at"]?.jsonPrimitive?.contentOrNull
@@ -87,7 +116,9 @@ internal object ExploreSchedule {
                 why = one["why"]?.jsonPrimitive?.contentOrNull,
             )
         }
-        return Plan(enabled, at, last)
+        val minutes = clamp(root["minutes"]?.jsonPrimitive?.intOrNull, MINUTES_RANGE, MINUTES_DEFAULT)
+        val steps = clamp(root["steps"]?.jsonPrimitive?.intOrNull, STEPS_RANGE, STEPS_DEFAULT)
+        return Plan(enabled, at, last, minutes, steps)
     }
 
     /** 写配置 + 重排闹钟 (单写者, 原子写) */
@@ -99,6 +130,9 @@ internal object ExploreSchedule {
             put("updatedAt", System.currentTimeMillis())
             put("enabled", plan.enabled)
             put("at", plan.at)
+            // 每场预算 (2.7.9 第 8 条 T2): 落盘也夹一遍, 别让手改的文件写进一个越界的数
+            put("minutes", clamp(plan.minutes, MINUTES_RANGE))
+            put("steps", clamp(plan.steps, STEPS_RANGE))
             plan.last?.let { last ->
                 put("last", buildJsonObject {
                     put("at", last.at)
@@ -217,14 +251,26 @@ internal object ExploreSchedule {
         }
         val card = ExploreTask.read(context)
         val text = card.ifEmpty { ExploreTask.FALLBACK_TEXT }
-        val seq = VoiceInbox.append(context, text, source = VoiceInbox.SOURCE_EXPLORE)
+        // 预算跟着这一行走 (2.7.9 第 8 条 T1): 宿主那一侧照着 `minutes` / `steps` 开这一场, 老行没有
+        // 这两个键时那边落 30 / 60 的缺省
+        val seq = VoiceInbox.append(
+            context,
+            text,
+            source = VoiceInbox.SOURCE_EXPLORE,
+            minutes = current.minutes,
+            steps = current.steps,
+        )
         if (seq == null) {
             Log.w(TAG, "the scheduled exploration could not be queued")
             save(context, current.copy(last = Last(now, "failed", "收件箱写不进去")))
             return
         }
         val why = if (card.isEmpty()) "卡是空的, 按自由探索投的" else null
-        Log.i(TAG, "the scheduled exploration was queued as line #$seq (card ${card.length} chars)")
+        Log.i(
+            TAG,
+            "the scheduled exploration was queued as line #$seq"
+                + " (card ${card.length} chars, budget ${current.minutes} min / ${current.steps} steps)",
+        )
         save(context, current.copy(last = Last(now, "started", why)))
     }
 

@@ -104,4 +104,52 @@ class ExploreScheduleTest {
         assertEquals("现在在省电模式", plan.last?.why)
         assertTrue(ExploreSchedule.describeLast(plan.last!!).startsWith("没跑"))
     }
+
+    /* ── 每场预算 (2.7.9 第 8 条 T2) ─────────────────────────────────────── */
+
+    /** 老文件没有这两个键: 落 30 / 60, 与宿主那边的缺省是同一对 */
+    @Test
+    fun aMissingBudgetMeansThirtyAndSixty() {
+        val plan = ExploreSchedule.planOf(JsonObject(emptyMap()))
+
+        assertEquals(ExploreSchedule.MINUTES_DEFAULT, plan.minutes)
+        assertEquals(ExploreSchedule.STEPS_DEFAULT, plan.steps)
+        assertEquals(30, plan.minutes)
+        assertEquals(60, plan.steps)
+    }
+
+    /** 读进来就夹进范围 (与宿主 exploreClamp 同一个口径: 0 -> 1, 500 -> 180) */
+    @Test
+    fun theBudgetIsClampedWhenRead() {
+        val low = ExploreSchedule.planOf(
+            json.parseToJsonElement("""{"minutes":0,"steps":0}""") as JsonObject,
+        )
+        val high = ExploreSchedule.planOf(
+            json.parseToJsonElement("""{"minutes":500,"steps":4000}""") as JsonObject,
+        )
+
+        assertEquals(1, low.minutes)
+        assertEquals(1, low.steps)
+        assertEquals(180, high.minutes)
+        assertEquals(1000, high.steps)
+    }
+
+    /** 认不出来的值 (字符串 / 小数) 给缺省, 不把那一行当坏 JSON */
+    @Test
+    fun anUnreadableBudgetFallsBack() {
+        val plan = ExploreSchedule.planOf(
+            json.parseToJsonElement("""{"minutes":"很久","steps":12.5}""") as JsonObject,
+        )
+
+        assertEquals(30, plan.minutes)
+        assertEquals(60, plan.steps)
+    }
+
+    /** 夹取那两条纯函数的边界 (写回文件之前也要过一遍) */
+    @Test
+    fun theBudgetIsClampedBeforeItIsWritten() {
+        assertEquals(1, ExploreSchedule.clamp(-5, ExploreSchedule.MINUTES_RANGE))
+        assertEquals(180, ExploreSchedule.clamp(500, ExploreSchedule.MINUTES_RANGE))
+        assertEquals(60, ExploreSchedule.clamp(null, ExploreSchedule.STEPS_RANGE, ExploreSchedule.STEPS_DEFAULT))
+    }
 }

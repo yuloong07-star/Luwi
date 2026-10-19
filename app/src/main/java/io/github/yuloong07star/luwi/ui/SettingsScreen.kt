@@ -3144,6 +3144,9 @@ private fun ExploreItems() {
                 context.getString(R.string.settings_explore_off)
             },
         )
+        // 预算那一截 (2.7.9 第 8 条 T2): 段首这一句就要说清下一场是多少分多少步
+        append(" · ")
+        append(context.getString(R.string.settings_explore_budget, plan.minutes, plan.steps))
         running?.let {
             append(" · ")
             append(context.getString(R.string.settings_explore_running, clockStamp(it.deadline)))
@@ -3163,6 +3166,59 @@ private fun ExploreItems() {
         onClick = {
             haptic.contextClick()
             editingAt = true
+        },
+    )
+    // 每场预算 (2.7.9 第 8 条 T2): 两条都在这里, 仍然**没有"现在开一场"** —— 主人 2026-10-17 那条口径
+    // 一个字没动。分钟用滑块 (拖动时只改草稿, 松手才落盘, 免得每一帧都写一次文件并重排闹钟)
+    var minutesDraft by remember(revision) { mutableIntStateOf(plan.minutes) }
+    ArrowSlider(
+        title = stringResource(R.string.settings_explore_minutes),
+        summary = stringResource(R.string.settings_explore_minutes_summary, minutesDraft),
+        value = minutesDraft.toFloat(),
+        onValueChange = { raw ->
+            minutesDraft = ExploreSchedule.clamp(raw.roundToInt(), ExploreSchedule.MINUTES_RANGE)
+        },
+        valueRange = 1f..180f,
+        steps = 0,
+        unit = "分",
+        onValueChangeFinished = {
+            if (minutesDraft != plan.minutes) save(plan.copy(minutes = minutesDraft))
+        },
+        // 点标题那一行可以手打: 收起之后按同一个范围夹, 打出来的越界值不会写进文件
+        // (按 float 认而不是 toIntOrNull: 输入框允许小数点, "45." 这种写法 ArrowSlider 那一关是过的,
+        // 2026-10-19 在模拟器上量到的就是它 —— Int 那一关悄悄吃掉了这一次确认)
+        onInputConfirm = { text ->
+            val typed = text.trim().toFloatOrNull()?.roundToInt()
+            if (typed != null) {
+                minutesDraft = ExploreSchedule.clamp(typed, ExploreSchedule.MINUTES_RANGE)
+                save(plan.copy(minutes = minutesDraft))
+            }
+        },
+    )
+    // 步数也是滑块 + 手打 (档位只当吸附点): 验收那条要的是"5 分 / 10 步"能真的设出来, 只给四个档位
+    // 就做不到 —— 10 步不在 30 / 60 / 120 / 200 里
+    var stepsDraft by remember(revision) { mutableIntStateOf(plan.steps) }
+    ArrowSlider(
+        title = stringResource(R.string.settings_explore_steps),
+        summary = stringResource(R.string.settings_explore_steps_summary, stepsDraft),
+        value = stepsDraft.toFloat(),
+        onValueChange = { raw ->
+            stepsDraft = ExploreSchedule.clamp(raw.roundToInt(), ExploreSchedule.STEPS_RANGE)
+        },
+        valueRange = 1f..1000f,
+        steps = 0,
+        showKeyPoints = true,
+        keyPoints = listOf(30f, 60f, 120f, 200f),
+        unit = "步",
+        onValueChangeFinished = {
+            if (stepsDraft != plan.steps) save(plan.copy(steps = stepsDraft))
+        },
+        onInputConfirm = { text ->
+            val typed = text.trim().toFloatOrNull()?.roundToInt()
+            if (typed != null) {
+                stepsDraft = ExploreSchedule.clamp(typed, ExploreSchedule.STEPS_RANGE)
+                save(plan.copy(steps = stepsDraft))
+            }
         },
     )
     ArrowPreference(

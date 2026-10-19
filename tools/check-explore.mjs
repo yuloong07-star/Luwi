@@ -12,6 +12,8 @@
  *      (59 / 60 / 61 步, 到点前一拍与当拍, over 之后不再判)
  *   4. **落位与收尾**: 工作区注册路 / 省电闸 / 数步只数不拒 / `lw_explore` 的工具面 /
  *      摘要的文件形状
+ *   5. **预算透传** (2.7.9 第 8 条 T4): 排期文件的两个键 → 收件箱那一行 → 宿主 `startExplore`,
+ *      三处的键名 / 缺省 / 范围必须一致, 老文件 (没有那两个键) 仍落 30 / 60
  *
  * 跑法: `node tools/check-explore.mjs`
  * 它**直接取 `host-plugin/index.mjs` 里那一段源码来跑** (不复制第二份), 所以测的是上线那一份
@@ -330,9 +332,13 @@ const custom = await read('app/src/main/java/io/github/yuloong07star/luwi/host/C
 const inbox = await read('app/src/main/java/io/github/yuloong07star/luwi/voice/VoiceInbox.kt')
 check('pack-host 摆的就是探索那一份 (手机/视频两条 2026-10-18 下线)', /for \(const name of \['explore'\]\)/u.test(pack), true)
 check('Kotlin 那张 PRESET_ROWS 是三对', /ROW_EXPLORE to "explore",/u.test(custom), true)
+const exploreBranch = host.slice(
+  host.indexOf("if (line.source === 'explore')"),
+  host.indexOf('const automated = line.source'),
+)
 check('应用与宿主同一个来源字面量 (`explore`)', [
   /const val SOURCE_EXPLORE = "explore"/u.test(inbox),
-  /if \(line\.source === 'explore'\) return startExplore\(ctx, \{ text: line\.text, via: 'inbox' \}\)/u.test(host),
+  exploreBranch.includes("via: 'inbox'"),
 ], [true, true])
 check('收件箱那条 `source:explore` 支在 voiceDeliver 里, 排在命令表之前', [
   host.indexOf("line.source === 'explore'") < host.indexOf('const automated = line.source'),
@@ -425,7 +431,7 @@ check('排期: 每天一个时刻 / 缺省 03:00 / requestCode 42', [
 
 check('到点那几件事都在: 读卡 / 写收件箱 / 记 last', [
   /ExploreTask\.read\(context\)/.test(schedule),
-  /VoiceInbox\.append\(context, text, source = VoiceInbox\.SOURCE_EXPLORE\)/.test(schedule),
+  /VoiceInbox\.append\(\s*context,\s*text,\s*source = VoiceInbox\.SOURCE_EXPLORE/u.test(schedule),
   /save\(context, current\.copy\(last = Last\(now, "skipped", skip\)\)\)/.test(schedule),
   /save\(context, current\.copy\(last = Last\(now, "started", why\)\)\)/.test(schedule),
 ], [true, true, true, true])
@@ -474,6 +480,63 @@ check('status 那两行读数换了账本 (不再写"下一批")', [
   section.includes('next task card:'),
   !section.includes('the daily limit lands in the next batch'),
 ], [true, true, true])
+
+/* ── 十三、预算透传 (2.7.9 第 8 条 T4) ─────────────────────────────────── */
+
+check('排期文件写的是 minutes / steps 两个键 (应用这一侧单写者)', [
+  schedule.includes('put("minutes",'),
+  schedule.includes('put("steps",'),
+], [true, true])
+check('读回来也认这两个键 (认不出来落缺省)', [
+  schedule.includes('root["minutes"]'),
+  schedule.includes('root["steps"]'),
+  /const val MINUTES_DEFAULT = 30/.test(schedule),
+  /const val STEPS_DEFAULT = 60/.test(schedule),
+], [true, true, true, true])
+check('应用与宿主的缺省 / 范围是同一对 (差一个数就是"设置页写的不是宿主认的")', [
+  Number(/const val MINUTES_DEFAULT = (\d+)/.exec(schedule)[1]),
+  Number(/const val STEPS_DEFAULT = (\d+)/.exec(schedule)[1]),
+  Number(/val MINUTES_RANGE = 1\.\.(\d+)/.exec(schedule)[1]),
+  Number(/val STEPS_RANGE = 1\.\.(\d+)/.exec(schedule)[1]),
+], [
+  api.EXPLORE_MINUTES_DEFAULT,
+  api.EXPLORE_STEPS_DEFAULT,
+  api.EXPLORE_MINUTES_RANGE[1],
+  api.EXPLORE_STEPS_RANGE[1],
+])
+check('到点那一行把预算交给收件箱', [
+  /VoiceInbox\.append\(\s*context,\s*text,\s*source = VoiceInbox\.SOURCE_EXPLORE,\s*minutes = current\.minutes,\s*steps = current\.steps,\s*\)/u.test(schedule),
+], [true])
+check('收件箱只给探索那一个来源写这两个键', [
+  /fun append\([\s\S]*?minutes: Int\? = null,[\s\S]*?steps: Int\? = null,/u.test(inbox),
+  /val exploring = source == SOURCE_EXPLORE/u.test(inbox),
+  /if \(exploring\) \{\s*minutes\?\.let \{ put\("minutes", it\) \}\s*steps\?\.let \{ put\("steps", it\) \}/u.test(inbox),
+], [true, true, true])
+check('宿主那一支把这两个值透传给 startExplore', [
+  exploreBranch.includes('minutes: line.minutes'),
+  exploreBranch.includes('steps: line.steps'),
+  /const minutes = exploreClamp\(options\?\.minutes, EXPLORE_MINUTES_RANGE, EXPLORE_MINUTES_DEFAULT\)/u.test(section),
+  /const stepLimit = exploreClamp\(options\?\.steps, EXPLORE_STEPS_RANGE, EXPLORE_STEPS_DEFAULT\)/u.test(section),
+], [true, true, true, true])
+check('老行没有这两个键时仍落 30 / 60', [
+  api.exploreClamp(undefined, api.EXPLORE_MINUTES_RANGE, api.EXPLORE_MINUTES_DEFAULT),
+  api.exploreClamp(undefined, api.EXPLORE_STEPS_RANGE, api.EXPLORE_STEPS_DEFAULT),
+], [30, 60])
+
+const exploreItems = screen.slice(
+  screen.indexOf('private fun ExploreItems'),
+  screen.indexOf('private fun ExploreTimeDialog'),
+)
+check('设置页那两条在 (分钟用滑块 / 步数用档位), 仍然没有手动开始', [
+  exploreItems.includes('R.string.settings_explore_minutes'),
+  exploreItems.includes('R.string.settings_explore_steps'),
+  exploreItems.includes('ArrowSlider('),
+  exploreItems.includes('ExploreSchedule.clamp('),
+  exploreItems.includes('plan.copy(minutes ='),
+  exploreItems.includes('plan.copy(steps ='),
+  !exploreItems.includes('settings_explore_start'),
+], [true, true, true, true, true, true, true])
+check('段首那句读数带上预算 (分 / 步)', screen.includes('R.string.settings_explore_budget'), true)
 
 /* ── 收尾 ─────────────────────────────────────────────────────────────── */
 

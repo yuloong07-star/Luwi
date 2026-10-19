@@ -394,6 +394,11 @@
     <string name="settings_explore_at_dialog_summary">Once a day: write HH:mm (for example 03:00) and it starts by itself at that time</string>
     <string name="settings_explore_at_hint">03:00</string>
     <string name="settings_explore_at_bad">The time has to be HH:mm, for example 03:00</string>
+    <string name="settings_explore_minutes">Length of one run</string>
+    <string name="settings_explore_minutes_summary">%1$d minutes per run (1-180, 30 by default)</string>
+    <string name="settings_explore_steps">Steps per run</string>
+    <string name="settings_explore_steps_summary">At most %1$d steps per run (1-1000, 60 by default)</string>
+    <string name="settings_explore_budget">budget %1$d min / %2$d steps</string>
     <string name="settings_explore_card">The next exploration\'s task</string>
     <string name="settings_explore_card_empty">(empty: it will explore the phone freely)</string>
     <string name="settings_explore_card_dialog_summary">This is the opening task of the next run; she also rewrites it at the end of every exploration</string>

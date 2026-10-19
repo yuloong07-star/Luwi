@@ -7065,7 +7065,16 @@ async function voiceDeliver(ctx, line) {
   // 探索那一档走**收件箱**进来 (2.7.8 批次 7; 批次 8 的探索卡片走的就是这条): 它不是一句话, 而是
   // "开一场探索" —— 于是它不进命令表、不截图、也不碰 `voice/session.json` 那本账 (那本账只认球自己
   // 那一句, 见 [voiceSessionBump])。检查 `source` 放在最前面: 这一步只多一次字符串比较
-  if (line.source === 'explore') return startExplore(ctx, { text: line.text, via: 'inbox' })
+  if (line.source === 'explore') {
+    // 每场预算跟着那一行走 (2.7.9 第 8 条 T1): 应用那边写 `minutes` / `steps`, 老行没有这两个键时
+    // startExplore 里的 exploreClamp 落 30 / 60 的缺省
+    return startExplore(ctx, {
+      text: line.text,
+      via: 'inbox',
+      minutes: line.minutes,
+      steps: line.steps,
+    })
+  }
   // 先看它是不是一句命令 (批次 4.5): 是的话走 applyMode, 不进会话 —— 所以这一句既不插正在跑的那
   // 一轮, 也不开新对话, 更不理会 `line.wake`。命令是"对这台手机说的", 不是"对助手说的一句话"
   //

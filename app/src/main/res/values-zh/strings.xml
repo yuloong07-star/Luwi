@@ -394,6 +394,11 @@
     <string name="settings_explore_at_dialog_summary">一天一次: 填 HH:mm (例如 03:00), 到点她自己开始</string>
     <string name="settings_explore_at_hint">03:00</string>
     <string name="settings_explore_at_bad">时刻要写成 HH:mm, 例如 03:00</string>
+    <string name="settings_explore_minutes">每场多少分钟</string>
+    <string name="settings_explore_minutes_summary">每场 %1$d 分钟 (1~180, 缺省 30)</string>
+    <string name="settings_explore_steps">每场多少步</string>
+    <string name="settings_explore_steps_summary">每场最多 %1$d 步 (1~1000, 缺省 60)</string>
+    <string name="settings_explore_budget">预算 %1$d 分 / %2$d 步</string>
     <string name="settings_explore_card">下一次探索的任务</string>
     <string name="settings_explore_card_empty">(空: 到点会自由探索这台手机)</string>
     <string name="settings_explore_card_dialog_summary">这一份就是下一场的开场任务; 她每次探索结束也会按那一趟改写它</string>
