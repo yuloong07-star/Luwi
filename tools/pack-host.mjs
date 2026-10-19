@@ -624,6 +624,13 @@ const uiFixInstalled = join(out, 'node_modules', 'luwi-ui-fix')
 cpSync(uiFix, uiFixInstalled, { recursive: true })
 console.log(`pack-host: installed the Luwi CSS overlay from ${uiFix}`)
 
+// docx 试探 (2.7.9 第 6 条 T8): 与上面那一个同一个拷法 —— 源是 `presets/docx-preview`, 落进
+// `node_modules/lw-docx-preview`。宿主那一半是空的, 类型与 hello 卡在 `lib/client.js` 里
+const docxPreview = fileURLToPath(new URL('../presets/docx-preview', import.meta.url))
+const docxPreviewInstalled = join(out, 'node_modules', 'lw-docx-preview')
+cpSync(docxPreview, docxPreviewInstalled, { recursive: true })
+console.log(`pack-host: installed the Luwi docx preview probe from ${docxPreview}`)
+
 // 真把这个包 import 一次, 数一数注册出来几个工具
 //
 // `defineTool` 在模块求值的时候就编译一遍参数 schema, 而插件的 TOOLS 是模块级的常量数组: 一张不

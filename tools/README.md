@@ -34,6 +34,7 @@
 | `check-video-gate.mjs` | 视频模式那两道闸 (屏幕类工具一律拒 / 相机同时只许一场会话用) 的判据表, 临时 `DSH_HOME` 自己搭 |
 | `check-explore.mjs` | 探索那一档的判据表 (2.7.8 批次 7): 预设那一段的 19 行 / persona 那三条红线与五节摘要 / 预算常数与 `exploreBudget` 真值表 / 工作区与预设回退 / 省电闸 / 数步只数不拒 / `lw_explore` 的工具面 / 摘要的文件形状 (抽那几段纯函数真跑) / 候选卡已下线 |
 | `check-bare-percent.py` | 扫 `strings.xml` 里的裸 `%` (`Resources.getString` 会把它当转换符, 主线程崩) |
+| `check-docx-preview.mjs` | docx 试探那一包 (2.7.9 T8) 的判据表: 包形状 / 装载 id 与包名一字不差 / `extension` 档与那条**末尾不能带 `$`** 的模式 / 正文挂在 keyed seat 上 / 两张覆盖层表各一行且不在 `PluginRows` / 树里那份与源一字不差 |
 | `check-tools.mjs` | 扫本目录自己: 命名 / 用法段 / 根目录落位 (就是本文那三条约定) |
 | `gen-keycodes.mjs` | 从 Android 自己的头文件重新生成 `channel/KeyCodes.kt` 那张名字表 |
 
