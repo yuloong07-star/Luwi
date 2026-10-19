@@ -58,6 +58,8 @@
     <string name="settings_update_apk">Package %1$s, about %2$s</string>
     <string name="settings_update_open">Go download</string>
     <string name="settings_update_retry">Try again</string>
+    <string name="settings_update_auto_title">Update available</string>
+    <string name="settings_update_skip">Don\'t remind me about this version</string>
 
     <string name="settings_source_title">Update source</string>
     <string name="settings_source_summary">The GitHub release API URL, for example %1$s; empty goes back to the built-in one</string>

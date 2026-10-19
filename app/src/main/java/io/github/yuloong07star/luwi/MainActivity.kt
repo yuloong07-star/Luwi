@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.lifecycleScope
 import io.github.yuloong07star.luwi.channel.LwApps
 import io.github.yuloong07star.luwi.channel.LwOcr
 import io.github.yuloong07star.luwi.channel.PreviewControl
@@ -24,8 +25,13 @@ import io.github.yuloong07star.luwi.tool.LwWakeWord
 import io.github.yuloong07star.luwi.tool.SpeakSettings
 import io.github.yuloong07star.luwi.tool.VideoLooks
 import io.github.yuloong07star.luwi.ui.LuwiApp
+import io.github.yuloong07star.luwi.update.AutoUpdate
 import io.github.yuloong07star.luwi.util.PermissionRequests
 import io.github.yuloong07star.luwi.util.PortraitPolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -85,6 +91,12 @@ class MainActivity : ComponentActivity() {
         LwApps.attach(this)
         // The host deliberately outlives this activity, so the service owns its lifetime
         DshHostService.start(this)
+        // 冷启动自己查一次更新 (2.7.9 第 3 条): 晚 3 s 起查, 等 host 起来, 别和首屏抢那几秒;
+        // 一天最多一次, 失败静默 —— 判据全在 AutoUpdate.shouldCheck, 弹窗那一份状态在 AutoUpdatePrompt
+        lifecycleScope.launch {
+            delay(AUTO_UPDATE_DELAY_MS)
+            withContext(Dispatchers.IO) { runCatching { AutoUpdate.run(this@MainActivity) } }
+        }
         // 冷启动那一档: 「回应用」把界面拉起来时带的就是"要落到哪一场对话"那个 id (见 onNewIntent)
         // **带了空串就是"去新会话界面"** ([BallReturn.NEW_SESSION], 2026-10-09): 与"这个 intent 没带
         // 那个键"分得开 —— 没带 (`null`) 时 [BallReturn.ask] 什么都不做, 界面照旧只是被提到前面
@@ -198,5 +210,8 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         private const val TAG = "LwMain"
+
+        /** 等 host 起来再查: 首屏那几秒不该和一次网络请求抢 */
+        private const val AUTO_UPDATE_DELAY_MS = 3_000L
     }
 }

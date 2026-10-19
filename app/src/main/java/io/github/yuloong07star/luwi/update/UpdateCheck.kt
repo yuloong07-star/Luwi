@@ -4,8 +4,6 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * 「检测更新」: 把远处那一条 Release 读回来, 与手上这个版本比一比
@@ -75,7 +73,7 @@ internal object UpdateCheck {
         val failures = mutableListOf<String>()
         for (url in attempts) {
             try {
-                val parsed = ReleaseJson.parse(fetch(url))
+                val parsed = ReleaseJson.parse(ReleaseFetch.raw(url))
                 release = parsed
                 answeredBy = url
                 val newer = ReleaseJson.newer(parsed.version, localVersion)
@@ -87,7 +85,7 @@ internal object UpdateCheck {
                 }
                 return
             } catch (error: Throwable) {
-                failures += "${host(url)}: ${error.message ?: error}"
+                failures += "${ReleaseFetch.host(url)}: ${error.message ?: error}"
             }
         }
         phase = Phase.FAILED
@@ -117,28 +115,4 @@ internal object UpdateCheck {
             info.versionCode.toLong()
         }
     }.getOrDefault(0L)
-
-    /** 取一条 URL 的正文 (GitHub 的 API 要 User-Agent, 少了它一律回 403) */
-    private fun fetch(url: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Luwi")
-            setRequestProperty("Accept", "application/vnd.github+json")
-        }
-        try {
-            val code = connection.responseCode
-            if (code != HttpURLConnection.HTTP_OK) throw IllegalStateException("HTTP $code")
-            return connection.inputStream.use { stream -> stream.readBytes().decodeToString() }
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    /** 报错时只报域名: 完整地址太长, 而它就在上面那一行写着 */
-    private fun host(url: String): String = runCatching { URL(url).host }.getOrDefault(url)
-
-    private const val CONNECT_TIMEOUT_MS = 15_000
-    private const val READ_TIMEOUT_MS = 30_000
 }

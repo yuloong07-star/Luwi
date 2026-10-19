@@ -3,10 +3,15 @@ package io.github.yuloong07star.luwi.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -19,24 +24,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.scaffolds.SuperTextField
 import io.github.yuloong07star.luwi.update.AboutSettings
+import io.github.yuloong07star.luwi.update.ReleaseJson
 import io.github.yuloong07star.luwi.update.UpdateCheck
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 
 /**
@@ -164,28 +176,7 @@ internal fun UpdateDialog(onDismissRequest: () -> Unit) {
             }
             // 有新版本时把它的两个数也报出来: 发布于哪天、包多大 —— 那正是"要不要现在下"的判据
             if (phase == UpdateCheck.Phase.NEWER && release != null) {
-                val size = if (release.apkBytes > 0L) {
-                    stringResource(
-                        R.string.settings_update_apk,
-                        release.apkName.orEmpty(),
-                        megabytes(release.apkBytes),
-                    )
-                } else {
-                    ""
-                }
-                val line = listOf(
-                    release.published.takeIf { it.isNotEmpty() }
-                        ?.let { stringResource(R.string.settings_update_published, it) },
-                    size.takeIf { it.isNotEmpty() },
-                    release.notes.takeIf { it.isNotEmpty() },
-                ).filterNotNull().joinToString("\n")
-                if (line.isNotEmpty()) {
-                    Text(
-                        text = line,
-                        color = colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
+                ReleaseFacts(release)
             }
         }
         // 第二动作只有查完之后才有: 有新版本是"去下载", 查完没新的 (或者没查到) 是"重试"
@@ -213,6 +204,127 @@ internal fun UpdateDialog(onDismissRequest: () -> Unit) {
         DialogButtons(
             other = action?.let { stringResource(R.string.settings_close) to onDismissRequest },
             main = action ?: (stringResource(R.string.settings_close) to onDismissRequest),
+        )
+    }
+}
+
+/**
+ * 冷启动查到的新版本 (2.7.9 第 3 条)
+ *
+ * 与手动那一趟 ([UpdateDialog]) 共用正文与那两个数, 差别只在按钮: 主「去下载」, 次「不再提示这次版本」
+ * —— 后者记的是**远端那个版本号** ([AutoUpdate.skipVersion]), 于是它不再是"新的"之前都不再弹
+ *
+ * **为什么这一只不用 [OverlayDialog]**: 它是在主页那块 WebView 上面弹的, 而 WebView 是同一个窗口里的
+ * **子 View** —— 组合里画的东西都在子 View 下面; Miuix 的 `OverlayDialog` 还要有人 (Scaffold) 托管才
+ * 画得出来, 2026-10-19 在模拟器上量到的正是"组合了、看不见"。真正的 `Dialog` 是另一块窗口, 盖得住
+ *
+ * `onDismiss` 只关窗 (当天不再问, 明天冷启动还会再问一次), 与「不再提示」是两件事
+ */
+@Composable
+internal fun AutoUpdateDialog(
+    release: ReleaseJson.Release,
+    localVersion: String,
+    onDismiss: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    val context = LocalContext.current
+    var problem by remember { mutableStateOf<String?>(null) }
+    val noAddress = stringResource(R.string.settings_update_failed, "那条 Release 没给地址")
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        val scrim = remember { MutableInteractionSource() }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.4f))
+                // 点窗外面就是"现在别问": 与「不再提示」不同, 明天还会再问
+                .clickable(interactionSource = scrim, indication = null) { onDismiss() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    // 卡片自己吃掉点击, 不然点正文也会关窗
+                    .clickable(interactionSource = scrim, indication = null) {},
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+                    Text(
+                        text = stringResource(R.string.settings_update_auto_title),
+                        style = MiuixTheme.textStyles.title3,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_update_newer, release.version, localVersion),
+                        style = MiuixTheme.textStyles.body2,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                    ReleaseFacts(release)
+                    problem?.let { reason ->
+                        Text(
+                            text = reason,
+                            color = colorScheme.error,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    // 两只按钮竖着排: 这几个字在手机上一行放不下, 横着排会折成两行 ("不再提示这次 /
+                    // 版本"), 竖排各占整行反而干净
+                    TextButton(
+                        text = stringResource(R.string.settings_update_open),
+                        onClick = {
+                            // 与手动那条同一个去处: 有 APK 就直连它, 否则去 Release 页面
+                            val target = release.apkUrl?.takeIf { it.isNotEmpty() }
+                                ?: release.pageUrl.takeIf { it.isNotEmpty() }
+                            if (target == null) {
+                                problem = noAddress
+                            } else {
+                                // 打开成功了就把窗收掉: 从浏览器回来时不该还挡着一只"有新版本"的窗
+                                val failure = openPage(context, target)
+                                if (failure == null) onDismiss() else problem = failure
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 24.dp),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
+                    TextButton(
+                        text = stringResource(R.string.settings_update_skip),
+                        onClick = onSkip,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 新版本的那几个数 (发布日 / 包多大 / 说明): 手动与自动两条共用同一段 */
+@Composable
+private fun ReleaseFacts(release: ReleaseJson.Release) {
+    val size = if (release.apkBytes > 0L) {
+        stringResource(
+            R.string.settings_update_apk,
+            release.apkName.orEmpty(),
+            megabytes(release.apkBytes),
+        )
+    } else {
+        ""
+    }
+    val line = listOf(
+        release.published.takeIf { it.isNotEmpty() }
+            ?.let { stringResource(R.string.settings_update_published, it) },
+        size.takeIf { it.isNotEmpty() },
+        release.notes.takeIf { it.isNotEmpty() },
+    ).filterNotNull().joinToString("\n")
+    if (line.isNotEmpty()) {
+        Text(
+            text = line,
+            color = colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(top = 8.dp),
         )
     }
 }

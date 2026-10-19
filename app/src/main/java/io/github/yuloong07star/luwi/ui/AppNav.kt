@@ -8,6 +8,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.SnackbarDuration
 import top.yukonga.miuix.kmp.nav.core.NavCornerClipMode
@@ -26,6 +27,8 @@ import io.github.yuloong07star.luwi.host.BallReturn
 import io.github.yuloong07star.luwi.theme.ApplySystemBarsAppearance
 import io.github.yuloong07star.luwi.theme.ThemeStore
 import io.github.yuloong07star.luwi.theme.controller
+import io.github.yuloong07star.luwi.update.AutoUpdate
+import io.github.yuloong07star.luwi.update.AutoUpdatePrompt
 import kotlinx.serialization.Serializable
 
 /** 应用里有哪几页, 可序列化是因为导航要把返回栈存下来 */
@@ -161,6 +164,23 @@ fun LuwiApp() {
                 entry<Screen.SkillsInstalled>(swipeDismiss = swipe) { SkillsInstalledScreen() }
                 entry<Screen.SkillsAvailable>(swipeDismiss = swipe) { SkillsAvailableScreen() }
                 entry<Screen.PluginDetail>(swipeDismiss = swipe) { key -> PluginDetailScreen(key.id) }
+            }
+            // 冷启动查到的那个新版本 (2.7.9 第 3 条): 只在新版本真的到了才有内容 —— 状态是自动那条
+            // 自己的一份 (AutoUpdatePrompt), 与设置页手动「检测更新」那一趟的账互不覆盖
+            val context = LocalContext.current
+            val newerRelease = AutoUpdatePrompt.release
+            if (newerRelease != null) {
+                AutoUpdateDialog(
+                    release = newerRelease,
+                    localVersion = AutoUpdatePrompt.localVersion,
+                    // 关窗 = 今天别再问 (那天已经查过了), 明天冷启动还会再问一次
+                    onDismiss = { AutoUpdatePrompt.dismiss() },
+                    // 不再提示 = 记住这一版, 直到远端又出一个更新的版本
+                    onSkip = {
+                        AutoUpdate.skipVersion(context, newerRelease.version)
+                        AutoUpdatePrompt.dismiss()
+                    },
+                )
             }
             // **返回键的最后一道**: 没被接住的那一下是平台的默认行为 —— 把这个 activity 关掉, 于是
             // host 与虚拟屏一起没了。所以这里兜底: 要么弹提示, 要么把任务放到后台, 两者都不结束任何
