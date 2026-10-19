@@ -39,6 +39,7 @@ const out = join(packageDir, 'lib', 'client.js')
 /** 钉死的依赖: 换版本就有新行为, 必须重打并重新验那三种文件 */
 const PACKAGES = [
   'docx-preview@0.4.1',
+  'dompurify@3.2.6',
   'jszip@3.10.1',
   'esbuild@0.28.2',
 ]

@@ -7,17 +7,23 @@
  *
  * | 后缀 | 怎么读 | 保真 |
  * | :-- | :-- | :-- |
- * | `.docx` | `docx-preview` 转 HTML, 再进 `sandbox=""` 的 iframe | 分页 / 表格 / 图片 / 页眉页脚 |
+ * | `.docx` | `docx-preview` 转 HTML | 分页 / 表格 / 图片 / 页眉页脚 |
  * | `.pptx` | 自己解 OOXML, 每页抽文字与图片 | 只出内容, 不出版式 |
- * | `.doc` / `.ppt` | 这一档不认, 交给上游那行"读取失败" (下一批把它们换成"用系统应用打开") | — |
+ * | `.doc` / `.ppt` | 这一档不认, 交给上游那行"读取失败" (T9c 换成"用系统应用打开") | — |
  *
- * 读字节走 `remote.workspaceFiles.readBytes`; 地址里那一段是**相对会话工作区**的路径, 所以
- * 直接把它交给端点就行 (`sessionId` 取地址里那个, 不是当前页签所在会话)
+ * **隔离与脚本**: 正文进 **shadow root**, 从不进宿主 DOM; 进之前过一遍 `dompurify` 去掉脚本与
+ * `on*` 之类的事件属性。不用 iframe 了 —— 双指手势要落在我们自己的元素上才收得到 (见下一条)
+ *
+ * **缩放 (2026-10-19 主人问"不支持双指放大吗")**: 整页双指放大是 WebView 自己的 (会把标签栏一起
+ * 放大), 而文档要的是"只放大这一页"。所以预览容器 `touch-action: pan-x pan-y` (不让浏览器接管
+ * 双指), 两指捏合改的是内层那份文档的 `zoom`; 双击在 1x / 2x 之间切换, 放大了右下角有一颗
+ * `1:1` 复位。单指仍然是原生滚动
  *
  * 失败三档必须分开说, 不许假装空白: 读不出来 (宿主给的失败) / 文件太大 / 这份文件读不了
  */
 
 import React from 'react'
+import DOMPurify from 'dompurify'
 import { renderDocx } from './docx.js'
 import { renderPptx } from './pptx.js'
 
@@ -34,6 +40,14 @@ const CLAIMED = /\.(docx|pptx)$/i
 
 /** 地址形如 `dsh-resource://file/session/<sid>/<相对工作区的路径>` */
 const ADDRESS = 'dsh-resource://file/session/'
+
+/** 缩放上下限: 再小看不清, 再大只剩一个字 */
+const MIN_ZOOM = 0.8
+const MAX_ZOOM = 4
+
+/** 双击的判定窗口 */
+const DOUBLE_TAP_MS = 320
+const DOUBLE_TAP_PX = 28
 
 /**
  * 把地址拆成会话与路径
@@ -80,9 +94,9 @@ const definition = {
   title: titleOf,
 }
 
-/** 进 iframe 的那层基础样式: 两档共用, 只求读得清 */
+/** 进 shadow root 的那层基础样式: 两档共用, 只求读得清 */
 const BASE_CSS = `
-:root { color-scheme: light dark; }
+:root, :host { color-scheme: light dark; }
 body { margin: 0; padding: 16px; font: 14px/1.65 system-ui, -apple-system, "Noto Sans CJK SC", sans-serif;
   color: #1f2328; background: #fff; overflow-wrap: anywhere; }
 @media (prefers-color-scheme: dark) { body { color: #e6e6e6; background: #16181c; } }
@@ -118,9 +132,9 @@ function escapeHtml(text) {
     .replaceAll('"', '&quot;')
 }
 
-/** 把一页页内容拼成一份能进 iframe 的文档 */
-function pptxDocument(slides) {
-  const body = slides
+/** 把一页页内容拼成正文 (样式在 BASE_CSS 里) */
+function pptxBody(slides) {
+  return slides
     .map((slide, index) => {
       const paragraphs = slide.paragraphs.map((line) => `<p>${escapeHtml(line)}</p>`).join('')
       const images = slide.images
@@ -130,14 +144,21 @@ function pptxDocument(slides) {
       return `<section class="lw-slide"><p class="lw-slide-title">第 ${String(index + 1)} 页</p>${paragraphs}${images}${empty}</section>`
     })
     .join('')
-  return frameDocument(`${BASE_CSS}\n.lw-slide-title { position: sticky; top: -16px; }`, body)
 }
 
-/** 一份最小的 iframe 文档: 自带 charset, 两段样式与正文 */
-function frameDocument(css, body) {
-  return '<!doctype html><html><head><meta charset="utf-8">'
-    + `<style>${css.replaceAll('</style', '<\\/style')}</style>`
-    + `</head><body>${body}</body></html>`
+/**
+ * 进 shadow root 之前洗一遍: 去掉脚本、表单与事件属性
+ *
+ * shadow root 里 `innerHTML` 插进来的 `<script>` 本来就不会执行, 但 `onerror=` 这类**属性**会 ——
+ * 所以这里要洗; 图片走 `data:` 内联, 得显式放行, 否则整份文档的图都没了
+ * @param {string} html docx-preview 或我们自己拼出来的正文
+ * @returns {string} 可以注入的 HTML
+ */
+function sanitize(html) {
+  return DOMPurify.sanitize(html, {
+    ADD_DATA_URI_TAGS: ['img'],
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'link'],
+  })
 }
 
 /** 宿主那条 RemoteResult 的失败: 只念它给的 code / message, 不自己编 */
@@ -148,8 +169,20 @@ function failureText(error) {
   return '读不出来'
 }
 
+/** 两指之间的距离 */
+function spread(touches) {
+  const [first, second] = touches
+  return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY)
+}
+
+/** 两指的中点 */
+function middle(touches) {
+  const [first, second] = touches
+  return { x: (first.clientX + second.clientX) / 2, y: (first.clientY + second.clientY) / 2 }
+}
+
 /**
- * 正文: 读字节 -> 按后缀转 -> 塞进 sandbox iframe
+ * 正文: 读字节 -> 按后缀转 -> 洗一遍 -> 进 shadow root, 两指捏合改文档自己的 zoom
  * @param {object} props 槽位组合出来的属性 (`useTabInfo` 与注入面都在里面)
  */
 function OfficeBody(props) {
@@ -157,6 +190,10 @@ function OfficeBody(props) {
   const address = info.tab.navigation.address
   const [state, setState] = React.useState({ phase: 'loading' })
   const [generation, setGeneration] = React.useState(0)
+  const [zoom, setZoom] = React.useState(1)
+  const zoomRef = React.useRef(1)
+  const containerRef = React.useRef(null)
+  const hostRef = React.useRef(null)
 
   React.useEffect(() => {
     let cancelled = false
@@ -185,12 +222,12 @@ function OfficeBody(props) {
           const rendered = await renderDocx(bytes)
           if (!cancelled) {
             // 顺序要紧: 我们那段"按宽度重排"必须在 docx-preview 自己那份之后
-            setState({ phase: 'ready', doc: frameDocument(`${BASE_CSS}\n${rendered.css}\n${FIT_CSS}`, rendered.html) })
+            setState({ phase: 'ready', style: `${BASE_CSS}\n${rendered.css}\n${FIT_CSS}`, body: sanitize(rendered.html) })
           }
           return
         }
         const slides = await renderPptx(bytes)
-        if (!cancelled) setState({ phase: 'ready', doc: pptxDocument(slides) })
+        if (!cancelled) setState({ phase: 'ready', style: BASE_CSS, body: sanitize(pptxBody(slides)) })
       } catch (error) {
         if (cancelled) return
         const reason = error instanceof Error ? error.message : String(error)
@@ -203,6 +240,87 @@ function OfficeBody(props) {
       controller.abort()
     }
   }, [address, generation])
+
+  // 文档进 shadow root: 样式与正文都关在里面, 宿主那一页一点不受影响
+  React.useEffect(() => {
+    const host = hostRef.current
+    if (state.phase !== 'ready' || host === null) return
+    const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' })
+    root.innerHTML = `<style>${state.style}</style>${state.body}`
+  }, [state])
+
+  // 两指捏合与双击: 落在容器自己身上 (不再隔着 iframe 的边界), 所以收得到
+  React.useEffect(() => {
+    const container = containerRef.current
+    if (state.phase !== 'ready' || container === null) return
+
+    /**
+     * 改一份文档的缩放, 并让捏合/双击那一处留在原地
+     * @param {number} next 目标倍率
+     * @param {{ x: number, y: number } | undefined} anchor 屏幕坐标上的锚点
+     */
+    const apply = (next, anchor) => {
+      const host = hostRef.current
+      if (host === null) return
+      const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next))
+      const ratio = clamped / zoomRef.current
+      if (Math.abs(ratio - 1) < 0.001) return
+      const box = container.getBoundingClientRect()
+      const cx = (anchor === undefined ? box.width / 2 : anchor.x - box.left)
+      const cy = (anchor === undefined ? box.height / 2 : anchor.y - box.top)
+      const ox = container.scrollLeft + cx
+      const oy = container.scrollTop + cy
+      zoomRef.current = clamped
+      host.style.zoom = String(clamped)
+      // 读一次 scroll 之前浏览器必须先把新布局算出来, 下面这两个赋值就是"把同一点挪回原处"
+      container.scrollLeft = ox * ratio - cx
+      container.scrollTop = oy * ratio - cy
+      setZoom(clamped)
+    }
+
+    let pinch = null
+    let lastTap = null
+
+    const onStart = (event) => {
+      if (event.touches.length === 2) {
+        pinch = { distance: spread(event.touches), zoom: zoomRef.current }
+        lastTap = null
+      }
+    }
+    const onMove = (event) => {
+      if (pinch === null || event.touches.length !== 2) return
+      // 双指这一路不给浏览器: 它会把整页 (连标签栏) 一起放大
+      event.preventDefault()
+      const distance = spread(event.touches)
+      if (distance <= 0) return
+      apply(pinch.zoom * (distance / pinch.distance), middle(event.touches))
+    }
+    const onEnd = (event) => {
+      if (event.touches.length >= 2) return
+      pinch = null
+      // 双击: 两下都在 (大约) 同一处, 且间隔够短
+      if (event.touches.length > 0 || event.changedTouches.length !== 1) return
+      const touch = event.changedTouches[0]
+      const now = Date.now()
+      const samePlace = lastTap !== null
+        && Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y) < DOUBLE_TAP_PX
+      if (samePlace && now - lastTap.at < DOUBLE_TAP_MS) {
+        apply(zoomRef.current > 1.05 ? 1 : 2, { x: touch.clientX, y: touch.clientY })
+        lastTap = null
+        return
+      }
+      lastTap = { x: touch.clientX, y: touch.clientY, at: now }
+    }
+
+    container.addEventListener('touchstart', onStart, { passive: true })
+    container.addEventListener('touchmove', onMove, { passive: false })
+    container.addEventListener('touchend', onEnd, { passive: true })
+    return () => {
+      container.removeEventListener('touchstart', onStart)
+      container.removeEventListener('touchmove', onMove)
+      container.removeEventListener('touchend', onEnd)
+    }
+  }, [state.phase])
 
   if (state.phase === 'loading') {
     return React.createElement('div', { 'data-lw-office-state': 'loading', style: { padding: '16px', opacity: '0.7' } }, '正在读取…')
@@ -223,16 +341,31 @@ function OfficeBody(props) {
       ),
     )
   }
-  return React.createElement('div', {
-    'data-lw-office-state': 'ready',
-    style: { height: '100%', width: '100%', display: 'flex', flexDirection: 'column' },
-  }, React.createElement('iframe', {
-    // 这一层是真边界: 不带 allow-scripts, 里面一个脚本都跑不了, 也不与宿主同源
-    sandbox: '',
-    srcDoc: state.doc,
-    title: 'Office 预览',
-    style: { flex: '1 1 auto', width: '100%', minHeight: '0', border: '0', display: 'block', background: 'transparent' },
-  }))
+  return React.createElement(
+    'div',
+    {
+      'data-lw-office-state': 'ready',
+      'data-lw-office-zoom': String(zoom),
+      style: { position: 'relative', height: '100%', width: '100%' },
+    },
+    React.createElement('div', {
+      ref: containerRef,
+      // 单指拖动照旧是原生滚动; **双指不交给浏览器** (否则整页连标签栏一起放大)
+      style: { position: 'absolute', inset: '0', overflow: 'auto', touchAction: 'pan-x pan-y', WebkitOverflowScrolling: 'touch' },
+    }, React.createElement('div', { ref: hostRef, style: { zoom: String(zoom), width: '100%' } })),
+    zoom > 1.05
+      ? React.createElement('button', {
+        type: 'button',
+        'data-lw-office-reset': '',
+        onClick: () => {
+          zoomRef.current = 1
+          if (hostRef.current !== null) hostRef.current.style.zoom = '1'
+          setZoom(1)
+        },
+        style: { position: 'absolute', right: '10px', bottom: '10px', padding: '4px 10px', borderRadius: '999px', border: '1px solid rgba(128,128,128,.5)', background: 'rgba(128,128,128,.18)', color: 'inherit', font: '12px/1.4 system-ui, sans-serif', cursor: 'pointer' },
+      }, '1:1')
+      : null,
+  )
 }
 
 /**
