@@ -357,10 +357,10 @@
             </intent-filter>
         </receiver>
 
-        <!-- 语音状态的只读出口 (2.7.9 批次 9 T17): 没有 root 的第三方应用问"她现在在做什么".
-             闸不在清单上 (exported 是必须的 —— 调用者不是本应用), 而在 provider 里面:
-             设置页那个开关关着、或包名没点名时一律回 enabled=false; 点名了也只答那一个包。
-             只给 state / session 两列, 没有音频、没有电平、没有写入口 -->
+        <!-- 语音状态的只读出口 (2.7.9 批次 9 T17): 脚本 / 第三方应用问"她现在在做什么".
+             **默认就是开的** (主人 2026-10-20: "默认打开接口就行了, 使脚本能检测到"): 没有开关、
+             没有包名白名单、也没有广播 —— exported 是必须的, 闸只剩"只读"这一条 (三个写入口都拒).
+             只给 state / session / enabled 三列, 没有音频、没有电平 -->
         <provider
             android:name=".voice.VoiceStateProvider"
             android:authorities="io.github.yuloong07star.luwi.lw.voice"

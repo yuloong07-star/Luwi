@@ -184,21 +184,9 @@
     <string name="settings_look_sheet">One grid per look</string>
     <string name="settings_look_sheet_summary">Lay the frames out as one picture as well; the agent reads that one first, so a dozen frames cost one look instead of twelve. Each cell is a smaller copy, so it is for seeing what moved, not for reading small text</string>
     <string name="settings_look_note">These are the app\'s half of the video mode camera: how many frames, how far apart, how big, and whether they also come back as one grid. The route has its own budgets in settings.yaml (imagePixelBudget, imageMaxBytes), and a picture over those is re-encoded on the host before the model sees it</string>
-
-    <string name="settings_section_voice">Voice</string>
-    <string name="settings_section_voice_summary">How long a pause ends a sentence, and who may read the voice state</string>
-    <string name="settings_voice_now">Right now: %1$s</string>
-    <string name="settings_voice_now_note">The file, the broadcast and the read-only query all carry this one word; the file is $DSH_HOME/lw/voice-live.json and is only rewritten when the state changes</string>
     <string name="settings_voice_silence">Silence that ends a sentence</string>
     <string name="settings_voice_silence_summary">%1$s s; a shorter value sends the sentence sooner, but a normal pause can get cut into two sentences</string>
     <string name="settings_voice_silence_dialog">In seconds, from %1$s to %2$s</string>
-    <string name="settings_voice_export">Let one app read the voice state</string>
-    <string name="settings_voice_export_summary">Sends idle / listening / thinking / speaking to one named package and answers its read-only query. Off by default; no audio, no loudness, no text, and it never accepts a command</string>
-    <string name="settings_voice_package">Package to send it to</string>
-    <string name="settings_voice_package_none">Not named yet, so the whole export stays closed</string>
-    <string name="settings_voice_package_set">Sending to %1$s</string>
-    <string name="settings_voice_package_bad">That does not read as a package name; the export stays closed until it does</string>
-    <string name="settings_voice_package_dialog">The package name, for example com.example.led</string>
 
     <string name="settings_ocr_backend">Runs on: %1$s</string>
     <string name="settings_ocr_probe">Self check</string>

@@ -183,21 +183,9 @@
     <string name="settings_look_sheet">一次取景也拼成一张网格</string>
     <string name="settings_look_sheet_summary">把这几张也拼成一张图, 模型先读那一张 —— 十来张图变成一次读图。每一格都是缩小的副本, 所以它是用来看动起来的, 不是用来读小字的</string>
     <string name="settings_look_note">这几条给的是视频模式那台相机的应用这一半: 抓几张、隔多久、多大、要不要拼成一张网格。路由那一半 (imagePixelBudget 与 imageMaxBytes) 在 dsh 自己的 settings.yaml 里, 超过预算的图会在 host 那边重新编码一次再交给模型</string>
-
-    <string name="settings_section_voice">语音</string>
-    <string name="settings_section_voice_summary">静音多久算一句说完, 以及谁能读到语音状态</string>
-    <string name="settings_voice_now">现在: %1$s</string>
-    <string name="settings_voice_now_note">文件、广播与那个只读查询说的是同一个词; 文件在 $DSH_HOME/lw/voice-live.json, 只在状态变化时重写</string>
     <string name="settings_voice_silence">静音多久算一句说完</string>
     <string name="settings_voice_silence_summary">%1$s 秒; 调小发得更早, 而正常的停顿可能被切成两句</string>
     <string name="settings_voice_silence_dialog">单位是秒, %1$s 到 %2$s</string>
-    <string name="settings_voice_export">让一个应用读到语音状态</string>
-    <string name="settings_voice_export_summary">把待机 / 在听 / 在想 / 在说发给设置里点名的那个包, 并回答它的只读查询; 缺省关; 没有音频、没有电平、没有文本, 也不接受任何命令</string>
-    <string name="settings_voice_package">发给哪个包</string>
-    <string name="settings_voice_package_none">还没填, 整条出口关着</string>
-    <string name="settings_voice_package_set">正在发给 %1$s</string>
-    <string name="settings_voice_package_bad">这不像一个包名; 在填对之前整条出口都关着</string>
-    <string name="settings_voice_package_dialog">包名, 例如 com.example.led</string>
 
     <string name="settings_ocr_backend">计算单元: %1$s</string>
     <string name="settings_ocr_probe">自检</string>

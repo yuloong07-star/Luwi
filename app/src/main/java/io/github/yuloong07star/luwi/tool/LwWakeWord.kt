@@ -497,12 +497,9 @@ internal object LwWakeWord {
             put("delivered", VoiceState.delivered)
             put("lastSeq", VoiceState.lastSeq)
             put("speaking", VoiceState.speaking)
-            // 批次 9 的两个设置与状态出口的读数 (T15 / T17): "静音档现在是多少"与"出口到底通不通"
-            // 都不该只能去设置页看 —— 真机验收与排障读的就是这几行
+            // 批次 9 的两个读数 (T15 / T16): 静音档现在是多少、语音状态文件写的什么 —— 真机验收与
+            // 排障读的就是这几行. 出口 (provider) 默认开, 没有开关可报
             put("vadSilence", VoiceSettings.silence(context))
-            put("exportEnabled", VoiceSettings.exportEnabled(context))
-            put("exportPackage", VoiceSettings.exportPackage(context))
-            put("exportTarget", VoiceSettings.exportTarget(context) ?: "")
             put("liveState", VoiceLive.state)
             put("liveSession", VoiceLive.session ?: "")
             put("liveFile", VoiceLive.file(context).absolutePath)

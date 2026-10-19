@@ -5,13 +5,16 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
-import android.util.Log
 
 /**
- * 语音状态的**只读**查询出口 (2.7.9 批次 9 T17, 施工单 §8.3 级二)
+ * 语音状态的**只读**查询出口 (2.7.9 批次 9 T17)
  *
- * 给没有 root 的普通用户: 广播是"跳变时推一条", provider 是"我想看一眼现在是什么" —— 两条通道由
- * 同一个开关管着 ([VoiceSettings.exportTarget]), 关着时这里回 `enabled=false` 且其余两列为空
+ * 给脚本与第三方应用问"她现在在做什么": root 脚本直接读
+ * `$DSH_HOME/lw/voice-live.json`, 没有 root 的那一侧读这里 —— 一条 `content query` 就够
+ *
+ * **默认就是开的** (主人 2026-10-20: "默认打开接口就行了, 使脚本能检测到, 不用多余增加设置段"):
+ * 这里没有开关、没有包名白名单, 也没有广播。早先那一版是"缺省关 + 设置页填包名 + 显式广播",
+ * 主人把设置与广播一起砍了 —— 出口只留一个能读的接口
  *
  * 契约 (施工单 §8.7):
  *
@@ -19,17 +22,15 @@ import android.util.Log
  * | :-- | :-- |
  * | `state` | `idle` / `listening` / `thinking` / `speaking` |
  * | `session` | 不透明会话 id, 可空 |
- * | `enabled` | 1 = 出口开着且这次查询被允许, 0 = 没有 |
+ * | `enabled` | 恒 1 (留给老读者: 从前它表示"开关开没开") |
  *
- * **不给的东西**: 麦克风音频、音量电平、反向控制 —— 这是一个只读的、被开关关着的出口,
- * 能看出"主人在说话"已经是它最大的信息量
- *
- * 调用者限制: 设置页点名了那个包时, 只答它 (以及本应用自己)。`callingPackage` 拿不到时
- * (系统 / shell 的某些查询路径) 按"设置页已经点过名"放行 —— 那时没有更细的判据可用了
+ * **不给的东西**: 麦克风音频、音量电平、反向控制 —— 这是一个只读的出口, 能看出"主人在说话"已经
+ * 是它最大的信息量
  */
 class VoiceStateProvider : ContentProvider() {
 
     override fun onCreate(): Boolean = true
+
     override fun query(
         uri: Uri,
         projection: Array<out String>?,
@@ -39,20 +40,6 @@ class VoiceStateProvider : ContentProvider() {
     ): Cursor {
         val columns = arrayOf(COLUMN_STATE, COLUMN_SESSION, COLUMN_ENABLED)
         val cursor = MatrixCursor(columns)
-        val app = context
-        val target = app?.let { VoiceSettings.exportTarget(it) }
-        if (app == null || target == null) {
-            cursor.addRow(arrayOf<Any>("", "", 0))
-            return cursor
-        }
-        val caller = runCatching { callingPackage }.getOrNull()
-        val permitted = caller == null || caller == target || caller == app.packageName
-        // 一行读数: 谁问的、放没放行。这一条通道没有任何音频与文本, 记调用者包名是排障最省事的一笔
-        Log.i(TAG, "a query from ${caller ?: "an unknown caller"} against $target: permitted=$permitted")
-        if (!permitted) {
-            cursor.addRow(arrayOf<Any>("", "", 0))
-            return cursor
-        }
         cursor.addRow(arrayOf<Any>(VoiceLive.state, VoiceLive.session.orEmpty(), 1))
         return cursor
     }
@@ -70,7 +57,6 @@ class VoiceStateProvider : ContentProvider() {
         throw UnsupportedOperationException("the voice state is read-only")
 
     companion object {
-        private const val TAG = "VoiceStateProvider"
         /** 与施工单 §8.7 钉的是同一个 authority 与 path */
         const val AUTHORITY = "io.github.yuloong07star.luwi.lw.voice"
         const val PATH = "state"
