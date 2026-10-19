@@ -67,7 +67,7 @@
     <string name="settings_feedback_empty">Write something first</string>
     <string name="settings_feedback_sent">Sent, thank you</string>
     <string name="settings_feedback_copied">Copied: paste it into the page, then submit there</string>
-    <string name="settings_feedback_no_backend">No backend yet, so this one was not sent</string>
+    <string name="settings_feedback_no_backend">The server did not take it, so it was copied instead</string>
     <string name="settings_feedback_send_failed">It did not go out, so it was copied instead</string>
     <string name="settings_feedback_mail_subject">Luwi feedback</string>
     <string name="settings_feedback_meta">--- Below is filled in by Luwi ---</string>
