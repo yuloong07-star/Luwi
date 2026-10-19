@@ -342,7 +342,7 @@ fun SettingsScreen() {
     // 每个 remember 重新去读文件, 每个 LaunchedEffect(Unit) 重新跑一次。收起来的那几段是
     // rememberSaveable, 刷新不动它 (那记的是"看哪儿", 不是数据)
     var reload by remember { mutableIntStateOf(0) }
-    // ⋮ 里那三件事 (检测更新 / 捐赠 / 关于) 共用这一个"现在开着哪一页"的记号, null = 都没开
+    // ⋮ 里那几件事 (反馈 / 检测更新 / 关于 …) 共用这一个"现在开着哪一页"的记号, null = 都没开
     // 同一刻只画一个对话框, 见 AboutDialogs 的文件头
     var about by remember { mutableStateOf<AboutPage?>(null) }
     // 捐赠页那一行要跟着"刚填过的那个地址"变, 而它在偏好里 —— 对话框关掉时重新读一次
@@ -373,7 +373,8 @@ fun SettingsScreen() {
                         )
                     }
                 },
-                // 这一页里"不用常驻"的事全收在这里: 检测更新 / 捐赠 / 关于 / 要重启 host 才生效的改动
+                // 这一页里"不用常驻"的事全收在这里: 反馈 / 检测更新 / sync 签到 / 关于 / 要重启 host 才
+                // 生效的改动
                 // 页面上就不必每个面板各放一个按钮 (2026-10-08 加了前三条, 见开发计划 2.4 与 2.14)
                 // **G1-D 那几行「打开 <对端名>」2026-10-17 撤掉了** (主人: "没用就删掉"): 它载入的
                 // 是对端名片里手填的 publicUrl, 而电脑侧填的是回环地址 —— 手机上 127.0.0.1 指的是
@@ -395,6 +396,13 @@ fun SettingsScreen() {
                     OverlayIconDropdownMenu(
                         entry = DropdownEntry(
                             items = listOf(
+                                DropdownItem(
+                                    // 2.7.9 第 10 条 (2026-10-19 主人: 反馈入口放 ⋮ 的第一条):
+                                    // 后端还没就绪, 这一条走"复制 + 打开 New Issue 页"的本地兜底
+                                    text = stringResource(R.string.settings_menu_feedback),
+                                    summary = stringResource(R.string.settings_menu_feedback_summary),
+                                    onClick = { about = AboutPage.FEEDBACK },
+                                ),
                                 DropdownItem(
                                     text = stringResource(R.string.settings_menu_update),
                                     summary = stringResource(R.string.settings_about_update_summary),
@@ -725,8 +733,10 @@ fun SettingsScreen() {
             }
         }
 
-        // ⋮ 里那三件事的对话框: 同一刻只画一个, 由那一个 [about] 记号决定是哪一页 (见 AboutDialogs)
+        // ⋮ 里那几件事的对话框: 同一刻只画一个, 由那一个 [about] 记号决定是哪一页 (见 AboutDialogs)
         when (about) {
+            AboutPage.FEEDBACK -> FeedbackDialog(onDismissRequest = { about = null })
+
             AboutPage.ABOUT -> AboutDialog(
                 onDismissRequest = { about = null },
                 onOpen = { about = it },

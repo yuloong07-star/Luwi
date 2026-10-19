@@ -25,6 +25,8 @@
     <string name="settings_restart_host">Restart DSH host</string>
     <string name="settings_restart_host_summary">For when what the host reads once (where the workspace lands, the LAN switch) changed</string>
 
+    <string name="settings_menu_feedback">Feedback</string>
+    <string name="settings_menu_feedback_summary">Report a problem, or say something privately</string>
     <string name="settings_menu_update">Check for updates</string>
     <string name="settings_menu_sync">Sync check-in</string>
     <string name="settings_menu_sync_summary">Opens the check-in page on the website</string>
@@ -46,6 +48,33 @@
     <string name="settings_about_update_summary">Reads the tag of the newest release on GitHub and compares it</string>
     <string name="settings_about_source">Update source</string>
     <string name="settings_about_source_default">The built-in one</string>
+
+    <string name="settings_feedback_title">Feedback</string>
+    <string name="settings_feedback_summary">Only the text and a few device facts leave the app; this build carries no tokens</string>
+    <string name="settings_feedback_kind_issue">Public issue</string>
+    <string name="settings_feedback_kind_email">Private mail</string>
+    <string name="settings_feedback_kind_issue_summary">Goes to the public issue tracker, where anyone can read it</string>
+    <string name="settings_feedback_kind_email_summary">Only the author reads it, it is never published</string>
+    <string name="settings_feedback_body">What happened</string>
+    <string name="settings_feedback_count">%1$d / %2$d</string>
+    <string name="settings_feedback_contact">How to reach you (optional)</string>
+    <string name="settings_feedback_attach_add">Attach a picture or a log</string>
+    <string name="settings_feedback_attach_chosen">Attachment: %1$s (%2$s)</string>
+    <string name="settings_feedback_attach_chosen_named">Attachment: %1$s</string>
+    <string name="settings_feedback_attach_remove">Remove</string>
+    <string name="settings_feedback_attach_note">The attachment is neither sent nor copied: add the file to the page yourself</string>
+    <string name="settings_feedback_submit">Send</string>
+    <string name="settings_feedback_sending">Sending ...</string>
+    <string name="settings_feedback_empty">Write something first</string>
+    <string name="settings_feedback_sent">Sent, thank you</string>
+    <string name="settings_feedback_copied">Copied: paste it into the page, then submit there</string>
+    <string name="settings_feedback_no_backend">No backend yet, so this one was not sent</string>
+    <string name="settings_feedback_mail_subject">Luwi feedback</string>
+    <string name="settings_feedback_meta">--- Below is filled in by Luwi ---</string>
+    <string name="settings_feedback_meta_kind">Via</string>
+    <string name="settings_feedback_meta_contact">Contact</string>
+    <string name="settings_feedback_meta_attachment">Attachment: %1$s (%2$s), not attached yet, please drop the file into the issue</string>
+    <string name="settings_feedback_meta_attachment_named">Attachment: %1$s, not attached yet, please drop the file into the issue</string>
 
     <string name="settings_update_title">Check for updates</string>
     <string name="settings_update_summary">It only looks, it never installs: a newer release opens the browser and you decide</string>

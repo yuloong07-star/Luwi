@@ -52,7 +52,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 
 /**
- * ⋮ 菜单里那几件事的界面: 检测更新 / sync 签到 / 关于 (2026-10-08 第 4 条; 捐赠页 2026-10-19 下线)
+ * ⋮ 菜单里那几件事的界面: 反馈 / 检测更新 / 关于 (2026-10-08 第 4 条; 捐赠页 2026-10-19 下线,
+ * 反馈页 2026-10-19 补上)
  *
  * 四个对话框排成一个"页" ([AboutPage]), 而**同一时刻只开一个** —— 由调用方 (设置页) 拿着那一个
  * [AboutPage] 变量决定画哪一个。这样从"关于"里点进"更新源"再关掉时不会叠两层窗, 也免得两个
@@ -60,8 +61,13 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
  *
  * 三条口径与开发计划 2.4 一致: **只检测不代装** (去下载交给系统浏览器), **更新源可改** (缺省是
  * GitHub 的 Release API, 另有一条镜像), 以及 **sync 那一页这一版只有壳** (后端没接上时如实说未连接)
+ *
+ * 「反馈」那一页在 `ui/FeedbackDialog.kt`: 它是这一组里唯一带输入框的窗, 单独一份文件比塞进来清楚
  */
 internal enum class AboutPage {
+    /** 反馈: 写一段话 (500 字) 挑一种方式, 见 `ui/FeedbackDialog.kt` */
+    FEEDBACK,
+
     /** 关于: 版本号 + 那三条入口 */
     ABOUT,
 

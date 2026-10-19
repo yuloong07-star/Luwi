@@ -25,6 +25,8 @@
     <string name="settings_restart_host">重启 DSH host</string>
     <string name="settings_restart_host_summary">改了 host 读一次的东西 (工作区落在哪、局域网开关) 之后点它</string>
 
+    <string name="settings_menu_feedback">反馈</string>
+    <string name="settings_menu_feedback_summary">报一个问题, 或者私密说一句</string>
     <string name="settings_menu_update">检测更新</string>
     <string name="settings_menu_sync">sync 签到</string>
     <string name="settings_menu_sync_summary">在浏览器里打开官网的签到页</string>
@@ -46,6 +48,33 @@
     <string name="settings_about_update_summary">读 GitHub 上最新那条 Release 的版本号比一比</string>
     <string name="settings_about_source">更新源</string>
     <string name="settings_about_source_default">用缺省那一条</string>
+
+    <string name="settings_feedback_title">反馈</string>
+    <string name="settings_feedback_summary">只把正文与几项设备读数交出去, 应用里不带任何令牌</string>
+    <string name="settings_feedback_kind_issue">公开 issue</string>
+    <string name="settings_feedback_kind_email">私密邮件</string>
+    <string name="settings_feedback_kind_issue_summary">发到公开的 issue 页, 别人也看得到</string>
+    <string name="settings_feedback_kind_email_summary">只有作者看得到, 不会公开</string>
+    <string name="settings_feedback_body">发生了什么</string>
+    <string name="settings_feedback_count">%1$d / %2$d</string>
+    <string name="settings_feedback_contact">联系方式 (可以不填)</string>
+    <string name="settings_feedback_attach_add">附一张图或一份日志</string>
+    <string name="settings_feedback_attach_chosen">附件: %1$s (%2$s)</string>
+    <string name="settings_feedback_attach_chosen_named">附件: %1$s</string>
+    <string name="settings_feedback_attach_remove">移除</string>
+    <string name="settings_feedback_attach_note">附件既不会发出去, 也不会跟着复制: 请自己把文件拖进那条 issue</string>
+    <string name="settings_feedback_submit">提交</string>
+    <string name="settings_feedback_sending">正在提交 ...</string>
+    <string name="settings_feedback_empty">正文还是空的</string>
+    <string name="settings_feedback_sent">已发送, 谢谢</string>
+    <string name="settings_feedback_copied">已复制: 粘到页面里, 在那里提交</string>
+    <string name="settings_feedback_no_backend">后端还没接上, 这一条没有发出去</string>
+    <string name="settings_feedback_mail_subject">Luwi 反馈</string>
+    <string name="settings_feedback_meta">--- 以下由 Luwi 自动附上 ---</string>
+    <string name="settings_feedback_meta_kind">方式</string>
+    <string name="settings_feedback_meta_contact">联系方式</string>
+    <string name="settings_feedback_meta_attachment">附件: %1$s (%2$s), 还没附上, 请把文件拖进这条 issue</string>
+    <string name="settings_feedback_meta_attachment_named">附件: %1$s, 还没附上, 请把文件拖进这条 issue</string>
 
     <string name="settings_update_title">检测更新</string>
     <string name="settings_update_summary">只查不装: 查到新版本就打开浏览器, 装不装由你决定</string>
