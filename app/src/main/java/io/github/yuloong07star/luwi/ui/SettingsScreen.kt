@@ -83,6 +83,9 @@ import io.github.yuloong07star.luwi.tool.LwAutomation
 import io.github.yuloong07star.luwi.tool.LwLinux
 import io.github.yuloong07star.luwi.tool.LwModel
 import io.github.yuloong07star.luwi.tool.LwQuick
+import io.github.yuloong07star.luwi.tool.bool
+import io.github.yuloong07star.luwi.tool.int
+import io.github.yuloong07star.luwi.tool.stringOrNull
 import io.github.yuloong07star.luwi.tool.VideoLooks
 import io.github.yuloong07star.luwi.tool.bytes
 import java.io.File
@@ -4940,6 +4943,39 @@ private fun SpeakItems() {
             title = stringResource(R.string.settings_speak_volume),
             summary = stringResource(R.string.settings_speak_online_volume),
             onClick = { openSoundSettings(context) },
+        )
+        // 检测那一条 (2026-10-20): 微软换令牌算法时这条链会静默失效, 所以给一个当场能问的地方 ——
+        // 它走完整握手 + 合成一句短话 (只收不播), 回执说清用的是本地还是远端令牌
+        var checking by remember { mutableStateOf(false) }
+        ArrowPreference(
+            title = stringResource(R.string.settings_speak_edge_probe),
+            summary = stringResource(R.string.settings_speak_edge_probe_summary),
+            onClick = {
+                if (checking) return@ArrowPreference
+                checking = true
+                scope.launch {
+                    val answer = withContext(Dispatchers.IO) { runCatching { LwSpeak.probeEdge() } }
+                    checking = false
+                    val line = answer.fold(
+                        onSuccess = { probe ->
+                            if (probe.bool("ok", false)) {
+                                context.getString(
+                                    R.string.settings_speak_edge_probe_ok,
+                                    probe.int("ms", 0),
+                                    probe.stringOrNull("token") ?: "local",
+                                )
+                            } else {
+                                context.getString(
+                                    R.string.settings_speak_edge_probe_failed,
+                                    probe.stringOrNull("detail") ?: "no detail",
+                                )
+                            }
+                        },
+                        onFailure = { it.message ?: it.toString() },
+                    )
+                    Toast.makeText(context, line, Toast.LENGTH_LONG).show()
+                }
+            },
         )
     } else if (api) {
         // API 那条: 地址与密钥是钥匙, 模型与音色是给服务看的

@@ -67,6 +67,9 @@ internal object LwSpeak {
     /** 异步那一档起过几趟 (读数用) */
     private val asyncRuns = AtomicInteger(0)
 
+    /** Edge 落到系统朗读的次数 (读数用): 数字涨了就是"那条在线引擎这段时间不可用" */
+    private val edgeFallbacks = AtomicInteger(0)
+
     /**
      * 上一次念的是不是**系统那条**引擎
      *
@@ -85,7 +88,11 @@ internal object LwSpeak {
         "release" -> release()
         // 只读探针: 系统引擎到底把声音放在哪种属性上 (判据换不换得成, 靠它一句话定), 见 [probe]
         "probe" -> probe(context)
-        else -> throw IllegalArgumentException("op has to be status, speak, clip, stop, release or probe, not \"$op\"")
+        // Edge 那条的体检 (2026-10-20): 走一趟完整握手与合成, 只收不播; 回执说清用的是本地还是远端令牌
+        "edge" -> LwEdgeTts.probe(request.bool("remote", false))
+        else -> throw IllegalArgumentException(
+            "op has to be status, speak, clip, stop, release, probe or edge, not \"$op\"",
+        )
     }
 
     /**
@@ -190,6 +197,9 @@ internal object LwSpeak {
             put("halfDuplex", VoiceState.speaking)
             // 异步那一档 (T14): 起过几趟。**在不在响看 speaking 那一个**, 这里只是"这一档用没用过"
             put("asyncStarts", asyncRuns.get())
+            // Edge 那条体检的读数 (2026-10-20): 落到系统朗读几次、上一趟用的是本地还是远端令牌
+            put("edgeFallbacks", edgeFallbacks.get())
+            put("edgeTokenSource", if (EdgeRemote.lastWasRemote) "remote" else "local")
             put("utterances", spoken)
             // 「还在出声吗」这条判据自己的读数 (2026-10-16): 尾巴预算什么时候到点、上一次念的是不是系统
             // 那条、以及**活跃播放里有几条带的是我们给引擎那份属性** (0 = 判据退化成"只按预算")
@@ -366,6 +376,25 @@ internal object LwSpeak {
             val failed = !answer.startsWith("said ")
             // 在线那两条的播放器 (LwVoiceClip 里那个 MediaPlayer) 也在本进程: 同上, 判据只认播放标记
             if (!failed) stampTail(run, text, system = false)
+            // **Edge 彻底不行时换系统那条** (2026-10-20): LwEdgeTts 已经在 403 时问过官网那个令牌
+            // 端点, 还失败就是"算法又变了 / 端点够不着"; 不让主人没声音 —— 落到系统引擎, 回执写明来龙去脉
+            if (edge && failed) {
+                Log.w(TAG, "the Edge call failed ($answer); falling back to the system engine")
+                val fallback = try {
+                    systemSpeak(context, request, text, run)
+                } catch (error: Throwable) {
+                    unavailable(
+                        "speaking",
+                        "the Edge call failed ($answer), and the system engine could not take over: ${error.message ?: error}",
+                    )
+                }
+                edgeFallbacks.incrementAndGet()
+                return buildJsonObject {
+                    fallback.forEach { (name, element) -> put(name, element) }
+                    put("fallbackFrom", "edge")
+                    put("edgeDetail", answer)
+                }
+            }
             return buildJsonObject {
                 put("spoken", !failed)
                 put("readingWith", if (edge) "edge" else "api")
@@ -381,6 +410,16 @@ internal object LwSpeak {
                 put("detail", answer)
             }
         }
+        return systemSpeak(context, request, text, run)
+    }
+
+    /**
+     * 系统那条引擎 (ROM 自带的 TextToSpeech)
+     *
+     * 从 [speakWith] 里抽出来, 为了让 Edge 那一档在彻底失败时**还能落到这里** —— "自动换系统朗读"
+     * 那一条 (2026-10-20) 不能靠改 [SpeakSettings] 的全局设置, 那会把主人选的那条引擎改掉
+     */
+    private fun systemSpeak(context: Context, request: JsonObject, text: String, run: Int): JsonObject {
         val tts = engine(context)
         val chinese = tts.setLanguage(Locale.CHINESE)
         if (chinese == TextToSpeech.LANG_MISSING_DATA || chinese == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -457,6 +496,9 @@ internal object LwSpeak {
             put("detail", reported ?: if (finished) "the engine finished" else "still speaking after ${budget}ms")
         }
     }
+
+    /** 设置页那颗「检测 Edge」: 走一趟完整握手与合成, 只收不播 (见 LwEdgeTts.probe) */
+    internal fun probeEdge(remote: Boolean = false): JsonObject = LwEdgeTts.probe(remote)
 
     /**
      * 掐断正在念的

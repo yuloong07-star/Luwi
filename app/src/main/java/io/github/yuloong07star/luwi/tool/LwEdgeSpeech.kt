@@ -92,10 +92,15 @@ internal object LwEdgeSpeech {
     fun gec(epochMillis: Long): String = EdgeDrm.token(epochMillis)
 
     /** 连一次的地址: 令牌、门、版本号与这次连接的 id 都在查询串里 */
-    fun connectionUrl(connectionId: String, epochMillis: Long): String =
+    fun connectionUrl(
+        connectionId: String,
+        epochMillis: Long,
+        token: String = gec(epochMillis),
+        version: String = SEC_MS_GEC_VERSION,
+    ): String =
         "$ENDPOINT?TrustedClientToken=$TRUSTED_CLIENT_TOKEN" +
-            "&Sec-MS-GEC=${gec(epochMillis)}" +
-            "&Sec-MS-GEC-Version=$SEC_MS_GEC_VERSION" +
+            "&Sec-MS-GEC=$token" +
+            "&Sec-MS-GEC-Version=$version" +
             "&ConnectionId=$connectionId"
 
     /** JS 那种时间戳 (这条接口就是这么写的, 与服务端对得上就行) */

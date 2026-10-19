@@ -341,6 +341,10 @@
     <string name="settings_speak_engine_edge_using">Currently speaking with %1$s</string>
     <string name="settings_speak_edge_custom">Custom voice name</string>
     <string name="settings_speak_edge_custom_dialog">An endpoint-accepted voice name such as zh-CN-XiaoxiaoNeural; blank goes back to the default</string>
+    <string name="settings_speak_edge_probe">Check Edge online</string>
+    <string name="settings_speak_edge_probe_summary">A full handshake and one short sentence (collected, not played). It also says whether the local token or the token endpoint was used</string>
+    <string name="settings_speak_edge_probe_ok">Edge is up: %1$d ms (%2$s token)</string>
+    <string name="settings_speak_edge_probe_failed">Edge is not answering: %1$s</string>
     <string name="settings_speak_engine_api">API TTS (your address + key)</string>
     <string name="settings_speak_engine_api_summary">Posts the text to an OpenAI-compatible /v1/audio/speech endpoint and speaks with the voice that service gives</string>
     <string name="settings_speak_engine_api_pick">Fill in the address and key below</string>

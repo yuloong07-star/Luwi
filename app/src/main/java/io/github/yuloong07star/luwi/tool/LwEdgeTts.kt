@@ -7,7 +7,11 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -75,13 +79,39 @@ internal object LwEdgeTts {
     /**
      * 连一次, 把这一段的音频收齐
      *
+     * 本地令牌被服务端拒 (401 / 403) 时**再问一趟官网那个令牌端点**重试一次 —— 微软换算法时, 本地
+     * 那份只会一直 403, 远端那一份是"不用更新 APK 也能恢复"的路 (见 [EdgeRemote])
+     *
      * 回来 null = 这次是被叫停的 (调用方按"停了"报, 不当作失败)
      */
     private fun synthesize(voice: String, text: String, speed: Float): ByteArray? {
+        val local = try {
+            collect(voice, text, speed, LwEdgeSpeech.gec(System.currentTimeMillis()), LwEdgeSpeech.SEC_MS_GEC_VERSION, remote = false)
+        } catch (error: EdgeRejected) {
+            if (error.code != 401 && error.code != 403) throw error
+            Log.w(TAG, "the Edge service refused this device's token (${error.code}); asking the token endpoint")
+            val remote = (EdgeRemote.valid() ?: EdgeRemote.fetch())
+                ?: throw IllegalStateException(
+                    "the Edge service refused this device's token (${error.code}) and the token endpoint did not answer",
+                )
+            collect(voice, text, speed, remote.token, remote.version, remote = true)
+        }
+        return local
+    }
+
+    /** 用一份指定的令牌连一次; 收齐音频或抛出 (被拒 = [EdgeRejected]) */
+    private fun collect(
+        voice: String,
+        text: String,
+        speed: Float,
+        token: String,
+        version: String,
+        remote: Boolean,
+    ): ByteArray? {
         val requestId = UUID.randomUUID().toString().replace("-", "")
         val connectionId = UUID.randomUUID().toString().replace("-", "")
         val request = Request.Builder()
-            .url(LwEdgeSpeech.connectionUrl(connectionId, System.currentTimeMillis()))
+            .url(LwEdgeSpeech.connectionUrl(connectionId, System.currentTimeMillis(), token, version))
             .header("Origin", LwEdgeSpeech.ORIGIN)
             .header("User-Agent", USER_AGENT)
             .header("Pragma", "no-cache")
@@ -105,14 +135,66 @@ internal object LwEdgeTts {
                 throw IllegalStateException("the service did not finish within ${TIMEOUT_MS} ms")
             }
             if (stopped) return null
-            failure.get()?.let { throw it }
+            failure.get()?.let { problem ->
+                val code = listener.status.get()
+                if (code != 0) throw EdgeRejected(code, "the Edge service answered HTTP $code (${problem.message ?: problem})")
+                throw problem
+            }
             val bytes = synchronized(audio) { audio.toByteArray() }
             if (bytes.isEmpty()) throw IllegalStateException("the service returned no audio")
+            EdgeRemote.noteSource(remote)
             return bytes
         } finally {
             socket = null
             runCatching { webSocket.cancel() }
         }
+    }
+
+    /**
+     * 检测: 用一句两字的话走一趟完整的握手与合成, **只收音频不播放** (2026-10-20)
+     *
+     * 回执里 `token` 说的是这一趟最后用的是本地还是远端令牌 —— 真机上它同时回答"算法还对不对"与
+     * "那个令牌端点通不通"两件事
+     */
+    internal fun probe(forceRemote: Boolean = false): JsonObject {
+        if (LwVoiceClip.speaking || socket != null) {
+            return buildJsonObject {
+                put("ok", false)
+                put("detail", "something is already speaking; stop it first")
+            }
+        }
+        val voice = SpeakSettings.edgeVoice.ifBlank { LwEdgeSpeech.DEFAULT_VOICE }
+        val started = System.currentTimeMillis()
+        return try {
+            val audio = synthesizeSafely(voice, forceRemote)
+            buildJsonObject {
+                put("ok", audio != null)
+                put("ms", System.currentTimeMillis() - started)
+                put("bytes", audio?.size ?: 0)
+                put("voice", voice)
+                put("token", if (EdgeRemote.lastWasRemote) "remote" else "local")
+                put("detail", if (audio != null) "the service synthesized this sentence" else "stopped before any audio")
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "the Edge probe failed", error)
+            buildJsonObject {
+                put("ok", false)
+                put("ms", System.currentTimeMillis() - started)
+                put("voice", voice)
+                put("token", if (EdgeRemote.lastWasRemote) "remote" else "local")
+                put("detail", error.message ?: error.toString())
+            }
+        }
+    }
+
+    /** 探针用: 这一句不会进播放, 也不该被半双工闸当"在念" */
+    private fun synthesizeSafely(voice: String, forceRemote: Boolean): ByteArray? {
+        stopped = false
+        if (!forceRemote) return synthesize(voice, "嗯", 1f)
+        // 只为验证"远端那一份令牌能不能用": 跳过本地, 直接问端点
+        val remote = (EdgeRemote.valid() ?: EdgeRemote.fetch())
+            ?: throw IllegalStateException("the token endpoint did not answer")
+        return collect(voice, "嗯", 1f, remote.token, remote.version, remote = true)
     }
 
     private val client: OkHttpClient by lazy {
@@ -166,6 +248,13 @@ internal class EdgeListener(
     /** 这一段念完了没有: 服务端拒一个音色时是"turn.start 之后直接关", 而我们自己念完也会主动关 */
     private val ended = AtomicBoolean(false)
 
+    /**
+     * 握手被拒时的 HTTP 状态码 (0 = 不是握手那一步失败的)
+     *
+     * 403 是"令牌不对"的那一条, 也是唯一值得换一份令牌重试的; 其余失败 (网络、超时) 直接报
+     */
+    val status = AtomicInteger(0)
+
     override fun onOpen(webSocket: WebSocket, response: Response) {
         // 两条消息的顺序就是协议: 先说输出格式, 再说文本与音色
         webSocket.send(LwEdgeSpeech.configMessage(System.currentTimeMillis()))
@@ -193,6 +282,8 @@ internal class EdgeListener(
     }
 
     override fun onFailure(webSocket: WebSocket, problem: Throwable, response: Response?) {
+        // 握手被拒时 response 不为空 (403 / 401); 记下它, 上面那一层才知道该不该换令牌重试
+        response?.let { status.compareAndSet(0, it.code) }
         failure.compareAndSet(null, problem)
         finished.countDown()
     }
@@ -219,3 +310,6 @@ internal class EdgeListener(
             ?.let { failure.compareAndSet(null, IllegalStateException(it)) }
     }
 }
+
+/** 握手被服务端拒 (401 / 403): 带着状态码往上抛, 那一层据此决定要不要换远端令牌重试 */
+internal class EdgeRejected(val code: Int, message: String) : IllegalStateException(message)

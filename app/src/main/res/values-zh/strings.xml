@@ -340,6 +340,10 @@
     <string name="settings_speak_engine_edge_using">正在用 %1$s 说话</string>
     <string name="settings_speak_edge_custom">自定义音色名</string>
     <string name="settings_speak_edge_custom_dialog">填接口认的音色名，例如 zh-CN-XiaoxiaoNeural；留空回到缺省</string>
+    <string name="settings_speak_edge_probe">检测 Edge 在线</string>
+    <string name="settings_speak_edge_probe_summary">走一趟完整的握手与一句短话（只收音频、不播放）；回执还会说清用的是本地令牌还是官网那个令牌端点</string>
+    <string name="settings_speak_edge_probe_ok">Edge 通着：%1$d ms（%2$s 令牌）</string>
+    <string name="settings_speak_edge_probe_failed">Edge 不通：%1$s</string>
     <string name="settings_speak_engine_api">API TTS（自填地址 + 密钥）</string>
     <string name="settings_speak_engine_api_summary">把文本发给一个 OpenAI 兼容的 /v1/audio/speech 接口，用它自己的音色说话</string>
     <string name="settings_speak_engine_api_pick">在下面填地址与密钥</string>
