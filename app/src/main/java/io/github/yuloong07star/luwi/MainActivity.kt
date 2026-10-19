@@ -1,6 +1,8 @@
 package io.github.yuloong07star.luwi
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -23,6 +25,7 @@ import io.github.yuloong07star.luwi.tool.SpeakSettings
 import io.github.yuloong07star.luwi.tool.VideoLooks
 import io.github.yuloong07star.luwi.ui.LuwiApp
 import io.github.yuloong07star.luwi.util.PermissionRequests
+import io.github.yuloong07star.luwi.util.PortraitPolicy
 
 class MainActivity : ComponentActivity() {
 
@@ -56,6 +59,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // 手机锁竖屏 (2.7.9 第 9 条): 要在第一帧之前定下来, 否则横着拿起进来会先画一帧横的再转
+        applyPortraitPolicy()
         // 点通知进来的时候, 屏幕可能锁着: 让这一页越过锁屏显示, 是"从通知回到应用"这条路能走通的
         // 前提。它不解锁设备 —— 要看里面的内容仍然要解锁
         setShowWhenLocked(true)
@@ -137,6 +142,58 @@ class MainActivity : ComponentActivity() {
         val baked = intent.getStringExtra(OverlayService.EXTRA_OPEN_SESSION)
         if (!intent.getBooleanExtra(OverlayService.EXTRA_OPEN_LIVE, false)) return baked
         return OverlayState.runningSession() ?: baked
+    }
+
+    /**
+     * 锁竖屏那一档 (2.7.9 第 9 条): 手机钉竖屏, 平板与展开的折叠屏跟随系统
+     *
+     * **为什么不在清单里写** `android:screenOrientation="portrait"`: 那一条会把 API 33~35 的平板也
+     * 一起锁死, 而主人 2026-10-19 的口径是平板与折叠屏保留横屏; 另外 Android 16 起 targetSdk 36+ 的
+     * 应用在大屏上系统本来就会忽略应用声明的方向 —— 两份口径同时存在时, 代码这一份是唯一说得清的
+     *
+     * 折叠屏展开 / 合上是配置变化, 这一页会被重建, 于是 `onCreate` 这一趟就按新的窗口重判一次;
+     * 分屏进出不重建 (那一条留给 [onMultiWindowModeChanged])
+     */
+    private fun applyPortraitPolicy() {
+        val smallestWidthDp = deviceSmallestWidthDp()
+        val orientation = PortraitPolicy.orientationFor(smallestWidthDp)
+        val want = when (orientation) {
+            PortraitPolicy.Orientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            PortraitPolicy.Orientation.FOLLOW_SYSTEM -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        // 这一行是判据: 模拟器上转屏前后各看一次, 手机档永远写这一行而屏幕不转, 平板档是另一个值
+        Log.i(TAG, "orientation: smallest width ${smallestWidthDp}dp -> ${orientation.name}, requesting $want")
+        if (requestedOrientation != want) requestedOrientation = want
+    }
+
+    /**
+     * 这台设备 (而不是这一页窗口) 当前折叠状态下最短边是多少 dp
+     *
+     * 用 `maximumWindowMetrics` 而不是 `Configuration.smallestScreenWidthDp`: 后者在分屏里跟着窗口
+     * 一起缩, 平板分屏那一格会被当成手机钉成竖屏 (API 33~35 上没有 Android 16 那条"大屏忽略方向"
+     * 兜着)。这里要的是"这台设备有多大", 折叠屏展开那一刻它自己会变
+     *
+     * 读不出来 (0) 时退回配置里那个数, 两个都读不出来就是 0, 由 [PortraitPolicy] 当手机档
+     */
+    private fun deviceSmallestWidthDp(): Int {
+        val bounds = windowManager.maximumWindowMetrics.bounds
+        val density = resources.displayMetrics.density
+        if (density > 0f) {
+            val dp = (minOf(bounds.width(), bounds.height()) / density).toInt()
+            if (dp > 0) return dp
+        }
+        return resources.configuration.smallestScreenWidthDp
+    }
+
+    /**
+     * 分屏进出不重建这一页, 而窗口的形状变了, 所以这里再判一次
+     *
+     * 设备那一档的宽度在分屏里不变, 这一次判定多数时候什么都不改 (logcat 里只是多一行读数);
+     * 留着它是因为将来若把判据改回 `smallestScreenWidthDp`, 少这一条就是"分屏里判据停在旧值"
+     */
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+        applyPortraitPolicy()
     }
 
     private companion object {
