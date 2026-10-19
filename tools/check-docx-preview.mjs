@@ -133,7 +133,9 @@ check('"按手机宽度重排"那段排在 docx-preview 自己的样式之后 (A
   source.includes('const FIT_CSS'),
   /\$\{rendered\.css\}\\n\$\{FIT_CSS\}/.test(source),
   source.includes('width: auto !important'),
-], [true, true, true])
+  // 页面容器必须从 flex + center 改成块级: 页比容器宽时 flex 会让它**两边一起**溢出, 左边被裁
+  source.includes('.lw-docx-wrapper { display: block !important'),
+], [true, true, true, true])
 check('pptx 自己解 OOXML: 按 sldIdLst 排页, 只收图片关系, 有上限', [
   pptx.includes("from 'jszip'"),
   pptx.includes('p:sldId'),

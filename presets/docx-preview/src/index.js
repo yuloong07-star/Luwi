@@ -116,10 +116,13 @@ body { margin: 0; padding: 16px; font: 14px/1.65 system-ui, -apple-system, "Noto
  * `!important` 压过去 (行内样式斗不过带 important 的样式表规则), 顺带把表格与图片收进宽度
  */
 const FIT_CSS = `
-.lw-docx-wrapper { width: auto !important; padding: 0 !important; }
+/* docx-preview 把页面容器摆成 flex + align-items:center; 页面比容器宽时它**两边一起溢出** ——
+   左边被裁掉, 就是"放大后左边看不见" (2026-10-19 量到 section.left = -112)。改成块级, 页面贴左 */
+.lw-docx-wrapper { display: block !important; width: auto !important; padding: 0 !important; }
 section.lw-docx { width: auto !important; min-width: 0 !important; min-height: 0 !important;
   padding: 12px 14px !important; margin: 0 0 12px !important; box-shadow: none !important; }
-section.lw-docx table { max-width: 100% !important; }
+section.lw-docx table { width: 100% !important; max-width: 100% !important; table-layout: auto !important; }
+section.lw-docx td, section.lw-docx th { overflow-wrap: anywhere !important; word-break: break-word !important; }
 section.lw-docx img { max-width: 100% !important; height: auto !important; }
 `
 
@@ -255,9 +258,13 @@ function OfficeBody(props) {
     if (state.phase !== 'ready' || container === null) return
 
     /**
-     * 改一份文档的缩放, 并让捏合/双击那一处留在原地
+     * 改一份文档的缩放, 纵向留在捏合那一处, **横向一律回到左边缘**
+     *
+     * 2026-10-19 主人报"放大后, 左边部分看不见": 原来横向也跟着捏合中心走 (那是图像类预览的惯例),
+     * 而文档是重排的 —— 每一行都从左边开始读, 一放大就看不见行首, 很难受。文档这一档就以"行首
+     * 永远可见"为准, 右边放不下的内容自己拖过去
      * @param {number} next 目标倍率
-     * @param {{ x: number, y: number } | undefined} anchor 屏幕坐标上的锚点
+     * @param {{ x: number, y: number } | undefined} anchor 屏幕坐标上的锚点 (只用它的纵坐标)
      */
     const apply = (next, anchor) => {
       const host = hostRef.current
@@ -266,14 +273,12 @@ function OfficeBody(props) {
       const ratio = clamped / zoomRef.current
       if (Math.abs(ratio - 1) < 0.001) return
       const box = container.getBoundingClientRect()
-      const cx = (anchor === undefined ? box.width / 2 : anchor.x - box.left)
       const cy = (anchor === undefined ? box.height / 2 : anchor.y - box.top)
-      const ox = container.scrollLeft + cx
       const oy = container.scrollTop + cy
       zoomRef.current = clamped
       host.style.zoom = String(clamped)
-      // 读一次 scroll 之前浏览器必须先把新布局算出来, 下面这两个赋值就是"把同一点挪回原处"
-      container.scrollLeft = ox * ratio - cx
+      // 读一次 scrollTop 之前浏览器必须先把新布局算出来, 之后再摆位置
+      container.scrollLeft = container.scrollLeft * ratio
       container.scrollTop = oy * ratio - cy
       setZoom(clamped)
     }
