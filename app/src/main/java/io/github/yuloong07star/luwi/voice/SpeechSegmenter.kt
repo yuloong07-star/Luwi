@@ -49,6 +49,8 @@ internal class SpeechSegmenter private constructor(
     private val vad: Vad,
     private val onSegment: (FloatArray) -> Unit,
     private val onVoice: () -> Unit,
+    /** 这一台切段器现在用的静音长度 (设置页那一档, 缺省 [MIN_SILENCE_SECONDS]); 读数与日志照它说 */
+    val minSilenceSeconds: Float = MIN_SILENCE_SECONDS,
 ) : AudioCapture.Sink {
 
     /** 攒窗口用的那一块, 一直是同一个 */
@@ -206,12 +208,18 @@ internal class SpeechSegmenter private constructor(
         }
 
         /** 建一个切段器; 模型坏了或原生库起不来就抛, 由调用方翻译成人话 */
-        fun open(model: File, onSegment: (FloatArray) -> Unit, onVoice: () -> Unit): SpeechSegmenter {
+        fun open(
+            model: File,
+            onSegment: (FloatArray) -> Unit,
+            onVoice: () -> Unit,
+            // 设置页那一档 (T15, 0.5..1.5): 缺省仍是量过的 0.8 —— 传进来的数由调用方先夹好
+            minSilenceSeconds: Float = MIN_SILENCE_SECONDS,
+        ): SpeechSegmenter {
             val config = VadModelConfig(
                 sileroVadModelConfig = SileroVadModelConfig(
                     model = model.absolutePath,
                     threshold = THRESHOLD,
-                    minSilenceDuration = MIN_SILENCE_SECONDS,
+                    minSilenceDuration = minSilenceSeconds,
                     minSpeechDuration = MIN_SPEECH_SECONDS,
                     windowSize = WINDOW_SIZE,
                     maxSpeechDuration = MAX_SPEECH_SECONDS,
@@ -222,7 +230,7 @@ internal class SpeechSegmenter private constructor(
                 provider = "cpu",
                 debug = false,
             )
-            return SpeechSegmenter(Vad(assetManager = null, config = config), onSegment, onVoice)
+            return SpeechSegmenter(Vad(assetManager = null, config = config), onSegment, onVoice, minSilenceSeconds)
         }
 
         private fun digestOf(file: File): String {

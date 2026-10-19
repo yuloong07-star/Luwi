@@ -10,6 +10,8 @@ import io.github.yuloong07star.luwi.host.DshHost
 import io.github.yuloong07star.luwi.util.Capability
 import io.github.yuloong07star.luwi.util.PermissionGate
 import io.github.yuloong07star.luwi.voice.VoiceInbox
+import io.github.yuloong07star.luwi.voice.VoiceLive
+import io.github.yuloong07star.luwi.voice.VoiceSettings
 import io.github.yuloong07star.luwi.voice.VoiceState
 import io.github.yuloong07star.luwi.wake.WakeWordDownload
 import io.github.yuloong07star.luwi.wake.WakeWordModel
@@ -495,6 +497,15 @@ internal object LwWakeWord {
             put("delivered", VoiceState.delivered)
             put("lastSeq", VoiceState.lastSeq)
             put("speaking", VoiceState.speaking)
+            // 批次 9 的两个设置与状态出口的读数 (T15 / T17): "静音档现在是多少"与"出口到底通不通"
+            // 都不该只能去设置页看 —— 真机验收与排障读的就是这几行
+            put("vadSilence", VoiceSettings.silence(context))
+            put("exportEnabled", VoiceSettings.exportEnabled(context))
+            put("exportPackage", VoiceSettings.exportPackage(context))
+            put("exportTarget", VoiceSettings.exportTarget(context) ?: "")
+            put("liveState", VoiceLive.state)
+            put("liveSession", VoiceLive.session ?: "")
+            put("liveFile", VoiceLive.file(context).absolutePath)
             put("inbox", VoiceInbox.file(context).absolutePath)
             put(
                 "text",

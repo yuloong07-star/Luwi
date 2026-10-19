@@ -45,6 +45,7 @@ import io.github.yuloong07star.luwi.voice.SpeechSegmenter
 import io.github.yuloong07star.luwi.voice.VoiceCommands
 import io.github.yuloong07star.luwi.voice.VoiceInbox
 import io.github.yuloong07star.luwi.voice.VoiceRoute
+import io.github.yuloong07star.luwi.voice.VoiceSettings
 import io.github.yuloong07star.luwi.voice.VoiceState
 import java.io.File
 import java.util.concurrent.ArrayBlockingQueue
@@ -1137,7 +1138,9 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
             return
         }
         val created = try {
-            SpeechSegmenter.open(path, ::rememberSegment, ::noteVoice)
+            // 静音长度走设置页那一档 (T15): 缺省还是量过的 0.8 s, 调小之后一句话会发得更早,
+            // 代价是正常的停顿可能被切成两句 (施工单 §8.2)
+            SpeechSegmenter.open(path, ::rememberSegment, ::noteVoice, VoiceSettings.silence(this))
         } catch (error: Throwable) {
             VoiceState.vadReady = false
             VoiceState.vadDetail = "the silero VAD would not come up: ${error.message ?: error}"
@@ -1148,7 +1151,7 @@ class WakeWordService : Service() {    private var spotter: KeywordSpotter? = nu
         // 被它看见
         vad = created
         VoiceState.vadReady = true
-        VoiceState.vadDetail = "ready: ${SpeechSegmenter.MIN_SILENCE_SECONDS}s of silence ends a segment, "
+        VoiceState.vadDetail = "ready: ${created.minSilenceSeconds}s of silence ends a segment, "
             .plus("at most ${SpeechSegmenter.MAX_SPEECH_SECONDS}s each")
     }
 

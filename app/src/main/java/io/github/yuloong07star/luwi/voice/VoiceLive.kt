@@ -77,6 +77,8 @@ internal object VoiceLive {
             session = id
             at = System.currentTimeMillis()
             write(context, wanted, id, at)
+            // 广播与文件同一条边沿: 只在跳变时发一次 (缺省关, 只发给设置页点名的那个包)
+            VoiceExport.announce(context, wanted, id)
             return true
         }
     }

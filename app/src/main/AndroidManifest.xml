@@ -357,6 +357,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- 语音状态的只读出口 (2.7.9 批次 9 T17): 没有 root 的第三方应用问"她现在在做什么".
+             闸不在清单上 (exported 是必须的 —— 调用者不是本应用), 而在 provider 里面:
+             设置页那个开关关着、或包名没点名时一律回 enabled=false; 点名了也只答那一个包。
+             只给 state / session 两列, 没有音频、没有电平、没有写入口 -->
+        <provider
+            android:name=".voice.VoiceStateProvider"
+            android:authorities="io.github.yuloong07star.luwi.lw.voice"
+            android:exported="true" />
+
         <!-- 帧图 / 配图的只读出口 (方案 3.1): 桌面那一格在启动器进程里画, 图住在我们的私有目录里,
              所以走 content:// 交出去 (位图过 binder 会撞 1 MB 上限); 读权限每一趟组装前重放一次 -->
         <provider

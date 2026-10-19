@@ -87,6 +87,8 @@ import io.github.yuloong07star.luwi.tool.VideoLooks
 import io.github.yuloong07star.luwi.tool.bytes
 import java.io.File
 import io.github.yuloong07star.luwi.voice.VoiceInbox
+import io.github.yuloong07star.luwi.voice.VoiceLive
+import io.github.yuloong07star.luwi.voice.VoiceSettings
 import io.github.yuloong07star.luwi.constants.UiSpacing
 import io.github.yuloong07star.luwi.host.AppSkills
 import io.github.yuloong07star.luwi.host.DshHost
@@ -245,14 +247,14 @@ internal val SettingsSectionsAlwaysOpenKeys = listOf(
 /** 白名单的集合形态, 给 [defaultCollapsed] 算差集用 */
 internal val SettingsSectionsAlwaysOpen: Set<String> = SettingsSectionsAlwaysOpenKeys.toSet()
 
-/** 「能力」那一组的 12 段, 缺省全收着 (装完之后偶尔来调一次的那些) */
+/** 「能力」那一组的 13 段, 缺省全收着 (装完之后偶尔来调一次的那些) */
 private val AbilitySectionKeys = listOf(
-    "notifications", "screenshot", "look", "lock",
+    "notifications", "screenshot", "look", "voice", "lock",
     "explore", "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
 )
 
 /**
- * 页面上那 18 段的段名, **顺序就是从上到下**
+ * 页面上那 19 段的段名, **顺序就是从上到下**
  *
  * 它只为一件事存在: 算"缺省收起来的那几段" ([defaultCollapsed])。**新加一段时必须同时加到这里** ——
  * 漏掉它不会报错, 只是那一段会恰好展开着 (与 D2 那条"新加的段就收着"相反), 界面上一点异常都看不出来,
@@ -615,6 +617,18 @@ fun SettingsScreen() {
                             LookItems()
                         }
                     }
+                }
+
+                // 「语音」那一段 (2.7.9 批次 9): 断句的静音长度 (T15) 与语音状态出口 (T17) —— 两件都是
+                // 语音模块自己的参数, 所以不塞进「唤醒词」(那是许可) 或「说话」(那是念) 那两段里
+                settingsSection(
+                    key = "voice",
+                    title = R.string.settings_section_voice,
+                    summary = R.string.settings_section_voice_summary,
+                    collapsed = collapsed,
+                    onToggle = toggleSection,
+                ) {
+                    Card { VoiceItems() }
                 }
 
                 // 锁屏这一段是批次 5 的落点 (点亮屏幕 + 按主人自己录的那一条解锁); 自动指令那一段仍是
@@ -5086,6 +5100,104 @@ private fun SpeakItems() {
 private fun voiceLabel(voice: Voice): String = "${voice.name} (${voice.locale.toLanguageTag()})"
 
 /**
+ * 「语音」那一段 (2.7.9 批次 9): 断句的静音长度与语音状态出口
+ *
+ * 两件事放同一段是因为它们都是**语音模块自己的参数**, 而不是"许可"(唤醒词那段) 或"怎么念"
+ * (说话那段):
+ *
+ * - **静音长度** (T15): 0.5~1.5 s, 缺省 0.8 不动。调小发得更早, 而正常的停顿可能被切成两句 ——
+ *   这一句必须写在说明里, 它是这个旋钮的真实代价
+ * - **状态出口** (T17): 一个开关 + 一个包名。缺省关; 包名留空或不像包名时整条出口也等于关着
+ *   ([VoiceSettings.exportTarget] 是唯一的判据, 广播与 provider 都问它)
+ *
+ * 最上面那一行"现在"读的是 [VoiceLive.state] —— 与文件、广播、只读查询同一个词, 调灯的人对着它
+ * 看就能确认自己在对的路上
+ */
+@Composable
+private fun VoiceItems() {
+    val context = LocalContext.current
+    var silence by remember { mutableStateOf(VoiceSettings.silence(context)) }
+    var export by remember { mutableStateOf(VoiceSettings.exportEnabled(context)) }
+    var packageName by remember { mutableStateOf(VoiceSettings.exportPackage(context)) }
+    var editing by remember { mutableStateOf(false) }
+    var now by remember { mutableStateOf(VoiceLive.state) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = VoiceLive.state
+            // 包名那一行可能被"清空" —— 每秒对一次账, 开关与它才不会各说各的
+            packageName = VoiceSettings.exportPackage(context)
+            delay(POLL_MS)
+        }
+    }
+    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
+        Text(text = stringResource(R.string.settings_voice_now, now))
+        Text(
+            text = stringResource(R.string.settings_voice_now_note),
+            modifier = Modifier.padding(top = UiSpacing.Medium),
+        )
+    }
+    ArrowSlider(
+        title = stringResource(R.string.settings_voice_silence),
+        summary = stringResource(R.string.settings_voice_silence_summary, "%.1f".format(silence)),
+        value = silence,
+        onValueChange = { value ->
+            silence = value
+            VoiceSettings.setSilence(context, value)
+        },
+        valueRange = VoiceSettings.silenceRange,
+        // 连续滑动: 吸附点 (0.5 / 0.8 / 1.0 / 1.2 / 1.5) 只帮着停到好看的那几个数上
+        steps = 0,
+        showKeyPoints = true,
+        keyPoints = VoiceSettings.silenceKeyPoints,
+        magnetThreshold = VoiceSettings.MAGNET,
+        displayFormatter = { "%.1f s".format(it) },
+        inputSummary = stringResource(
+            R.string.settings_voice_silence_dialog,
+            "%.1f".format(VoiceSettings.silenceRange.start),
+            "%.1f".format(VoiceSettings.silenceRange.endInclusive),
+        ),
+        inputLabel = "s",
+        inputInitialValue = "%.1f".format(silence),
+        inputValueRange = VoiceSettings.silenceRange,
+        onInputConfirm = { raw ->
+            raw.toFloatOrNull()?.let { typed ->
+                silence = VoiceSettings.clamped(typed)
+                VoiceSettings.setSilence(context, typed)
+            }
+        },
+    )
+    SwitchPreference(
+        title = stringResource(R.string.settings_voice_export),
+        summary = stringResource(R.string.settings_voice_export_summary),
+        checked = export,
+        onCheckedChange = { wanted ->
+            export = wanted
+            VoiceSettings.setExportEnabled(context, wanted)
+        },
+    )
+    ArrowPreference(
+        title = stringResource(R.string.settings_voice_package),
+        summary = when {
+            packageName.isBlank() -> stringResource(R.string.settings_voice_package_none)
+            !VoiceSettings.packageLooksValid(packageName) -> stringResource(R.string.settings_voice_package_bad)
+            else -> stringResource(R.string.settings_voice_package_set, packageName)
+        },
+        onClick = { editing = true },
+    )
+    if (editing) {
+        VoicePackageDialog(
+            initial = packageName,
+            onDismissRequest = { editing = false },
+            onConfirm = { value ->
+                packageName = value.trim()
+                VoiceSettings.setExportPackage(context, value)
+                editing = false
+            },
+        )
+    }
+}
+
+/**
  * 浮标: 一颗球, 点一下说话
  *
  * 这一段的落点是**一颗球在不在屏幕上**, 而不是"那段代码跑没跑": 球是那块常驻的 overlay 窗, 而它的
@@ -5852,10 +5964,59 @@ private fun SpeakTextFieldDialog(
     }
 }
 
-/** 设置页那一段的轮询间隔: 只喂状态文字, 不用更快 */
-private const val POLL_MS = 1000L
-
 /**
+ * 「语音」那段里那个包名的编辑框 (2.7.9 批次 9 T17)
+ *
+ * 只收一个字符串: 填得对不对由 [VoiceSettings.packageLooksValid] 在那一段的说明里说, 这里不拦 ——
+ * 人可能先把包名抄进来再回头看说明, 拦在输入框里只会让人打不完
+ */
+@Composable
+private fun VoicePackageDialog(
+    initial: String,
+    onDismissRequest: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    OverlayDialog(
+        show = true,
+        title = stringResource(R.string.settings_voice_package),
+        summary = stringResource(R.string.settings_voice_package_dialog),
+        defaultWindowInsetsPadding = false,
+        onDismissRequest = onDismissRequest,
+    ) {
+        var text by rememberSaveable(initial) { mutableStateOf(initial) }
+        SuperTextField(
+            modifier = Modifier.padding(bottom = 16.dp),
+            value = text,
+            onValueChange = { text = it },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        )
+        Row(horizontalArrangement = Arrangement.SpaceBetween) {
+            TextButton(
+                text = stringResource(R.string.button_cancel),
+                onClick = {
+                    haptic.contextClick()
+                    onDismissRequest()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(20.dp))
+            TextButton(
+                text = stringResource(R.string.button_confirm),
+                onClick = {
+                    haptic.confirm()
+                    onConfirm(text)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+            )
+        }
+    }
+}
+
+/** 设置页那一段的轮询间隔: 只喂状态文字, 不用更快 */
+private const val POLL_MS = 1000L/**
  * 系统那个「文字转语音输出」页
  *
  * 用字面值而不是 `Settings.ACTION_TTS_SETTINGS`: 与全屏通知那一页同一个理由 —— 那个常量在某些
