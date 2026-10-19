@@ -13,6 +13,7 @@ import io.github.yuloong07star.luwi.voice.VoiceState
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -57,6 +58,16 @@ internal object LwSpeak {
     private var spoken: Int = 0
 
     /**
+     * 每念一句一个代际号 (T14): 异步念的时候后一声 (`interrupt` 那条会 QUEUE_FLUSH) 把前一声的
+     * "放开半双工闸 / 写尾巴预算 / 清 current" 全部作废 —— 否则前一声等满预算回来时, 会把后一声
+     * 那笔账清掉 (麦克风提前开, 球上也不再写「正在说」)
+     */
+    private val speakingRun = AtomicInteger(0)
+
+    /** 异步那一档起过几趟 (读数用) */
+    private val asyncRuns = AtomicInteger(0)
+
+    /**
      * 上一次念的是不是**系统那条**引擎
      *
      * 只有它需要"预算窗 + 专属属性"那一条 (播放器在引擎进程里, 看不到); 自带与在线那两条的播放器就在
@@ -67,7 +78,7 @@ internal object LwSpeak {
 
     fun dispatch(context: Context, request: JsonObject): JsonObject = when (val op = request.string("op")) {
         "status" -> status(context)
-        "speak" -> speak(context, request)
+        "speak" -> if (request.bool("async", false)) speakAsync(context, request) else speak(context, request)
         // 预录填音 (2.7.9 批次 9 T13): 放 assets/clips/<clip>.ogg, 不走引擎、不联网、不等播完
         "clip" -> clip(context, request)
         "stop" -> stop()
@@ -142,15 +153,7 @@ internal object LwSpeak {
             // 朗读用的是哪条引擎: 四条都报出来 (自带那条的音色是主人自己放进来的目录; 两条在线引擎
             // 的音色在它们各自的服务那一侧)
             // **键名不能叫 engine**: 那个键上面已经用来报系统引擎的包名了
-            put(
-                "readingWith",
-                when {
-                    SpeakSettings.usesOnDevice() -> "on-device"
-                    SpeakSettings.usesEdge() -> "edge"
-                    SpeakSettings.engine == SpeakSettings.Engine.API -> "api"
-                    else -> "system"
-                },
-            )
+            put("readingWith", readingWith())
             // 自动念那条链在宿主那侧, 所以这个开关必须报出去 —— 它据此决定要不要念
             put("readAloud", SpeakSettings.readAloud)
             put("onDeviceModel", SpeakSettings.model ?: "")
@@ -185,6 +188,8 @@ internal object LwSpeak {
             // 半双工那道闸的**真实值**: 填音那一段它与 speaking 故意不同 (clip 会合上它, 但不进
             // [talking], 见 `op=clip`), 所以两个都报出来, 免得"闸合没合上"只能靠猜
             put("halfDuplex", VoiceState.speaking)
+            // 异步那一档 (T14): 起过几趟。**在不在响看 speaking 那一个**, 这里只是"这一档用没用过"
+            put("asyncStarts", asyncRuns.get())
             put("utterances", spoken)
             // 「还在出声吗」这条判据自己的读数 (2026-10-16): 尾巴预算什么时候到点、上一次念的是不是系统
             // 那条、以及**活跃播放里有几条带的是我们给引擎那份属性** (0 = 判据退化成"只按预算")
@@ -251,18 +256,66 @@ internal object LwSpeak {
         // 成「正在听」而不是「正在念」。现在整段调用都在闸里, 三条引擎一样
         //
         // 包住的是**整段**: 下面的 `unavailable` 会抛, 那时标记也必须放回去, 不然麦克风一直关着
+        //
+        // **代际号是异步那一档 (T14) 的必要条件**: 异步念的时候主人又叫了一声 (`interrupt` 那条会
+        // QUEUE_FLUSH), 前一趟得等满自己的预算才返回 —— 它返回时**不许**把后一声那笔闸清掉, 否则
+        // 后一声还在响, 麦克风却已经开了
+        val run = speakingRun.incrementAndGet()
         VoiceState.speaking = true
         // 新的一句开始: 上一句那份"可能还在响"的预算作废 (这一句结束时会重新写, 见 [talking])
         VoiceState.spokeUntil = 0L
         try {
-            return speakWith(context, request, text)
+            return speakWith(context, request, text, run)
         } finally {
-            VoiceState.speaking = false
+            if (run == speakingRun.get()) VoiceState.speaking = false
         }
     }
 
+    /**
+     * 异步念 (T14): 起播就返回, 在不在响由 `op=status` 的 `speakingNow` 答
+     *
+     * 为什么要有这一档: `speak` 原来要等播完 (`budget` = 15 s + 250 ms/字, 201 字 ≈ 65 s), 一次长
+     * 回答把通道占住, 而通道是串行的 —— 那个插件只好去抢内置朗读 (施工单 §8.2)。异步这一档让调用方
+     * "交出去就走", 停下照旧走 `op=stop`
+     *
+     * **它不是默认**: 现有调用方靠 `speak` 的返回值判"念完了没有", 所以异步只能是一个新档
+     */
+    private fun speakAsync(context: Context, request: JsonObject): JsonObject {
+        val text = request.string("text").trim()
+        if (text.isEmpty()) {
+            unavailable("speaking", "the text is empty")
+        }
+        val runs = asyncRuns.incrementAndGet()
+        val worker = Thread({
+            try {
+                speak(context, request)
+            } catch (error: Throwable) {
+                Log.w(TAG, "the asynchronous utterance failed", error)
+            }
+        }, "lw-speak-async-$runs")
+        // 不挡进程退出: 一句念到一半而应用被收掉, 不需要靠它把进程钉着
+        worker.isDaemon = true
+        worker.start()
+        return buildJsonObject {
+            put("accepted", true)
+            put("started", true)
+            put("async", true)
+            put("readingWith", readingWith())
+            put("characters", text.length)
+            put("detail", "started in the background; op=status says speakingNow until it ends, op=stop cuts it")
+        }
+    }
+
+    /** 这一侧会拿哪条引擎念 (只看设置, 不初始化任何引擎) —— 异步回执与 status 共用这一份 */
+    private fun readingWith(): String = when {
+        SpeakSettings.usesOnDevice() -> "on-device"
+        SpeakSettings.usesEdge() -> "edge"
+        SpeakSettings.engine == SpeakSettings.Engine.API -> "api"
+        else -> "system"
+    }
+
     /** [speak] 的真身: 三条引擎各自怎么念 (闸在上面那一层合, 这里只管念) */
-    private fun speakWith(context: Context, request: JsonObject, text: String): JsonObject {
+    private fun speakWith(context: Context, request: JsonObject, text: String, run: Int): JsonObject {
         // 自带那条先问: 设置页选了它、而且真的挑了一个音色目录, 就整段交给它 (它自己按句切)
         if (SpeakSettings.usesOnDevice()) {
             val wanted = SpeakSettings.model
@@ -286,8 +339,7 @@ internal object LwSpeak {
             val failed = !answer.startsWith("said ")
             // 自带那条的播放器就在本进程, 它说停就是停 —— [talking] 认它的播放标记, 不认这段预算
             // (这一笔只是给 `status`/`probe` 看的现场)
-            lastWasSystem = false
-            if (!failed) VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
+            if (!failed) stampTail(run, text, system = false)
             return buildJsonObject {
                 put("spoken", !failed)
                 put("readingWith", "on-device")
@@ -313,8 +365,7 @@ internal object LwSpeak {
             }
             val failed = !answer.startsWith("said ")
             // 在线那两条的播放器 (LwVoiceClip 里那个 MediaPlayer) 也在本进程: 同上, 判据只认播放标记
-            lastWasSystem = false
-            if (!failed) VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
+            if (!failed) stampTail(run, text, system = false)
             return buildJsonObject {
                 put("spoken", !failed)
                 put("readingWith", if (edge) "edge" else "api")
@@ -375,21 +426,21 @@ internal object LwSpeak {
                 val mode = if (interrupt && index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
                 val result = tts.speak(piece, mode, null, id)
                 if (result != TextToSpeech.SUCCESS) {
-                    current = null
+                    if (run == speakingRun.get()) current = null
                     unavailable("speaking", "the engine refused the utterance ($result)")
                 }
             }
             latch.await(budget, TimeUnit.MILLISECONDS)
         } finally {
-            VoiceState.speaking = false
+            if (run == speakingRun.get()) VoiceState.speaking = false
         }
         val reported = failure
-        current = null
-        // 系统那条: **只有它**要靠"预算窗 + 专属属性"那一条 (播放器在引擎进程里)
-        lastWasSystem = true
-        // **"说完了"之后那一段**: 引擎报的结束常常早于喇叭真的不响, 按这一句的长度留一份上限, 那一段里
-        // 由"带我们那份属性的活跃播放"说了算 (见 [talking] 与 `SystemSpeech`)
-        VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
+        // 只清自己那一条: 异步那一档 (T14) 里后一声可能已经挂上了新的 utterance
+        if (run == speakingRun.get()) current = null
+        // 系统那条: **只有它**要靠"预算窗 + 专属属性"那一条 (播放器在引擎进程里). **"说完了"之后
+        // 那一段**: 引擎报的结束常常早于喇叭真的不响, 按这一句的长度留一份上限, 那一段里由"带我们那份
+        // 属性的活跃播放"说了算 (见 [talking] 与 `SystemSpeech`)。被掐断的那一趟不写 (代际号不一致)
+        stampTail(run, text, system = true)
         return buildJsonObject {
             put("spoken", finished && reported == null)
             put("text", text)
@@ -415,6 +466,13 @@ internal object LwSpeak {
      * 谁在放谁就停
      */
     internal fun stop(): JsonObject {
+        // **先加代际号**: 正在等预算的那一趟 (同步被掐 / 异步还在念) 回来时会发现号变了, 于是它不
+        // 会再把半双工闸合上、不会写尾巴预算、也不会把 current 清掉 (T14)
+        speakingRun.incrementAndGet()
+        val waiting = current
+        current = null
+        // 让还在 `latch.await` 的那一趟立刻回来, 不必等满自己的预算 (长回答是 60 s 以上)
+        waiting?.latch?.countDown()
         // 预录填音也一起停 (它在另一条声轨上, 系统引擎的 stop 碰不到它)
         LwClips.stop()
         val onDevice = LwTts.stop()
@@ -422,7 +480,6 @@ internal object LwSpeak {
         val online = LwEdgeTts.stop() ?: LwApiTts.stop()
         val tts = synchronized(lock) { engine }
         val result = tts?.stop()
-        current = null
         // 掐断了就不能让那道半双工的闸一直关着
         VoiceState.speaking = false
         // 手动掐断是"现在就停": 那份尾巴预算也一起作废, 否则麦克风会白关一会儿 (见 [talking])
@@ -487,6 +544,18 @@ internal object LwSpeak {
      * 引擎报完之后还要留一段, 真实长度由 [talking] 里那两条精确判据说
      */
     private fun tailBudgetMs(text: String): Long = SpeechTail.budgetMs(text)
+
+    /**
+     * 记下"这一句念完了, 尾巴到什么时候" (T14 起带代际号)
+     *
+     * 被后一声盖掉、或被 `stop` 掐掉的那一趟**一个字节都不写**: 写了就等于把当前这一声的预算清成
+     * 旧值, 半双工闸会提前放行
+     */
+    private fun stampTail(run: Int, text: String, system: Boolean) {
+        if (run != speakingRun.get()) return
+        lastWasSystem = system
+        VoiceState.spokeUntil = System.currentTimeMillis() + tailBudgetMs(text)
+    }
 
     /** 把引擎放掉: 下一次 status/speak 会重新初始化 */
     private fun release(): JsonObject {
