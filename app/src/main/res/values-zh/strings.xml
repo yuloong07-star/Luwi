@@ -65,8 +65,11 @@
     <string name="settings_feedback_submit">提交</string>
     <string name="settings_feedback_sending">正在提交 ...</string>
     <string name="settings_feedback_empty">正文还是空的</string>
-    <string name="settings_feedback_sent">已发送, 谢谢</string>
     <string name="settings_feedback_copied">已复制: 粘到页面里, 在那里提交</string>
+    <string name="settings_feedback_success_title">提交成功</string>
+    <string name="settings_feedback_success_note">感谢您的反馈~ 您的每一次反馈都会让 Luwi 变得更好~ 如果你有兴趣, 可以加入 QQ 和飞书的交流群</string>
+    <string name="settings_feedback_group_qq">QQ 群</string>
+    <string name="settings_feedback_group_feishu">飞书群</string>
     <string name="settings_feedback_no_backend">后端没接上, 这一条改成复制了</string>
     <string name="settings_feedback_send_failed">没发出去, 已改成复制</string>
     <string name="settings_feedback_mail_subject">Luwi 反馈</string>

@@ -65,8 +65,11 @@
     <string name="settings_feedback_submit">Send</string>
     <string name="settings_feedback_sending">Sending ...</string>
     <string name="settings_feedback_empty">Write something first</string>
-    <string name="settings_feedback_sent">Sent, thank you</string>
     <string name="settings_feedback_copied">Copied: paste it into the page, then submit there</string>
+    <string name="settings_feedback_success_title">Sent</string>
+    <string name="settings_feedback_success_note">Thanks for your feedback — every note makes Luwi better. If you like, join us in the QQ or Feishu group.</string>
+    <string name="settings_feedback_group_qq">QQ group</string>
+    <string name="settings_feedback_group_feishu">Feishu group</string>
     <string name="settings_feedback_no_backend">The server did not take it, so it was copied instead</string>
     <string name="settings_feedback_send_failed">It did not go out, so it was copied instead</string>
     <string name="settings_feedback_mail_subject">Luwi feedback</string>

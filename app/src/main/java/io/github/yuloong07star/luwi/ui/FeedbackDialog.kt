@@ -7,13 +7,16 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,11 +26,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.feedback.Feedback
@@ -44,6 +51,7 @@ import top.yukonga.miuix.kmp.basic.TabRow
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 
 /**
@@ -247,160 +255,232 @@ internal fun FeedbackDialog(onDismissRequest: () -> Unit) {
         defaultWindowInsetsPadding = false,
         onDismissRequest = onDismissRequest,
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            TabRow(
-                tabs = kindLabels,
-                selectedTabIndex = kind,
-                onTabSelected = { kind = it },
-            )
-            Text(
-                text = kindSummaries[kind],
-                color = colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            SuperTextField(
-                value = body,
-                // 上限在这里拦: 框里永远不超过 500, 于是计数器与"交得出去"是同一件事
-                onValueChange = { body = Feedback.clamp(it) },
-                modifier = Modifier.padding(top = 16.dp),
-                label = stringResource(R.string.settings_feedback_body),
-                minLines = 5,
-                maxLines = 8,
-            )
-            // 实时计数: 到顶那一格换成错误色 (截断是静默的, 这一行是唯一的提示)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                Text(
-                    text = stringResource(R.string.settings_feedback_count, body.length, Feedback.LIMIT),
-                    color = if (body.length >= Feedback.LIMIT) {
-                        colorScheme.error
-                    } else {
-                        colorScheme.onSurfaceVariantSummary
-                    },
+        if (sent) {
+            // 真交出去了: 换成"提交成功 + 两个交流群"那一屏 —— 表单收起来, 免得再点一次多开一条
+            FeedbackSuccess(onClose = onDismissRequest)
+        } else {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                TabRow(
+                    tabs = kindLabels,
+                    selectedTabIndex = kind,
+                    onTabSelected = { kind = it },
                 )
-            }
-            SuperTextField(
-                value = contact,
-                onValueChange = { contact = it },
-                modifier = Modifier.padding(top = 12.dp),
-                label = stringResource(R.string.settings_feedback_contact),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                val current = attachment
-                TextButton(
-                    text = if (current == null) {
-                        stringResource(R.string.settings_feedback_attach_add)
-                    } else {
-                        attachmentLabel.orEmpty()
-                    },
-                    onClick = {
-                        haptic.contextClick()
-                        picker.launch(arrayOf("*/*"))
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                if (current != null) {
-                    Spacer(Modifier.width(16.dp))
-                    TextButton(
-                        text = stringResource(R.string.settings_feedback_attach_remove),
-                        onClick = {
-                            haptic.contextClick()
-                            attachment = null
-                        },
-                    )
-                }
-            }
-            // 那句"附件不跟着走"只在真有附件时念: 没附件的人不该读一条与己无关的限制
-            if (attachment != null) {
                 Text(
-                    text = attachNotSent,
-                    color = colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            // 交完之后那几行: 真发出去了 / 已复制 / 为什么走兜底 / 后端与打开页面各自说了什么
-            if (sent) {
-                Text(
-                    text = stringResource(R.string.settings_feedback_sent),
-                    modifier = Modifier.padding(top = 12.dp),
-                )
-            }
-            if (copied) {
-                Text(
-                    text = stringResource(R.string.settings_feedback_copied),
-                    modifier = Modifier.padding(top = 12.dp),
-                )
-            }
-            note?.let { line ->
-                Text(
-                    text = line,
+                    text = kindSummaries[kind],
                     color = colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(top = 8.dp),
                 )
-            }
-            backend?.let { line ->
-                Text(
-                    text = line,
-                    color = colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp),
+                SuperTextField(
+                    value = body,
+                    // 上限在这里拦: 框里永远不超过 500, 于是计数器与"交得出去"是同一件事
+                    onValueChange = { body = Feedback.clamp(it) },
+                    modifier = Modifier.padding(top = 16.dp),
+                    label = stringResource(R.string.settings_feedback_body),
+                    minLines = 5,
+                    maxLines = 8,
                 )
-            }
-            refused?.let { line ->
-                Text(
-                    text = line,
-                    color = colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp),
+                // 实时计数: 到顶那一格换成错误色 (截断是静默的, 这一行是唯一的提示)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_feedback_count, body.length, Feedback.LIMIT),
+                        color = if (body.length >= Feedback.LIMIT) {
+                            colorScheme.error
+                        } else {
+                            colorScheme.onSurfaceVariantSummary
+                        },
+                    )
+                }
+                SuperTextField(
+                    value = contact,
+                    onValueChange = { contact = it },
+                    modifier = Modifier.padding(top = 12.dp),
+                    label = stringResource(R.string.settings_feedback_contact),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    val current = attachment
+                    TextButton(
+                        text = if (current == null) {
+                            stringResource(R.string.settings_feedback_attach_add)
+                        } else {
+                            attachmentLabel.orEmpty()
+                        },
+                        onClick = {
+                            haptic.contextClick()
+                            picker.launch(arrayOf("*/*"))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (current != null) {
+                        Spacer(Modifier.width(16.dp))
+                        TextButton(
+                            text = stringResource(R.string.settings_feedback_attach_remove),
+                            onClick = {
+                                haptic.contextClick()
+                                attachment = null
+                            },
+                        )
+                    }
+                }
+                // 那句"附件不跟着走"只在真有附件时念: 没附件的人不该读一条与己无关的限制
+                if (attachment != null) {
+                    Text(
+                        text = attachNotSent,
+                        color = colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+                // 没交出去的那几行: 已复制 / 为什么走兜底 / 后端与打开页面各自说了什么
+                if (copied) {
+                    Text(
+                        text = stringResource(R.string.settings_feedback_copied),
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+                note?.let { line ->
+                    Text(
+                        text = line,
+                        color = colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                backend?.let { line ->
+                    Text(
+                        text = line,
+                        color = colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                refused?.let { line ->
+                    Text(
+                        text = line,
+                        color = colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
-        }
-        // 底下那一排: 还没交是"取消 / 提交", 交了之后只剩"关闭" —— 再点一次提交只会多开一条
-        if (sent || copied) {
-            TextButton(
-                text = stringResource(R.string.settings_close),
-                onClick = onDismissRequest,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
+            // 底下那一排: 还没交是"取消 / 提交", 兜底之后只剩"关闭" —— 再点一次只会多开一条
+            if (copied) {
                 TextButton(
-                    text = stringResource(R.string.button_cancel),
-                    onClick = {
-                        haptic.contextClick()
-                        onDismissRequest()
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(20.dp))
-                TextButton(
-                    text = if (busy) {
-                        stringResource(R.string.settings_feedback_sending)
-                    } else {
-                        stringResource(R.string.settings_feedback_submit)
-                    },
-                    onClick = { submit() },
-                    modifier = Modifier.weight(1f),
+                    text = stringResource(R.string.settings_close),
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
                     colors = ButtonDefaults.textButtonColorsPrimary(),
                 )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    TextButton(
+                        text = stringResource(R.string.button_cancel),
+                        onClick = {
+                            haptic.contextClick()
+                            onDismissRequest()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(20.dp))
+                    TextButton(
+                        text = if (busy) {
+                            stringResource(R.string.settings_feedback_sending)
+                        } else {
+                            stringResource(R.string.settings_feedback_submit)
+                        },
+                        onClick = { submit() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * 交出去之后那一屏: 提交成功 + 两个交流群的二维码 + 一句谢谢
+ *
+ * 两张图是同一份 512x512 的白底正方形 (`res/drawable-nodpi/feedback_qr_*.png`, 从主人给的那两张
+ * 原图里各裁出二维码本体再补白边): 尺寸一致、都带静区, 于是并排放着不会一高一矮、也扫得出来
+ */
+@Composable
+private fun FeedbackSuccess(onClose: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.settings_feedback_success_title),
+            style = MiuixTheme.textStyles.title3,
+        )
+        Text(
+            text = stringResource(R.string.settings_feedback_success_note),
+            color = colorScheme.onSurfaceVariantSummary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            GroupCode(
+                icon = R.drawable.feedback_qr_qq,
+                label = stringResource(R.string.settings_feedback_group_qq),
+                modifier = Modifier.weight(1f),
+            )
+            GroupCode(
+                icon = R.drawable.feedback_qr_feishu,
+                label = stringResource(R.string.settings_feedback_group_feishu),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        TextButton(
+            text = stringResource(R.string.settings_close),
+            onClick = onClose,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 20.dp),
+            colors = ButtonDefaults.textButtonColorsPrimary(),
+        )
+    }
+}
+
+/** 一张二维码 + 底下那行名字 */
+@Composable
+private fun GroupCode(icon: Int, label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(
+            painter = painterResource(icon),
+            contentDescription = label,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(12.dp)),
+        )
+        Text(
+            text = label,
+            color = colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
     }
 }
 
