@@ -68,11 +68,27 @@ internal object LwSpeak {
     fun dispatch(context: Context, request: JsonObject): JsonObject = when (val op = request.string("op")) {
         "status" -> status(context)
         "speak" -> speak(context, request)
+        // 预录填音 (2.7.9 批次 9 T13): 放 assets/clips/<clip>.ogg, 不走引擎、不联网、不等播完
+        "clip" -> clip(context, request)
         "stop" -> stop()
         "release" -> release()
         // 只读探针: 系统引擎到底把声音放在哪种属性上 (判据换不换得成, 靠它一句话定), 见 [probe]
         "probe" -> probe(context)
-        else -> throw IllegalArgumentException("op has to be status, speak, stop, release or probe, not \"$op\"")
+        else -> throw IllegalArgumentException("op has to be status, speak, clip, stop, release or probe, not \"$op\"")
+    }
+
+    /**
+     * 放一段预录填音 (T13)
+     *
+     * 这一条**故意不碰** [VoiceState.spokeUntil] 与 [talking]: 填音只有一两秒, 而 `talking` 是"说的时候
+     * 把麦真关掉"的判据 —— 每响一声关一次麦, 再开一次, 就是那个插件 README 里写的"麦克风反复开关"。
+     * 半双工只靠 [LwClips] 里那段 `VoiceState.speaking`
+     */
+    private fun clip(context: Context, request: JsonObject): JsonObject {
+        val name = request.stringOrNull("clip") ?: request.stringOrNull("name") ?: ""
+        // 音量是 0..1 的线性增益 (与 TTS 那条 100 = 原电平的百分数不是同一个刻度): 填音不调它时就是 1
+        val volume = (request.numberOrNull("volume")?.toFloat() ?: 1f).coerceIn(0f, 1f)
+        return LwClips.play(context, name, volume)
     }
 
     /**
@@ -166,6 +182,9 @@ internal object LwSpeak {
             // 三条引擎的播放标记**都要算上** (2026-10-16 修: 这一条原来漏了自带那条 `LwTts.speaking`,
             // 与 [speakingNow] 报的不是同一件事 —— 用自带音色念时 status 会答"没在说")
             put("speaking", speakingNow)
+            // 半双工那道闸的**真实值**: 填音那一段它与 speaking 故意不同 (clip 会合上它, 但不进
+            // [talking], 见 `op=clip`), 所以两个都报出来, 免得"闸合没合上"只能靠猜
+            put("halfDuplex", VoiceState.speaking)
             put("utterances", spoken)
             // 「还在出声吗」这条判据自己的读数 (2026-10-16): 尾巴预算什么时候到点、上一次念的是不是系统
             // 那条、以及**活跃播放里有几条带的是我们给引擎那份属性** (0 = 判据退化成"只按预算")
@@ -173,6 +192,11 @@ internal object LwSpeak {
             put("lastWasSystem", lastWasSystem)
             put("systemMatches", SystemSpeech.matches(context))
             put("systemOurs", SystemSpeech.describe())
+            // 预录填音 (T13): 带的是哪几段、现在响没响。**顺手把 SoundPool 预载好** —— 插件那侧开工前
+            // 会先叫一次 status 把引擎拉起来, 填音也走同一条预热, 于是第一声也是几十毫秒
+            runCatching { LwClips.warm(context) }
+            put("clips", LwClips.names(context).joinToString(", "))
+            put("clipPlaying", LwClips.playingNow())
         }
     }
 
@@ -391,6 +415,8 @@ internal object LwSpeak {
      * 谁在放谁就停
      */
     internal fun stop(): JsonObject {
+        // 预录填音也一起停 (它在另一条声轨上, 系统引擎的 stop 碰不到它)
+        LwClips.stop()
         val onDevice = LwTts.stop()
         // 在线那两条: 谁在放谁就停 (它们的播放器在 LwVoiceClip 里, 两条引擎各自记着自己的那一次)
         val online = LwEdgeTts.stop() ?: LwApiTts.stop()
