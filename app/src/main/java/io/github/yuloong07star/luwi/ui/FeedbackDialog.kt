@@ -31,6 +31,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.feedback.Feedback
+import io.github.yuloong07star.luwi.feedback.FeedbackChannel
+import io.github.yuloong07star.luwi.feedback.FeedbackIssue
+import io.github.yuloong07star.luwi.feedback.FeedbackMail
 import io.github.yuloong07star.luwi.feedback.FeedbackSubmit
 import io.github.yuloong07star.luwi.scaffolds.SuperTextField
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +75,10 @@ internal fun FeedbackDialog(onDismissRequest: () -> Unit) {
     var kind by rememberSaveable { mutableIntStateOf(0) }
     var contact by rememberSaveable { mutableStateOf("") }
     var attachment by remember { mutableStateOf<Feedback.Attachment?>(null) }
+
+    // 这台机器上有没有"真投递"那两只凭据 (`$DSH_HOME/lw/feedback-channel.json`): 没有就一律走兜底,
+    // 别人装这一版时走的就是这一档
+    val channel = remember { FeedbackChannel.load(context) }
 
     // 交完之后那几样: 正在提交 / 真发出去了 / 进了剪贴板 / 为什么走兜底 / 后端与打开页面各自的抱怨
     var busy by remember { mutableStateOf(false) }
@@ -117,28 +124,30 @@ internal fun FeedbackDialog(onDismissRequest: () -> Unit) {
         }
     }
     val noBackend = stringResource(R.string.settings_feedback_no_backend)
+    val sendFailed = stringResource(R.string.settings_feedback_send_failed)
     val attachNotSent = stringResource(R.string.settings_feedback_attach_note)
     val mailSubject = stringResource(R.string.settings_feedback_mail_subject)
     val emptyText = stringResource(R.string.settings_feedback_empty)
 
+    /** 交给 issue / 邮件 / 剪贴板的那一段文字 (三条路共用同一份, 于是它们说的是同一件事) */
+    fun draftText(): String = Feedback.compose(
+        body = body,
+        extra = listOfNotNull(
+            metaHeading,
+            "$metaKind: ${kindLabels[kind]}",
+            contact.takeIf { it.isNotBlank() }?.let { "$metaContact: $it" },
+            attachmentLine,
+            FeedbackSubmit.appLine(context),
+            FeedbackSubmit.deviceLine(context),
+        ),
+    )
+
     /** 兜底那一下: 复制 + 打开那一个去处 (私密走邮件客户端, 公开走 New Issue 页) */
-    fun copyAndOpen() {
-        val chosen = if (kind == 0) Feedback.Kind.ISSUE else Feedback.Kind.EMAIL
-        val text = Feedback.compose(
-            body = body,
-            extra = listOfNotNull(
-                metaHeading,
-                "$metaKind: ${kindLabels[kind]}",
-                contact.takeIf { it.isNotBlank() }?.let { "$metaContact: $it" },
-                attachmentLine,
-                FeedbackSubmit.appLine(context),
-                FeedbackSubmit.deviceLine(context),
-            ),
-        )
+    fun copyAndOpen(text: String) {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText(metaKind, text))
         copied = clipboard != null
-        val target = if (chosen == Feedback.Kind.EMAIL) Feedback.mailUrl(mailSubject) else Feedback.ISSUE_PAGE
+        val target = if (kind == 0) Feedback.ISSUE_PAGE else Feedback.mailUrl(mailSubject)
         // 打不开 (没有浏览器 / 没有邮件客户端) 就把那一句念在窗里: 文字已经在剪贴板里, 一个字都不丢
         refused = openPage(context, target)
     }
@@ -155,7 +164,46 @@ internal fun FeedbackDialog(onDismissRequest: () -> Unit) {
         note = null
         val chosen = if (kind == 0) Feedback.Kind.ISSUE else Feedback.Kind.EMAIL
         val endpoint = FeedbackSubmit.endpoint(context)
-        when (Feedback.route(endpoint, attachment)) {
+        when (Feedback.route(chosen, endpoint, attachment, channel.mailReady, channel.issueReady)) {
+            // 设备上有那两只凭据时走真投递 (主人本机那一档); 没配的设备永远走不到这两支
+            Feedback.Route.MAIL -> {
+                busy = true
+                scope.launch {
+                    val text = draftText()
+                    val failure = withContext(Dispatchers.IO) {
+                        FeedbackMail.send(channel, mailSubject, text)
+                    }
+                    busy = false
+                    if (failure == null) {
+                        sent = true
+                    } else {
+                        // 没发成也要把正文留住: 换成复制, 并把服务器那句原文念出来
+                        note = sendFailed
+                        backend = failure
+                        copyAndOpen(text)
+                    }
+                }
+            }
+
+            Feedback.Route.ISSUE -> {
+                busy = true
+                scope.launch {
+                    val text = draftText()
+                    val title = FeedbackIssue.titleOf(body, FeedbackSubmit.appLine(context))
+                    val failure = withContext(Dispatchers.IO) {
+                        FeedbackIssue.create(channel.githubToken, title, text)
+                    }
+                    busy = false
+                    if (failure == null) {
+                        sent = true
+                    } else {
+                        note = sendFailed
+                        backend = failure
+                        copyAndOpen(text)
+                    }
+                }
+            }
+
             Feedback.Route.POST -> {
                 busy = true
                 scope.launch {
@@ -174,19 +222,21 @@ internal fun FeedbackDialog(onDismissRequest: () -> Unit) {
                         // 后端没接上: 说清为什么, 然后照旧走兜底 (正文不丢)
                         note = noBackend
                         backend = failure
-                        copyAndOpen()
+                        copyAndOpen(draftText())
                     }
                 }
             }
 
             Feedback.Route.COPY_NO_BACKEND -> {
                 note = noBackend
-                copyAndOpen()
+                copied = false
+                copyAndOpen(draftText())
             }
 
             Feedback.Route.COPY_WITH_ATTACHMENT -> {
                 note = attachNotSent
-                copyAndOpen()
+                copied = false
+                copyAndOpen(draftText())
             }
         }
     }
@@ -194,7 +244,6 @@ internal fun FeedbackDialog(onDismissRequest: () -> Unit) {
     OverlayDialog(
         show = true,
         title = stringResource(R.string.settings_feedback_title),
-        summary = stringResource(R.string.settings_feedback_summary),
         defaultWindowInsetsPadding = false,
         onDismissRequest = onDismissRequest,
     ) {

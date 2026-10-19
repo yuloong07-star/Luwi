@@ -50,7 +50,6 @@
     <string name="settings_about_source_default">用缺省那一条</string>
 
     <string name="settings_feedback_title">反馈</string>
-    <string name="settings_feedback_summary">只把正文与几项设备读数交出去, 应用里不带任何令牌</string>
     <string name="settings_feedback_kind_issue">公开 issue</string>
     <string name="settings_feedback_kind_email">私密邮件</string>
     <string name="settings_feedback_kind_issue_summary">发到公开的 issue 页, 别人也看得到</string>
@@ -69,6 +68,7 @@
     <string name="settings_feedback_sent">已发送, 谢谢</string>
     <string name="settings_feedback_copied">已复制: 粘到页面里, 在那里提交</string>
     <string name="settings_feedback_no_backend">后端还没接上, 这一条没有发出去</string>
+    <string name="settings_feedback_send_failed">没发出去, 已改成复制</string>
     <string name="settings_feedback_mail_subject">Luwi 反馈</string>
     <string name="settings_feedback_meta">--- 以下由 Luwi 自动附上 ---</string>
     <string name="settings_feedback_meta_kind">方式</string>

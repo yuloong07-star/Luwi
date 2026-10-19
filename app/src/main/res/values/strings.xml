@@ -50,7 +50,6 @@
     <string name="settings_about_source_default">The built-in one</string>
 
     <string name="settings_feedback_title">Feedback</string>
-    <string name="settings_feedback_summary">Only the text and a few device facts leave the app; this build carries no tokens</string>
     <string name="settings_feedback_kind_issue">Public issue</string>
     <string name="settings_feedback_kind_email">Private mail</string>
     <string name="settings_feedback_kind_issue_summary">Goes to the public issue tracker, where anyone can read it</string>
@@ -69,6 +68,7 @@
     <string name="settings_feedback_sent">Sent, thank you</string>
     <string name="settings_feedback_copied">Copied: paste it into the page, then submit there</string>
     <string name="settings_feedback_no_backend">No backend yet, so this one was not sent</string>
+    <string name="settings_feedback_send_failed">It did not go out, so it was copied instead</string>
     <string name="settings_feedback_mail_subject">Luwi feedback</string>
     <string name="settings_feedback_meta">--- Below is filled in by Luwi ---</string>
     <string name="settings_feedback_meta_kind">Via</string>

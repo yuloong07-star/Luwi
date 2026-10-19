@@ -39,12 +39,16 @@ internal object Feedback {
     /**
      * 这一次提交走哪条路
      *
-     * - [Route.POST]: 配了后端地址且没有附件 → 真的 POST 一次
-     * - [Route.COPY_NO_BACKEND]: 没配后端地址 (这一版的常态) → 复制 + 打开页面
-     * - [Route.COPY_WITH_ATTACHMENT]: 有附件 → **一律走兜底**, 因为这一版不带附件上传,
-     *   假装发出去就会让那条 issue 少一半信息
+     * - [Route.ISSUE]: 公开那一档且设备上有仓库写权限 → 直接开一条 issue
+     * - [Route.MAIL]: 私密那一档且设备上有发信凭据 → 直接发一封邮件
+     * - [Route.POST]: 配了后端地址 (且没有上面那两条本地凭据) → 真的 POST 一次
+     * - [Route.COPY_NO_BACKEND]: 什么都没配 (绝大多数设备) → 复制 + 打开页面
+     * - [Route.COPY_WITH_ATTACHMENT]: 有附件 → **一律走兜底**, 因为这两条投递都不带附件,
+     *   假装发出去就会让那条 issue / 邮件少一半信息
+     *
+     * 本地凭据优先于后端地址: 前者是"主人本机那一档" (T7 的现场验证走它), 后者是后端就绪之后的事
      */
-    enum class Route { POST, COPY_NO_BACKEND, COPY_WITH_ATTACHMENT }
+    enum class Route { ISSUE, MAIL, POST, COPY_NO_BACKEND, COPY_WITH_ATTACHMENT }
 
     /** 500 字上限: 到了就截住, 不让人写出一段注定交不出去的正文 */
     fun clamp(text: String): String =
@@ -53,11 +57,19 @@ internal object Feedback {
     /** 空正文 (或者只有空白) 不提交: 交出去也只是一条没有内容的 issue */
     fun ready(body: String): Boolean = body.isNotBlank()
 
-    /** 这一次走哪条路 (见 [Route]) */
-    fun route(endpoint: String, attachment: Attachment?): Route = when {
-        endpoint.isBlank() -> Route.COPY_NO_BACKEND
+    /** 这一次走哪条路 (见 [Route]): 附件 > 本地那两条 > 后端 > 兜底 */
+    fun route(
+        kind: Kind,
+        endpoint: String,
+        attachment: Attachment?,
+        hasMail: Boolean,
+        hasIssue: Boolean,
+    ): Route = when {
         attachment != null -> Route.COPY_WITH_ATTACHMENT
-        else -> Route.POST
+        kind == Kind.EMAIL && hasMail -> Route.MAIL
+        kind == Kind.ISSUE && hasIssue -> Route.ISSUE
+        endpoint.isNotBlank() -> Route.POST
+        else -> Route.COPY_NO_BACKEND
     }
 
     /**

@@ -44,29 +44,153 @@ class FeedbackTest {
 
     /* ── 走哪条路 ───────────────────────────────────────────────────────── */
 
-    /** 没配后端 (这一版的常态): 进剪贴板 */
+    /** 什么都没配 (这一版的常态): 进剪贴板 */
     @Test
-    fun `没配后端就走兜底`() {
-        assertEquals(Feedback.Route.COPY_NO_BACKEND, Feedback.route("", null))
+    fun `没配就走兜底`() {
         assertEquals(
             Feedback.Route.COPY_NO_BACKEND,
-            Feedback.route("   ", Feedback.Attachment("log.txt", 12)),
+            Feedback.route(Feedback.Kind.ISSUE, "", null, hasMail = false, hasIssue = false),
+        )
+        assertEquals(
+            Feedback.Route.COPY_NO_BACKEND,
+            Feedback.route(Feedback.Kind.EMAIL, "   ", null, hasMail = false, hasIssue = false),
         )
     }
 
-    /** 配了后端又没有附件: 真的 POST 一次 */
+    /** 配了后端又没有本地凭据: 真的 POST 一次 */
     @Test
     fun `配了后端就发出去`() {
-        assertEquals(Feedback.Route.POST, Feedback.route("https://luwi.dpdns.org/feedback", null))
+        assertEquals(
+            Feedback.Route.POST,
+            Feedback.route(
+                Feedback.Kind.ISSUE,
+                "https://luwi.dpdns.org/feedback",
+                null,
+                hasMail = false,
+                hasIssue = false,
+            ),
+        )
     }
 
-    /** 有附件一律走兜底 —— 这一版不传字节, 走 POST 会让那条 issue 少一半信息 */
+    /** 设备上有发信凭据且选了私密: 直接发邮件 (本地凭据优先于后端地址) */
     @Test
-    fun `有附件就不走后端`() {
+    fun `有发信凭据就发邮件`() {
+        assertEquals(
+            Feedback.Route.MAIL,
+            Feedback.route(Feedback.Kind.EMAIL, "", null, hasMail = true, hasIssue = true),
+        )
+        assertEquals(
+            Feedback.Route.MAIL,
+            Feedback.route(
+                Feedback.Kind.EMAIL,
+                "https://luwi.dpdns.org/feedback",
+                null,
+                hasMail = true,
+                hasIssue = false,
+            ),
+        )
+    }
+
+    /** 设备上有仓库写权限且选了公开: 直接开 issue */
+    @Test
+    fun `有仓库写权限就开 issue`() {
+        assertEquals(
+            Feedback.Route.ISSUE,
+            Feedback.route(Feedback.Kind.ISSUE, "", null, hasMail = false, hasIssue = true),
+        )
+    }
+
+    /** 有附件一律走兜底 —— 两条真投递都不带附件, 假装发出去会让那条记录少一半信息 */
+    @Test
+    fun `有附件就不走真投递`() {
         assertEquals(
             Feedback.Route.COPY_WITH_ATTACHMENT,
-            Feedback.route("https://luwi.dpdns.org/feedback", Feedback.Attachment("shot.png", 2048)),
+            Feedback.route(
+                Feedback.Kind.EMAIL,
+                "https://luwi.dpdns.org/feedback",
+                Feedback.Attachment("shot.png", 2048),
+                hasMail = true,
+                hasIssue = true,
+            ),
         )
+    }
+
+    /* ── 设备上那份凭据 ─────────────────────────────────────────────────── */
+
+    /** 完整的一份: 两条路都通 */
+    @Test
+    fun `凭据文件读得懂`() {
+        val channel = FeedbackChannel.parse(
+            """
+            {
+              "mailTo": "3021605064@qq.com",
+              "smtp": { "host": "smtp.qq.com", "port": 465, "user": "3021605064@qq.com", "code": "abc" },
+              "githubToken": "github_pat_x"
+            }
+            """,
+        )
+        assertTrue(channel.mailReady)
+        assertTrue(channel.issueReady)
+        assertEquals("smtp.qq.com", channel.smtpHost)
+        assertEquals(465, channel.smtpPort)
+        assertEquals("3021605064@qq.com", channel.mailTo)
+    }
+
+    /** 半份凭据不算数 (有 user 没 code): 界面上不能先答应"已发送"再去失败 */
+    @Test
+    fun `半份凭据不算数`() {
+        val channel = FeedbackChannel.parse(
+            """{ "mailTo": "a@b.c", "smtp": { "host": "smtp.qq.com", "user": "u" } }""",
+        )
+        assertFalse(channel.mailReady)
+        assertFalse(channel.issueReady)
+    }
+
+    /** 只有仓库写权限时, 私密那一档仍然走兜底 */
+    @Test
+    fun `只有 token 时只有 issue 通`() {
+        val channel = FeedbackChannel.parse("""{ "githubToken": "github_pat_x" }""")
+        assertTrue(channel.issueReady)
+        assertFalse(channel.mailReady)
+    }
+
+    /** 读坏的 JSON / 不是对象: 整条关闭, 不猜 */
+    @Test
+    fun `坏文件整条关闭`() {
+        assertFalse(FeedbackChannel.parse("not json").issueReady)
+        assertFalse(FeedbackChannel.parse("[1,2,3]").issueReady)
+        assertFalse(FeedbackChannel.parse("").mailReady)
+    }
+
+    /* ── 那封信 ─────────────────────────────────────────────────────────── */
+
+    /** 头齐、正文是 base64 (中文与换行都不必转义), 主题按 RFC 2047 编码 */
+    @Test
+    fun `邮件那头与正文都对`() {
+        val letter = FeedbackMail.message(
+            from = "3021605064@qq.com",
+            to = "3021605064@qq.com",
+            subject = "Luwi 反馈",
+            body = "第一行\n第二行",
+            at = 0L,
+        )
+        assertTrue(letter.startsWith("From: 3021605064@qq.com\r\nTo: 3021605064@qq.com\r\n"))
+        assertTrue(letter.contains("Subject: =?UTF-8?B?"))
+        assertTrue(letter.contains("Content-Transfer-Encoding: base64"))
+        assertFalse("正文不许原样出现", letter.contains("第一行"))
+        // base64 那一节解回来就是原文
+        val encoded = letter.substringAfter("\r\n\r\n").replace("\r\n", "")
+        assertEquals("第一行\n第二行", String(java.util.Base64.getMimeDecoder().decode(encoded), Charsets.UTF_8))
+    }
+
+    /* ── issue 标题 ─────────────────────────────────────────────────────── */
+
+    /** 标题取正文第一行, 太长截到 60; 空的退回"反馈 <版本>" */
+    @Test
+    fun `issue 标题取第一行`() {
+        assertEquals("打不开视频模式", FeedbackIssue.titleOf("\n  打不开视频模式 \n后面还有", "2.7.9 (16)"))
+        assertEquals("反馈 2.7.9 (16)", FeedbackIssue.titleOf("   \n ", "2.7.9 (16)"))
+        assertEquals(60, FeedbackIssue.titleOf("字".repeat(200), "2.7.9 (16)").length)
     }
 
     /* ── 兜底那段文字 ───────────────────────────────────────────────────── */
