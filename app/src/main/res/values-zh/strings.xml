@@ -27,22 +27,9 @@
 
     <string name="settings_menu_update">检测更新</string>
     <string name="settings_menu_sync">sync 签到</string>
-    <string name="settings_menu_sync_summary">账号、到期时间与签到</string>
+    <string name="settings_menu_sync_summary">在浏览器里打开官网的签到页</string>
     <string name="settings_menu_about">关于</string>
     <string name="settings_close">关闭</string>
-    <string name="settings_sync_account_title">sync 签到</string>
-    <string name="settings_sync_account_not_connected">未连接账号</string>
-    <string name="settings_sync_account_note">签到、额度与解绑都要等同步那条的后端接上; 这一页现在只有壳, 不写假数据</string>
-    <string name="settings_sync_account_expiry_line">到期时间: %1$s</string>
-    <string name="settings_sync_account_sign_in">签到</string>
-    <string name="settings_sync_account_sign_in_summary">签到送一天 (等后端接上)</string>
-    <string name="settings_sync_account_topup">充值</string>
-    <string name="settings_sync_account_topup_summary">1 元 7 天 / 3 元 30 天 / 30 元 365 天 (等后端接上)</string>
-    <string name="settings_sync_account_unbind">解绑本机</string>
-    <string name="settings_sync_account_unbind_summary">只清本机这一份, 不动账号本身</string>
-    <string name="settings_sync_account_backend_missing">还没有接上后端, 这一步先做不了</string>
-    <string name="settings_sync_account_nothing_bound">本机没有绑定的账号</string>
-    <string name="settings_sync_account_unbound">已解绑本机</string>
 
     <string name="settings_group_common">常用</string>
     <string name="settings_group_ability">能力</string>
@@ -59,7 +46,6 @@
     <string name="settings_about_update_summary">读 GitHub 上最新那条 Release 的版本号比一比</string>
     <string name="settings_about_source">更新源</string>
     <string name="settings_about_source_default">用缺省那一条</string>
-    <string name="settings_about_sync">sync 签到</string>
 
     <string name="settings_update_title">检测更新</string>
     <string name="settings_update_summary">只查不装: 查到新版本就打开浏览器, 装不装由你决定</string>

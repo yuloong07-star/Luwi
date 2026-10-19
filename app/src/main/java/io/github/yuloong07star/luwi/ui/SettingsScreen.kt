@@ -225,6 +225,14 @@ private val CollapsedSections = listSaver<Set<String>, String>(
 )
 
 /**
+ * 官网那个签到页 (2.7.9 第 4 条, 2026-10-19 主人: "签到页不进包, 那个按钮跳转官网的签到页就行")
+ *
+ * **只有一个入口**: ⋮ 里那一行; 「关于」里不再放第二个 (主人当天明确 "关于里面的这个按钮也删掉,
+ * 只保留一个")。签到页与账号状态都在 `luwi.dpdns.org` 上, 应用不随包、也不带任何账号数据面
+ */
+private const val CHECK_IN_URL = "https://luwi.dpdns.org/checkin"
+
+/**
  * 缺省展开的白名单 (D1, 2026-10-17 主人拍板): 省电那一段 + 「常用」一级分组下那六段
  *
  * 省电为什么也算: 它排在页面上第一个、只有三行, 是"现在别听我说话"那一下子, 属于天天要碰的
@@ -398,8 +406,13 @@ fun SettingsScreen() {
                                 DropdownItem(
                                     text = stringResource(R.string.settings_menu_sync),
                                     summary = stringResource(R.string.settings_menu_sync_summary),
-                                    // 2.7.9 第 4 条: 捐赠页下线, 这个位置换成 sync 签到 (那一页这一版只有壳)
-                                    onClick = { navigator.push(Screen.Sync) },
+                                    // 2.7.9 第 4 条 (2026-10-19 主人: "签到页不进包"): 签到页在官网上,
+                                    // 这一行直接用系统浏览器打开它; 应用里不做那一页, 也**不要**留第二处入口
+                                    onClick = {
+                                        openPage(context, CHECK_IN_URL)?.let { problem ->
+                                            Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
                                 ),
                                 DropdownItem(
                                     text = stringResource(R.string.settings_menu_about),
@@ -717,11 +730,6 @@ fun SettingsScreen() {
             AboutPage.ABOUT -> AboutDialog(
                 onDismissRequest = { about = null },
                 onOpen = { about = it },
-                // 「关于」里那一行 sync 签到也是同一个去处: 先把对话框收掉, 再把那一页推出来
-                onSync = {
-                    about = null
-                    navigator.push(Screen.Sync)
-                },
             )
 
             AboutPage.UPDATE -> UpdateDialog(onDismissRequest = { about = null })

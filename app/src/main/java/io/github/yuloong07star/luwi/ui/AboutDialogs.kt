@@ -82,7 +82,6 @@ internal enum class AboutPage {
 internal fun AboutDialog(
     onDismissRequest: () -> Unit,
     onOpen: (AboutPage) -> Unit,
-    onSync: () -> Unit,
 ) {
     val context = LocalContext.current
     val version = remember { UpdateCheck.localVersionOf(context) }
@@ -104,11 +103,6 @@ internal fun AboutDialog(
                 title = stringResource(R.string.settings_about_source),
                 summary = AboutSettings.source(context),
                 onClick = { onOpen(AboutPage.SOURCE) },
-            )
-            ArrowPreference(
-                title = stringResource(R.string.settings_about_sync),
-                summary = stringResource(R.string.settings_menu_sync_summary),
-                onClick = onSync,
             )
         }
         DialogButtons(
