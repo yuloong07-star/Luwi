@@ -15,6 +15,7 @@ import androidx.core.app.ServiceCompat
 import io.github.yuloong07star.luwi.MainActivity
 import io.github.yuloong07star.luwi.R
 import io.github.yuloong07star.luwi.automation.AutomationEngine
+import io.github.yuloong07star.luwi.channel.AccessibilitySetting
 import io.github.yuloong07star.luwi.channel.LwModes
 import io.github.yuloong07star.luwi.channel.PrivilegedBridge
 import io.github.yuloong07star.luwi.channel.PrivilegedChannel
@@ -94,7 +95,11 @@ class DshHostService : Service() {
     private fun warmUpChannel() {
         Thread({
             try {
-                PrivilegedChannel.ensure()
+                if (PrivilegedChannel.ensure() != null) {
+                    // 首次拿到通道之后替主人开一次无障碍 (2.7.9 第 7 条): 两档记号在 AccessibilitySetting
+                    // 里, 替他开过之后他自己关掉就不再开 —— 这里只是"第一次连上"那个时机
+                    AccessibilitySetting.autoEnableOnce()
+                }
             } catch (error: Throwable) {
                 Log.w(TAG, "the warm-up connection failed", error)
             }

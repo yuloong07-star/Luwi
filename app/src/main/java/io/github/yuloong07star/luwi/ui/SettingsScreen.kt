@@ -1,6 +1,7 @@
 package io.github.yuloong07star.luwi.ui
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -50,6 +51,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
@@ -233,14 +235,14 @@ internal val SettingsSectionsAlwaysOpenKeys = listOf(
 /** 白名单的集合形态, 给 [defaultCollapsed] 算差集用 */
 internal val SettingsSectionsAlwaysOpen: Set<String> = SettingsSectionsAlwaysOpenKeys.toSet()
 
-/** 「能力」那一组的 13 段, 缺省全收着 (装完之后偶尔来调一次的那些) */
+/** 「能力」那一组的 12 段, 缺省全收着 (装完之后偶尔来调一次的那些) */
 private val AbilitySectionKeys = listOf(
-    "accessibility", "notifications", "screenshot", "look", "ocr", "lock",
+    "notifications", "screenshot", "look", "lock",
     "explore", "automation", "quick", "plugin", "skills", "linux", "sync", "permissions",
 )
 
 /**
- * 页面上那 20 段的段名, **顺序就是从上到下**
+ * 页面上那 18 段的段名, **顺序就是从上到下**
  *
  * 它只为一件事存在: 算"缺省收起来的那几段" ([defaultCollapsed])。**新加一段时必须同时加到这里** ——
  * 漏掉它不会报错, 只是那一段会恰好展开着 (与 D2 那条"新加的段就收着"相反), 界面上一点异常都看不出来,
@@ -551,15 +553,8 @@ fun SettingsScreen() {
 
                 item { GroupTitle(stringResource(R.string.settings_group_ability)) }
 
-                settingsSection(
-                    key = "accessibility",
-                    title = R.string.settings_section_accessibility,
-                    summary = R.string.settings_section_accessibility_summary,
-                    collapsed = collapsed,
-                    onToggle = toggleSection,
-                ) {
-                    Card { AccessibilityItems() }
-                }
+                // 无障碍与 OCR 那两段 2026-10-19 并进了「特权通道」(第 7 条): 开关与后端都是"通道连上
+                // 之后才有得可开"的东西, 各占一段反而要人两头找 (见 [ChannelItems])
 
                 settingsSection(
                     key = "notifications",
@@ -598,16 +593,6 @@ fun SettingsScreen() {
                             LookItems()
                         }
                     }
-                }
-
-                settingsSection(
-                    key = "ocr",
-                    title = R.string.settings_section_ocr,
-                    summary = R.string.settings_section_ocr_summary,
-                    collapsed = collapsed,
-                    onToggle = toggleSection,
-                ) {
-                    Card { OcrItems() }
                 }
 
                 // 锁屏这一段是批次 5 的落点 (点亮屏幕 + 按主人自己录的那一条解锁); 自动指令那一段仍是
@@ -756,46 +741,62 @@ fun SettingsScreen() {
  * 只列状态, 不解释: 两条路各自在哪一档一眼能看完。**root 那行可能是"未检测"**, 这不是偷懒 ——
  * 有没有 root 在应用侧查不到 (KernelSU 对没在名单上的应用把 `su` 整个收走, 而不是拿出来问一句),
  * 所以"没授权"与"还没试过"在试之前是同一件事
+ *
+ * **2026-10-19 第 7 条把「无障碍」与「OCR」两段并了进来** (能力组 14 → 12 段): 那两件事都是"通道
+ * 连上之后才有得可开"的东西, 各占一段反而要人两头找; 顺序是 连接读数 → 无障碍 → OCR → 连接 (没连
+ * 上时) → 允许自启动 (只跳转)
  */
 @Composable
 private fun ChannelItems() {
+    val context = LocalContext.current
     val state = ChannelSetting.state
     val routes = ChannelSetting.routes
     val working = ChannelSetting.working
     LaunchedEffect(Unit) { ChannelSetting.refresh() }
-    // fillMaxWidth 是必要的: 这一段的子项全是纯文字, 撑不满宽度, 而 Miuix 的 Card 是包着内容的 ——
-    // 不填满, 卡片就比这一页别的卡片窄一截 (设置项自己会撑开, 所以别处不用管)
-    Column(modifier = Modifier.fillMaxWidth().padding(UiSpacing.Large)) {
-        Text(
-            text = when {
-                state == null -> stringResource(R.string.settings_channel_reading)
-                state.connected -> stringResource(
-                    R.string.settings_channel_connected,
-                    state.backend.orEmpty(),
-                    state.uid ?: -1,
-                )
-
-                else -> stringResource(
-                    R.string.settings_channel_disconnected,
-                    state.error.orEmpty(),
-                )
-            },
-        )
-        routes.forEach { route ->
+    // fillMaxWidth 是必要的: 这一段的子项里有纯文字, 撑不满宽度, 而 Miuix 的 Card 是包着内容的 ——
+    // 不填满, 卡片就比这一页别的卡片窄一截 (设置项自己会撑开, 所以别处不用管)。
+    // **这一列不能加整体内边距**: 设置项自带 16dp, 再套一层就是 32dp; 纯文字与按钮各自缩进
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = UiSpacing.Large, end = UiSpacing.Large, top = UiSpacing.Large),
+        ) {
             Text(
-                text = stringResource(
-                    R.string.settings_channel_route,
-                    route.backend.label,
-                    stringResource(routeState(route)),
-                ),
-                modifier = Modifier.padding(top = UiSpacing.Medium),
+                text = when {
+                    state == null -> stringResource(R.string.settings_channel_reading)
+                    state.connected -> stringResource(
+                        R.string.settings_channel_connected,
+                        state.backend.orEmpty(),
+                        state.uid ?: -1,
+                    )
+
+                    else -> stringResource(
+                        R.string.settings_channel_disconnected,
+                        state.error.orEmpty(),
+                    )
+                },
             )
+            routes.forEach { route ->
+                Text(
+                    text = stringResource(
+                        R.string.settings_channel_route,
+                        route.backend.label,
+                        stringResource(routeState(route)),
+                    ),
+                    modifier = Modifier.padding(top = UiSpacing.Medium),
+                )
+            }
         }
+        AccessibilityRows()
+        OcrRows()
         if (state?.connected != true) {
             Button(
                 onClick = { ChannelSetting.connect() },
                 enabled = !working,
-                modifier = Modifier.fillMaxWidth().padding(top = UiSpacing.Medium),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = UiSpacing.Large, vertical = UiSpacing.Medium),
             ) {
                 Text(
                     text = stringResource(
@@ -804,6 +805,42 @@ private fun ChannelItems() {
                 )
             }
         }
+        ArrowPreference(
+            title = stringResource(R.string.settings_channel_autostart),
+            summary = stringResource(R.string.settings_channel_autostart_summary),
+            onClick = {
+                if (!openAutostartSettings(context)) {
+                    Toast.makeText(context, R.string.settings_channel_autostart_failed, Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+    }
+}
+
+/**
+ * 「允许 Luwi 自启动」那一行: **只跳转, 不改任何东西** (2.7.9 第 7 条)
+ *
+ * 三级回退: MIUI / HyperOS 那一页 → 应用详情页 (带包名) → 不带任何附加信息的应用详情页。后两个是同一
+ * 页的两种写法, 带包名的那个在个别 ROM 上会被拒, 不带包名的那一个系统一定接。
+ *
+ * **清单里那条 `RECEIVE_BOOT_COMPLETED` 仍只给桌面组件补授权用**, 这一行不改任何开关, 也不新增开机
+ * 自启 —— 这一版不做开机自启 (见 AGENTS.md 与清单里那条注释)
+ */
+private fun openAutostartSettings(context: Context): Boolean {
+    val attempts = listOf(
+        Intent().setComponent(
+            ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            ),
+        ),
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()),
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS),
+    )
+    return attempts.any { intent ->
+        runCatching {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
     }
 }
 
@@ -3899,9 +3936,10 @@ private fun PermissionsItems() {
 
     // 从系统设置页回来时把每一条重读一遍
     //
-    // 这一步是给"安装未知应用"那类权限用的: 它的开关在系统那一页上 (设置 → 安装未知应用),
-    // **应用这边读的是 canRequestPackageInstalls() 的实时值**, 但只在重组时读 —— 用户去那一页把开关
-    // 打开再回来, 页面不重组, 于是显示的还是旧状态。ON_RESUME 正好是"从别处回来"的那一刻
+    // 这一步是给「修改系统设置」「精确闹钟」那类只能去系统页点的权限用的: 它们的开关在系统那一页上,
+    // 而应用这边只在重组时读 —— 用户去那一页把开关打开再回来, 页面不重组, 显示的还是旧状态。
+    // ON_RESUME 正好是"从别处回来"的那一刻。2026-10-19 第 7 条把「安装未知应用」从这一列摘掉之后,
+    // 这一段不再是为某一条写的了
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -3930,23 +3968,18 @@ private fun PermissionsItems() {
         val state = remember(revision, capability) { PermissionCatalog.state(context, capability) }
         ArrowPreference(
             title = capability.name,
-            // 副标题是"状态 · 它是干什么的"。**但有一条例外**: 「安装未知应用」这台设备上读出来的值
-            // (canRequestPackageInstalls) 与系统页上看到的对不上, 与其在屏幕上放一个会和系统打架的
-            // 结论, 那一条只留说明 —— 点一下就是去它自己那一页, 那里才是权威
-            summary = if (capability.noState) {
-                capability.note ?: capability.why
-            } else {
-                buildString {
-                    append(
-                        when (state) {
-                            Grant.GRANTED -> stringResource(R.string.settings_permission_granted)
-                            Grant.DENIED -> stringResource(R.string.settings_permission_denied)
-                            Grant.MISSING -> stringResource(R.string.settings_permission_missing)
-                        },
-                    )
-                    append(" · ")
-                    append(capability.note ?: capability.why)
-                }
+            // 副标题是"状态 · 它是干什么的"; 2026-10-19 起每一行都是这个形状 —— 「安装未知应用」
+            // 那一条例外随那一条一起摘掉了 (它的入口也一并没了)
+            summary = buildString {
+                append(
+                    when (state) {
+                        Grant.GRANTED -> stringResource(R.string.settings_permission_granted)
+                        Grant.DENIED -> stringResource(R.string.settings_permission_denied)
+                        Grant.MISSING -> stringResource(R.string.settings_permission_missing)
+                    },
+                )
+                append(" · ")
+                append(capability.note ?: capability.why)
             },
             onClick = {
                 // 特殊访问只能开系统页; 能点名的才弹框。`ask` 返回 false 有两种情况 —— 特殊访问,
@@ -3965,9 +3998,14 @@ private fun PermissionsItems() {
     }
 }
 
-/** 无障碍读屏: 模型按名字操作, 而不是在缩过的截图上量坐标 */
+/**
+ * 无障碍读屏: 模型按名字操作, 而不是在缩过的截图上量坐标
+ *
+ * 2026-10-19 起住在「特权通道」那一张卡里 (第 7 条): 它要的那条设置只能由通道写, 所以两件事在同一段
+ * 里看着最顺; 开关下面的跳转是"万一通道写不进去还有一个能手动开的地方"
+ */
 @Composable
-private fun AccessibilityItems() {
+private fun AccessibilityRows() {
     val context = LocalContext.current
     val working = AccessibilitySetting.working
     LaunchedEffect(Unit) { AccessibilitySetting.refresh() }
@@ -5719,9 +5757,11 @@ private fun openSoundSettings(context: Context) {
  *
  * 状态是**懒加载**来的: 模型要等第一次用到才建 session (NPU 那边第一次还要现场编译图, 约 2 秒),
  * 所以这里平时显示"未加载", 那个按钮既是自检也是预热
+ *
+ * 2026-10-19 起住在「特权通道」那一张卡里 (第 7 条), 与无障碍同一个理由
  */
 @Composable
-private fun OcrItems() {
+private fun OcrRows() {
     val scope = rememberCoroutineScope()
     var working by remember { mutableStateOf(false) }
     val backend = LwOcr.backend
@@ -5732,7 +5772,12 @@ private fun OcrItems() {
     } else {
         backend.label
     }
-    Column(modifier = Modifier.padding(UiSpacing.Large)) {
+    // 它在这张卡里, 所以自己缩进 (标题与按钮) 而不是靠外层那一层内边距
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = UiSpacing.Large, vertical = UiSpacing.Medium),
+    ) {
         Text(text = stringResource(R.string.settings_ocr_backend, unit))
         if (LwOcr.note.isNotEmpty()) {
             Text(text = LwOcr.note, modifier = Modifier.padding(top = UiSpacing.Medium))

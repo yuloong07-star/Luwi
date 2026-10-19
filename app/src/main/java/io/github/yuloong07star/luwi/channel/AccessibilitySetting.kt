@@ -1,5 +1,7 @@
 package io.github.yuloong07star.luwi.channel
 
+import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +27,11 @@ object AccessibilitySetting {
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "lw-permission").apply { isDaemon = true }
     }
+
+    /** 两档记号与别的偏好放在同一个文件里: 替他开过一次 / 他自己关过 */
+    private const val STORE = "luwi"
+    private const val KEY_AUTO = "accessibility-auto"
+    private const val KEY_USER_OFF = "accessibility-user-off"
 
     /** Whether a request is in flight */
     var working: Boolean by mutableStateOf(false)
@@ -85,6 +92,11 @@ object AccessibilitySetting {
         if (working) return
         working = true
         worker.execute {
+            // 这一下是主人自己的意思, 也就是最终口径: 打开记第一档记号 (以后不再替他开),
+            // 关掉记第二档 (以后启动也不替他开)
+            PrivilegedChannel.context()?.let { context ->
+                prefs(context).edit().putBoolean(if (on) KEY_AUTO else KEY_USER_OFF, true).apply()
+            }
             val written = try {
                 val service = PrivilegedChannel.ensure()
                     ?: throw IllegalStateException(
@@ -129,6 +141,52 @@ object AccessibilitySetting {
                 ?: "系统没有把服务绑上, 设置写进去了但没生效"
         }
     }
+
+    /**
+     * 首次拿到特权通道之后替主人开一次 (2.7.9 第 7 条)
+     *
+     * 时机挂在"通道真的连上"那两处 (宿主起来那一次 / 设置页点连接那一次), 该不该开由
+     * [AccessibilityDefault.decide] 算: 记号定过就什么都不做, 已经开着只补记号, 否则写一次设置。
+     *
+     * **写失败不落记号**: 它其实没被打开过, 也就不算"替他开过了", 下一次通道连上时再试
+     */
+    fun autoEnableOnce() {
+        if (working) return
+        val context = PrivilegedChannel.context() ?: return
+        when (AccessibilityDefault.decide(
+            running = LwAccessibility.running,
+            autoMarked = prefs(context).getBoolean(KEY_AUTO, false),
+            userOff = prefs(context).getBoolean(KEY_USER_OFF, false),
+        )) {
+            AccessibilityDefault.Act.NOTHING -> return
+
+            AccessibilityDefault.Act.MARK_ONLY -> {
+                prefs(context).edit().putBoolean(KEY_AUTO, true).apply()
+                return
+            }
+
+            AccessibilityDefault.Act.ENABLE -> Unit
+        }
+        working = true
+        worker.execute {
+            val written = runCatching {
+                val service = PrivilegedChannel.ensure() ?: return@runCatching false
+                service.setAccessibility(true)
+            }.getOrDefault(false)
+            if (written) {
+                prefs(context).edit().putBoolean(KEY_AUTO, true).apply()
+                Log.i(TAG, "the accessibility service was turned on by default (first time)")
+            } else {
+                Log.w(TAG, "could not turn the accessibility service on by default")
+            }
+            settle(true)
+            working = false
+        }
+    }
+
+    /** 两档记号都落在这个文件里 (与设置页别的偏好同一个) */
+    private fun prefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
 
     /** How long to wait for the binding to follow the setting, in steps so it is not a fixed sleep */
     private const val SETTLE_BUDGET_MS = 3_000L

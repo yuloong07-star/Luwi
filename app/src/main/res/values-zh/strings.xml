@@ -82,7 +82,7 @@
     <string name="settings_squircle_summary">在圆角 UI 元素上使用平滑的圆角矩形</string>
 
     <string name="settings_section_channel">特权通道</string>
-    <string name="settings_section_channel_summary">动屏幕的能力都要靠它</string>
+    <string name="settings_section_channel_summary">动屏幕、读屏与 OCR 都要靠它</string>
     <string name="settings_channel_reading">读取中...</string>
     <string name="settings_channel_connected">已连接: %1$s, uid %2$d</string>
     <string name="settings_channel_disconnected">未连接 (%1$s)</string>
@@ -93,9 +93,10 @@
     <string name="settings_channel_state_stopped">未运行</string>
     <string name="settings_channel_connect">连接</string>
     <string name="settings_channel_connecting">连接中...</string>
+    <string name="settings_channel_autostart">允许 Luwi 自启动</string>
+    <string name="settings_channel_autostart_summary">只是一行跳转: 去系统那一页自己点, 应用不改任何开关</string>
+    <string name="settings_channel_autostart_failed">这台设备上没有能打开的那一页</string>
 
-    <string name="settings_section_accessibility">无障碍</string>
-    <string name="settings_section_accessibility_summary">读屏上的字与它们的位置</string>
     <string name="settings_accessibility">允许 DSH 通过无障碍服务读取屏幕内容</string>
     <string name="settings_accessibility_summary">启用后, 模型直接能读到屏幕上每个控件的文字与精确位置</string>
     <string name="settings_accessibility_manual">跳转到无障碍设置</string>
@@ -154,8 +155,6 @@
     <string name="settings_look_sheet_summary">把这几张也拼成一张图, 模型先读那一张 —— 十来张图变成一次读图。每一格都是缩小的副本, 所以它是用来看动起来的, 不是用来读小字的</string>
     <string name="settings_look_note">这几条给的是视频模式那台相机的应用这一半: 抓几张、隔多久、多大、要不要拼成一张网格。路由那一半 (imagePixelBudget 与 imageMaxBytes) 在 dsh 自己的 settings.yaml 里, 超过预算的图会在 host 那边重新编码一次再交给模型</string>
 
-    <string name="settings_section_ocr">OCR</string>
-    <string name="settings_section_ocr_summary">从像素里读字</string>
     <string name="settings_ocr_backend">计算单元: %1$s</string>
     <string name="settings_ocr_probe">自检</string>
     <string name="settings_ocr_probe_busy">自检...</string>

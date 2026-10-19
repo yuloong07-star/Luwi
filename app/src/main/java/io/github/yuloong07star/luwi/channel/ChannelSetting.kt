@@ -103,5 +103,8 @@ object ChannelSetting {
                 granted = ShizukuAccessBackend.isGranted(),
             ),
         )
+        // 通道真的通了就把"默认允许无障碍"那一趟走一次 (2.7.9 第 7 条): 记号管着只开一次, 这里只负责
+        // 时机 —— 刚在 KernelSU / Shizuku 里给完授权、点连接之后那一趟也走得到
+        if (state?.connected == true) AccessibilitySetting.autoEnableOnce()
     }
 }

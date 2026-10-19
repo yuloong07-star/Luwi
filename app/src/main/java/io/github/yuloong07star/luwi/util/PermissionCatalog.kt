@@ -45,7 +45,6 @@ enum class Grant {
  * @property settings 去系统设置页的入口, 只有 [special] 的能力才有
  * @property context 那几页系统设置是**哪个包**的 (设置那一侧只认包名, 从 [settings] 的 intent 里解析
  *   不出来); 回退到应用详情页时按它打开对应那一页, null 表示就是本应用自己
- * @property noState 不给这一条显示"已允许/未允许": 它的状态在设备上读不准 (见"安装未知应用")
  * @property note 给人看的一句说明 (比如"声明了但这一版没有功能用它们")
  */
 data class Capability(
@@ -55,7 +54,6 @@ data class Capability(
     val special: Boolean = false,
     val settings: Intent? = null,
     val context: String? = null,
-    val noState: Boolean = false,
     val note: String? = null,
 )
 
@@ -188,17 +186,6 @@ object PermissionCatalog {
             special = true,
             settings = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
                 .setData("package:$APP_PACKAGE".toUri()),
-        ),
-        Capability(
-            name = "安装未知应用",
-            why = "装 APK 要它 (lw_app_control)",
-            permissions = listOf(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES),
-            special = true,
-            settings = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
-                .setData("package:$APP_PACKAGE".toUri()),
-            // 这一条不给状态字: 它的值从 canRequestPackageInstalls() 读, 而这台设备上读出来的与系统
-            // 页上看到的对不上, 屏幕上的结论会和用户眼前那一页打架
-            noState = true,
         ),
     )
 

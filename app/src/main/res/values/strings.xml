@@ -82,7 +82,7 @@
     <string name="settings_squircle_summary">Use smooth rounded rectangles on rounded UI elements</string>
 
     <string name="settings_section_channel">Privileged channel</string>
-    <string name="settings_section_channel_summary">Anything that touches the screen needs it</string>
+    <string name="settings_section_channel_summary">Anything that touches or reads the screen needs it</string>
     <string name="settings_channel_reading">Reading...</string>
     <string name="settings_channel_connected">Connected: %1$s, uid %2$d</string>
     <string name="settings_channel_disconnected">Not connected (%1$s)</string>
@@ -93,9 +93,10 @@
     <string name="settings_channel_state_stopped">not running</string>
     <string name="settings_channel_connect">Connect</string>
     <string name="settings_channel_connecting">Connecting...</string>
+    <string name="settings_channel_autostart">Allow Luwi to start on boot</string>
+    <string name="settings_channel_autostart_summary">Opens the system page; this row only navigates, it changes nothing</string>
+    <string name="settings_channel_autostart_failed">This device has no page to open for it</string>
 
-    <string name="settings_section_accessibility">Accessibility</string>
-    <string name="settings_section_accessibility_summary">Reads the text on screen and where it sits</string>
     <string name="settings_accessibility">Let DSH read the screen through the accessibility service</string>
     <string name="settings_accessibility_summary">Once on, the model reads the text and the exact position of every control on the screen</string>
     <string name="settings_accessibility_manual">Open accessibility settings</string>
@@ -154,8 +155,6 @@
     <string name="settings_look_sheet_summary">Lay the frames out as one picture as well; the agent reads that one first, so a dozen frames cost one look instead of twelve. Each cell is a smaller copy, so it is for seeing what moved, not for reading small text</string>
     <string name="settings_look_note">These are the app\'s half of the video mode camera: how many frames, how far apart, how big, and whether they also come back as one grid. The route has its own budgets in settings.yaml (imagePixelBudget, imageMaxBytes), and a picture over those is re-encoded on the host before the model sees it</string>
 
-    <string name="settings_section_ocr">OCR</string>
-    <string name="settings_section_ocr_summary">Reads text out of pixels</string>
     <string name="settings_ocr_backend">Runs on: %1$s</string>
     <string name="settings_ocr_probe">Self check</string>
     <string name="settings_ocr_probe_busy">Checking...</string>
