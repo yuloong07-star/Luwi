@@ -93,7 +93,7 @@ export class P2pRunner {
         return this.#failure(new SyncError(ERROR_CODES.P2P_UNAVAILABLE, `sidecar is not running (${status?.reason ?? 'unknown'})`), 'P2P_UNAVAILABLE')
       }
       const connection = await this.sidecar.openFrameStream({ to: peer.ticket ?? peer.endpoint ?? peer.id, timeoutMs: this.config.connectTimeoutMs })
-      return await this.#run(connection, peer, options.timeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
+      return await this.#run(connection, peer, options.timeoutMs ?? this.config.sessionTimeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
     } catch (error) {
       return this.#failure(error, errorCodeOf(error, 'P2P_IO'))
     }
@@ -119,7 +119,7 @@ export class P2pRunner {
       inbound.stream.close()
       return this.#failure(new SyncError(ERROR_CODES.P2P_NODE_CHANGED, `inbound node ${inbound.peer} is not the expected ${String(expectedNode)}`), 'P2P_NODE_CHANGED')
     }
-    return this.#run({ path: 'ip', rttMs: 0, peer: inbound.peer, stream: inbound.stream }, peer, options.timeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
+    return this.#run({ path: 'ip', rttMs: 0, peer: inbound.peer, stream: inbound.stream }, peer, options.timeoutMs ?? this.config.sessionTimeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
   }
 
   /** 本机设备 id: 允许迟到 (engine 的 meta 在挂载之后才读出来), 所以可能是 getter。 */
@@ -169,11 +169,14 @@ export class P2pRunner {
   }
 
   async #failure(error, code, options = {}) {
-    if (options.silent !== true) {
-      this.failures += 1
-      if (this.failures >= P2P_RUN_DEFAULTS.failureLimit) {
-        this.coolingUntil = this.deps.now() + P2P_RUN_DEFAULTS.cooldownMs
-      }
+    if (options.silent === true) {
+      // 入站等不到人不是错误 (resident 下每 30 s 一次): 只记一个"最近空转", 不覆盖真正的外拨错误
+      this.lastIdleAt = this.deps.now()
+      return this.#result(false, code)
+    }
+    this.failures += 1
+    if (this.failures >= P2P_RUN_DEFAULTS.failureLimit) {
+      this.coolingUntil = this.deps.now() + P2P_RUN_DEFAULTS.cooldownMs
     }
     this.lastError = {
       code,
@@ -331,4 +334,5 @@ function errorCodeOf(error, fallback) {
   if (error instanceof SyncError && typeof error.code === 'string') return error.code
   return fallback
 }
+
 

@@ -178,3 +178,16 @@ test('status carries the peer endpoint, trust state and the six-digit SAS', asyn
   assert.equal(status.trustState, 'new')
   assert.match(status.sas, /^\d{6}$/u)
 })
+
+test('only the lexicographically smaller device dials (the session itself is bidirectional)', async () => {
+  const runner = makeRunner()
+  const service = makeService({ cards: [PC], runner, deviceId: 'zzz-device' })
+  const result = await service.beforeSync()
+  assert.equal(result.reason, 'P2P_WAITING')
+  assert.equal(runner.calls.outbound, 0)
+
+  const dialer = makeRunner()
+  const dialing = makeService({ cards: [PC], runner: dialer, deviceId: 'aaa-device' })
+  assert.equal((await dialing.beforeSync()).ok, true)
+  assert.equal(dialer.calls.outbound, 1)
+})

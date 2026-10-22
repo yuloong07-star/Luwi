@@ -242,3 +242,10 @@ test('the device id may be a getter resolved at session time (engine meta arrive
   assert.equal(result.ok, true)
   assert.equal(seen, 'device-late')
 })
+
+test('an inbound accept timeout is idle noise, not the last outbound error', async () => {
+  const sidecar = makeSidecar({ acceptInbound: async () => { throw new Error('no inbound yet') } })
+  const runner = makeRunner({ sidecar })
+  await runner.runInbound()
+  assert.equal((await runner.status()).lastError, undefined, 'a quiet inbound timeout must not set lastError')
+})

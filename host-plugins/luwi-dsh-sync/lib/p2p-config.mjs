@@ -19,6 +19,7 @@ export const P2P_DEFAULTS = Object.freeze({
   idleMs: 0, // sidecar 空闲自退；resident = 0（不退），ondemand 缺省 90 s
   startTimeoutMs: 20000, // 等 READY 的上限
   connectTimeoutMs: 20000, // 一次拨号的上限（sidecar 内部还有一层 30 s）
+  sessionTimeoutMs: 20000, // 一场会话的总预算（§5.6；首同步可以调大）
   maxBlobBytes: 8 * 1024 * 1024, // §5.4 body 上限
   fallbackToGit: true, // 连不上时退 git（§9）
   portmapper: true, // 与 iroh 缺省一致
@@ -36,6 +37,8 @@ export const P2P_LIMITS = Object.freeze({
   MAX_START_TIMEOUT_MS: 120000,
   MIN_CONNECT_TIMEOUT_MS: 1000,
   MAX_CONNECT_TIMEOUT_MS: 120000,
+  MIN_SESSION_TIMEOUT_MS: 5000,
+  MAX_SESSION_TIMEOUT_MS: 300000,
   MIN_MAX_BLOB_BYTES: 1024 * 1024,
   MAX_MAX_BLOB_BYTES: 64 * 1024 * 1024,
 })
@@ -87,6 +90,7 @@ export function resolveP2pConfig(raw) {
     idleMs,
     startTimeoutMs: integerIn('startTimeoutMs', input.startTimeoutMs ?? P2P_DEFAULTS.startTimeoutMs, P2P_LIMITS.MIN_START_TIMEOUT_MS, P2P_LIMITS.MAX_START_TIMEOUT_MS),
     connectTimeoutMs: integerIn('connectTimeoutMs', input.connectTimeoutMs ?? P2P_DEFAULTS.connectTimeoutMs, P2P_LIMITS.MIN_CONNECT_TIMEOUT_MS, P2P_LIMITS.MAX_CONNECT_TIMEOUT_MS),
+    sessionTimeoutMs: integerIn('sessionTimeoutMs', input.sessionTimeoutMs ?? P2P_DEFAULTS.sessionTimeoutMs, P2P_LIMITS.MIN_SESSION_TIMEOUT_MS, P2P_LIMITS.MAX_SESSION_TIMEOUT_MS),
     maxBlobBytes: integerIn('maxBlobBytes', input.maxBlobBytes ?? P2P_DEFAULTS.maxBlobBytes, P2P_LIMITS.MIN_MAX_BLOB_BYTES, P2P_LIMITS.MAX_MAX_BLOB_BYTES),
     fallbackToGit: booleanOf('fallbackToGit', input.fallbackToGit ?? P2P_DEFAULTS.fallbackToGit),
     portmapper: booleanOf('portmapper', input.portmapper ?? P2P_DEFAULTS.portmapper),

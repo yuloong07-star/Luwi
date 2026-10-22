@@ -102,14 +102,32 @@ export class P2pService {
    */
   async identity() {
     if (this.config.enabled !== true) return null
+    let debug = { at: new Date().toISOString(), enabled: true }
     try {
       const status = await this.runner.status()
-      if (typeof status.endpointId !== 'string' || status.endpointId === '') return null
+      debug = { ...debug, endpointId: status.endpointId, running: status.running, available: status.available, reason: status.reason }
+      if (typeof status.endpointId !== 'string' || status.endpointId === '') {
+        await this.#debugIdentity(debug)
+        return null
+      }
       const identity = { nodeId: status.endpointId }
       if (typeof status.ticket === 'string' && status.ticket !== '') identity.ticket = status.ticket
+      await this.#debugIdentity(debug)
       return identity
-    } catch {
+    } catch (error) {
+      debug.error = error instanceof Error ? error.message : String(error)
+      await this.#debugIdentity(debug)
       return null
+    }
+  }
+
+  async #debugIdentity(value) {
+    try {
+      const { promises: fs } = await import('node:fs')
+      await fs.mkdir(`${this.repoDir}/.p2p`, { recursive: true })
+      await fs.writeFile(`${this.repoDir}/.p2p/identity-debug.json`, `${JSON.stringify(value)}\n`)
+    } catch {
+      // 诊断写盘失败不影响正事
     }
   }
 
@@ -122,6 +140,10 @@ export class P2pService {
     if (this.config.enabled !== true) return { ok: false, reason: 'P2P_DISABLED' }
     await this.refreshPeer()
     if (this.peer === null) return { ok: false, reason: 'P2P_UNAVAILABLE' }
+    // 只让 deviceId 小的一方拨号: 一场会话本身是双向的 (先拉再服), 两端同时拨会撞成两条
+    // 并发会话, 在同一个镜像上互相踩 (2026-10-22 真机上 MANIFEST 阶段被关流就是这么来的)
+    const myDeviceId = this.deviceId()
+    if (myDeviceId !== '' && myDeviceId > this.peer.id) return { ok: false, reason: 'P2P_WAITING' }
     return this.runner.runOutbound(options)
   }
 

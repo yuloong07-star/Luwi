@@ -103,6 +103,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - **The first real device session carried no device id in HELLO** (2026-10-22, found in the PC↔phone
   run). `P2pService` hands the runner a *getter* for the engine's device id (meta arrives after mount),
   but the runner passed that function straight into `P2pPeerSession` — `JSON.stringify` turned it into
@@ -214,6 +220,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - **A session could vanish right after a line was typed into it, and the answer would land
   in a different session** (a real device, 2026-10-15). Two rules were fighting each other:
   the desktop reported its session list without the sessions the peer had reported back (an
@@ -304,6 +316,12 @@ undefined
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - The conflict fork notice no longer writes the harness-retired `{ kind: 'plugin', plugin: … }` message source. DeepSeek Harness `0.1.7-alpha.1` turned `MessageSourceMap` into a merge-extensible producer-owned union with no shared `plugin` catch-all, and `@deepseek-ai/dsh-session-format-v3-to-v4`'s `assertV4MessageSources` refuses `kind === 'plugin'` when a session is read back, so a notice written by an earlier build left the forked session readable but not continuable. `injectForkNotice` now writes `{ kind: 'dsh-session-sync', form: 'notice', summary: … }` — the plugin's own producer-owned kind, declared by declaration merging in `types.d.ts`. `form` and `summary` are unchanged, so no user-visible behavior changes.
 
 - `scripts/loader-runner.mjs` sweeps `ctx.registry` for `FiberState.FAILED` fibers after `ctx.loader.await()` and rethrows their `_error`. `cordis-plugin-loader` 1.0.4 (the loader the 0.1.7 host vendors) catches an import failure inside `Entry._init`, logs it and returns, and `EntryTree.await` settles its tasks with `Promise.allSettled`, which never rejects — so a failed mount stopped propagating and the invalid-config and default-export regression cases were exiting non-zero for the wrong reason (`the /sync command is missing`). `FiberState` is a `const enum` with no runtime object, so its `FAILED` value (`3`) is mirrored.
@@ -336,6 +354,12 @@ undefined
 ## [0.2.15] - 2026-09-18
 
 ### Fixed
+
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
 
 - The storage-domain handle no longer leaks across an unmount that lands while `ctx.storageDomain.open` is still in flight. The domain effect is registered synchronously inside the apply frame and owns the handle, so the disposer closes the domain once the open settles instead of throwing `INACTIVE_EFFECT` into a swallowed rejection. The silent `.catch(() => {})` is gone: an open or close failure now warns with its reason, and consumers still await the table promise.
 
@@ -372,17 +396,35 @@ undefined
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - Generate the git-backend fork timestamp as strictly 14 digits: `lib/engine.mjs` stripped only `-` and `:` from `toISOString()` before slicing 14 characters, so the ISO `T` survived (`20260909T13523`), `forkFileName`'s `/^\d{14}$/` check failed, and every git-backend conflict fork silently fell back to the epoch stamp `19700101000000`. The stamp now removes `-`, `:` and `T` exactly like `lib/encrypted.mjs`, yielding a real `yyyyMMddHHmmss` UTC stamp; the encrypted backend was already correct and no other behavior changes. Regression tests assert a 14-digit non-epoch stamp on a real fork path plus the acceptance/fallback contract in `test/paths.test.mjs`.
 
 ## [0.2.11] - 2026-09-09
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - Map fork files to sessions with the host's real session-store layout `$DSH_HOME/sessions/<projectKey>/<sessionId>/<file>`: the session-level fork lookup treated the project key as a session id, so on harness `dsh-v0.1.5-alpha.1` (session format V3, zstd by default) every session-level fork and its `sync/conflict` event was silently skipped while the fork files were still kept. `lib/paths.mjs` now exposes `sessionIdOfForkPath` and `decodeSegment` (the inverse of the host's `~XXXX` segment escaping), `handleForks` uses them and warns instead of staying silent when a fork path cannot be mapped, and the legacy flat `<mirrorDir>/<sessionId>/<file>` layout still maps when the last segment looks like a file. The byte-level mirror, merge, and encryption path is unchanged; no new dependencies.
 
 ## [0.2.10] - 2026-09-09
 
 ### Fixed
+
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
 
 - Restore a green `pnpm install --frozen-lockfile` on pnpm 11: pnpm 11 enables `minimumReleaseAge` by default (1440 minutes) and its frozen-install lockfile supply-chain verification pass ignores `minimumReleaseAgeExclude` — both the exact `@deepseek-ai/dsh-*@0.1.5-alpha.1` entries and an `@deepseek-ai/*` pattern — so the freshly published `0.1.5-alpha.1` dev/test pins failed with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` (17 lockfile entries, reproduced locally against a clean store). `pnpm-workspace.yaml` now sets `minimumReleaseAge: 0`, matching the sibling PerryLink plugins, and keeps the exclusion list as the documented intent. The `v0.2.9` tag already carried that list and still failed at the Install step in both Release and CI, which is why `0.2.9` never reached npm; no runtime behavior changes.
 
@@ -408,6 +450,12 @@ undefined
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - Align the `@deepseek-ai/dsh-*` peer ranges to `>=0.1.2-rc.1 <0.2.0`: the older `>=0.1.0-rc.8 <0.2.0` band resolved to only the `0.1.0-rc.8` prerelease under registry-driven resolution and broke fresh tarball installs; no behavior change.
 
 ### Docs
@@ -418,6 +466,12 @@ undefined
 ## [0.2.6] - 2026-09-04
 
 ### Fixed
+
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
 
 - Remove the `storage` / `storage-json` / `storage-domain` rows from the bundle patch: the shipped profiles compose that stack through `dsh-base`, so the inserted rows collided with the same ids and made the profile refuse to boot (`duplicate loader entry id: storage`). The patch now mounts only the `session-sync` row; bare profiles compose the storage stack themselves. The manifest test asserts the new patch contract (plugin row only).
 
@@ -461,6 +515,12 @@ undefined
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - Corrected the stale test count in the Development sections (the repo runs 10 `node --test` files, not 6 suites) across the five-language READMEs and `AGENTS.md`, and fixed `ARCHITECTURE.md`'s periodic-pull description to match the code (`ctx.effect` wrapping `setInterval`, not `ctx.setInterval`). Documentation only — no behavior change.
 
 ## [0.1.3] - 2026-08-22
@@ -479,11 +539,23 @@ undefined
 
 ### Fixed
 
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
+
 - `scripts/loader-runner.mjs` calls the rc.8 `commands.execute(agent, line, images, signal)` signature (empty image batch), so the real-Loader composition tests run against the rc.8 commands registry.
 
 ## [0.1.1] - 2026-08-17
 
 ### Fixed
+
+- **One dialer per pair, a configurable session budget, quieter inbound idling** (2026-10-23). Two hosts
+  dialling each other at the same minute produced two concurrent sessions over one mirror (the peer
+  closed the stream at the MANIFEST stage); only the lexicographically smaller `deviceId` dials now — a
+  session is already bidirectional. `p2p.sessionTimeoutMs` (default 20 s, up to 300 s) is the session
+  budget, and an inbound accept timeout no longer overwrites the last real outbound error.
 
 - The bundle patch now composes the storage stack (`@deepseek-ai/dsh-storage` + `dsh-storage-json` + `dsh-storage-domain`) and declares all three packages, so a bare profile gets the `storageDomain` service the plugin injects instead of hanging with `pending (waiting for service: storageDomain)`.
 
@@ -498,3 +570,4 @@ undefined
 - Session-level conflict fork with a persistent `user/message` notice when a diverged session is live and has no open turn.
 - `session-sync` storage-domain metadata (device id, last pull/push, last push head, last error).
 - Schemastery configuration with fail-loud bounds; every tunable documented in `cordis.patch.yml` and the five-language READMEs.
+
