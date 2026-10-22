@@ -181,3 +181,30 @@ test('an empty patch is refused with a sentence that lists what can be passed', 
     box.cleanup()
   }
 })
+
+test('remoteToken is a key of its own: stored apart, cleared by "", never touches the address', async () => {
+  const box = sandbox({
+    remote: 'https://github.com/you/private.git',
+    peer: { token: '0123456789abcdef0123456789abcdef' },
+  })
+  try {
+    const before = box.read()
+    const result = await applyConfigure(box.file, { remoteToken: 'ghp_example_token' })
+    assert.equal(result.ok, true)
+    const after = box.read()
+    assert.equal(after[KEYS.REMOTE], 'https://github.com/you/private.git')
+    assert.equal(after[KEYS.REMOTE_TOKEN], 'ghp_example_token')
+    assert.deepEqual(after.peer, before.peer, 'the peer section is untouched')
+
+    // 空串 = 清掉令牌, 地址照旧
+    assert.equal((await applyConfigure(box.file, { remoteToken: '' })).ok, true)
+    assert.equal(KEYS.REMOTE_TOKEN in box.read(), false)
+    assert.equal(box.read()[KEYS.REMOTE], 'https://github.com/you/private.git')
+
+    // 空白 / 太长一律拒
+    assert.equal((await applyConfigure(box.file, { remoteToken: 'has space' })).ok, false)
+    assert.equal((await applyConfigure(box.file, { remoteToken: 'x'.repeat(4097) })).ok, false)
+  } finally {
+    box.cleanup()
+  }
+})

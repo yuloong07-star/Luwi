@@ -5,13 +5,15 @@
 //   2. 对端那几场在本机变成投影会话 (cwd 在影子里 → 进那个分组), 标题照对端那一场
 //   3. 对端的文本条目被折成本地事件追加进去 (turn/start + user/message … assistant/message + turn/end),
 //      重复刷不重复落 (幂等), 新条目照落
-//   4. 「指令只能由归属方执行」: 在投影会话里打字 → 转发给对端 + 本地返回 messages: [] (不调模型);
+//   4. 「指令只能由归属方执行」: 在投影会话里打字 → 转发给对端 + 本地 `{kind:'reject'}` (不调模型);
 //      别的会话照旧走 next()
+//   5. 排不进实时通道时走仓库队列 (2026-10-20): 对端连不上但有它的名片 → 写 inbox/ 并推一次,
+//      本地落一条"已排队"通知; 推不上去就落"没送到"
 // @module luwi-dsh-sync/test/luwi-peer-proxy-wiring.test
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as plugin from '../index.mjs'
@@ -276,16 +278,16 @@ test('the peer workspace becomes a local shadow group and its session becomes a 
       assert.deepEqual(wired.created, [{ id: 'proxy-1', request: { workspaceId: shadow.id } }])
       assert.deepEqual(wired.renamed, [{ sessionId: 'proxy-1', title: '修一下登录' }])
       const proxy = wired.sessions.get('proxy-1')
-      assert.deepEqual(proxy.appended.map(event => event.type), ['turn/start', 'user/message', 'assistant/message', 'turn/end'])
+      assert.deepEqual(proxy.appended.map(event => event.type), ['turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end'])
       assert.equal(proxy.appended[1].surface, true)
       assert.equal(proxy.appended[1].data.content[0].text, '你好')
-      assert.equal(proxy.appended[2].data.message.content[0].text, '好的')
-      assert.equal(proxy.appended[2].surface, true)
+      assert.equal(proxy.appended[3].data.message.content[0].text, '好的')
+      assert.equal(proxy.appended[3].surface, true)
 
       // 同一批再刷一次: revision 没变, 一条都不重复落
       const again = await plugin.mountState.peerRefresh()
       assert.equal(again.fetched, 0)
-      assert.equal(proxy.appended.length, 4)
+      assert.equal(proxy.appended.length, 6)
     },
   })
 })
@@ -298,13 +300,13 @@ test('a fresh revision appends only the new entries, and the view reports the le
       const shadow = [...wired.workspaces.values()].find(entry => entry.path.startsWith(root))
       assert.equal(shadow.title, 'DSH（Luwi 手机）', '名字只有对端用也一样带设备名, 好一眼看出它是对面那台机器上的')
       const proxy = wired.sessions.get('proxy-1')
-      assert.equal(proxy.appended.length, 4)
+      assert.equal(proxy.appended.length, 6)
 
       peer.state.entries = [...peer.state.entries, { seq: 3, role: 'user', text: '再问一句' }, { seq: 4, role: 'assistant', text: '再答一句' }]
       peer.state.updatedAt = PEER_UPDATED_AT + 1000
       await plugin.mountState.peerRefresh()
-      assert.deepEqual(proxy.appended.slice(4).map(event => event.type), ['turn/start', 'user/message', 'assistant/message', 'turn/end'])
-      assert.equal(proxy.appended[5].data.content[0].text, '再问一句')
+      assert.deepEqual(proxy.appended.slice(6).map(event => event.type), ['turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end'])
+      assert.equal(proxy.appended[7].data.content[0].text, '再问一句')
 
       const view = await plugin.mountState.peerView()
       assert.equal(view.on, true)
@@ -395,8 +397,8 @@ test('对端报出 v2 条目时, 旧口径那场投影重做一场 (旧的归档
       assert.equal(view.proxies.length, 1)
       assert.equal(view.proxies[0].localId, 'proxy-1')
       const proxy = wired.sessions.get('proxy-1')
-      assert.deepEqual(proxy.appended.map(event => event.type), ['turn/start', 'user/message', 'assistant/message', 'turn/end'])
-      assert.equal(proxy.appended[2].data.message.content[0].text, '好的', '回答落进重做的那一场')
+      assert.deepEqual(proxy.appended.map(event => event.type), ['turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end'])
+      assert.equal(proxy.appended[3].data.message.content[0].text, '好的', '回答落进重做的那一场')
       assert.equal(state.peerProxies['dev-peer|session-phone-1'].snapshotV, 2, '账上记住已经消费到 v2')
       // 下一轮: 版本不再落后, 没变就照旧跳过 (不会每轮都重做)
       const again = await plugin.mountState.peerRefresh()
@@ -577,7 +579,7 @@ test('对端搬进来的副本: 归档隐掉, 在它上面打字仍然送给对�
         turn: 3,
         step: 1,
       }, async () => ({ kind: 'enter', messages: 'the model would have run' }))
-      assert.deepEqual(decision, { kind: 'enter', messages: [] }, '本机不跑模型')
+      assert.deepEqual(decision, { kind: 'reject' }, '本机不跑模型')
       assert.equal(stub.posts.length, before + 1)
       assert.deepEqual(stub.posts.at(-1).target, { kind: 'session', id: 'session-phone-1', name: '' }, '执行方是那一场的归属方')
       assert.equal(copy.appended.length, 0, '对端那一份日志一个字节都不写 (写了就是 APPEND_BOTH)')
@@ -629,7 +631,7 @@ test('退下来的投影仍然归对端: 在它上面打字还是送给对端', 
         turn: 5,
         step: 1,
       }, async () => ({ kind: 'enter', messages: 'the model would have run' }))
-      assert.deepEqual(decision, { kind: 'enter', messages: [] })
+      assert.deepEqual(decision, { kind: 'reject' })
       assert.equal(stub.posts.length, before + 1)
       assert.deepEqual(stub.posts.at(-1).target, { kind: 'session', id: 'session-phone-1', name: '' })
     },
@@ -655,7 +657,7 @@ test('typing in a projection session forwards the line and never runs the local 
         step: 1,
         signal: undefined,
       }, async () => ({ kind: 'enter', messages: 'the model would have run' }))
-      assert.deepEqual(decision, { kind: 'enter', messages: [] }, 'the local turn spends no model call')
+      assert.deepEqual(decision, { kind: 'reject' }, 'the local turn spends no model call')
       assert.equal(stub.posts.length, 1)
       const post = stub.posts[0]
       assert.equal(post.text, '把登录改一下')
@@ -687,7 +689,7 @@ test('a line that cannot go out leaves a local notice instead of a silent drop',
         step: 1,
         signal: undefined,
       }, async () => ({ kind: 'enter', messages: [] }))
-      assert.deepEqual(decision, { kind: 'enter', messages: [] })
+      assert.deepEqual(decision, { kind: 'reject' })
       const notice = proxy.appended.at(-1)
       assert.equal(notice.data.source.kind, 'dsh-session-sync', 'the failure is logged as our own notice')
       assert.match(notice.data.content[0].text, /没有送到/u)
@@ -766,7 +768,7 @@ test('影工作区里新开的一场: 送到对端新开一场, 回答折回主�
         turn: 1,
         step: 1,
       }, async () => { called = true; return { kind: 'enter', messages: 'the model would have run' } })
-      assert.deepEqual(decision, { kind: 'enter', messages: [] }, '本机不跑模型')
+      assert.deepEqual(decision, { kind: 'reject' }, '本机不跑模型')
       assert.equal(called, false, 'next() 没被调 —— 影工作区里的一切都归对端')
       assert.deepEqual(stub.posts.at(-1).target, { kind: 'new', id: '', name: 'DSH' }, '让对端在这个工作区里新开一场')
       assert.equal(shadow.appended.length, 1, '主人自己那一句落进本机这一场')
@@ -778,8 +780,8 @@ test('影工作区里新开的一场: 送到对端新开一场, 回答折回主�
       const refreshed = await plugin.mountState.peerRefresh()
       assert.equal(refreshed.ok, true, JSON.stringify(refreshed))
       assert.deepEqual(wired.archivedSessions, [], '对端报着这一场, 它不能算"退下来的投影"')
-      assert.deepEqual(shadow.appended.slice(1).map(event => event.type), ['turn/start', 'assistant/message', 'turn/end'])
-      assert.equal(shadow.appended[2].data.message.content[0].text, '好的, 我看一下')
+      assert.deepEqual(shadow.appended.slice(1).map(event => event.type), ['turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end'])
+      assert.equal(shadow.appended[3].data.message.content[0].text, '好的, 我看一下')
       assert.equal(state.peerProxies['dev-peer|session-fresh-1'].localId, 'session-shadow-1', '本机这一场就是那一场的投影')
 
       // 再打一句: 已经绑上了, 走第 ① 条判据 (目标是对端那一场的 id), 不会再新开一场
@@ -790,7 +792,7 @@ test('影工作区里新开的一场: 送到对端新开一场, 回答折回主�
         turn: 2,
         step: 1,
       }, async () => ({ kind: 'enter', messages: 'the model would have run' }))
-      assert.deepEqual(again, { kind: 'enter', messages: [] })
+      assert.deepEqual(again, { kind: 'reject' })
       assert.equal(stub.posts.length, before + 1)
       assert.deepEqual(stub.posts.at(-1).target, { kind: 'session', id: 'session-fresh-1', name: '' })
     },
@@ -818,7 +820,7 @@ test('影工作区里的一场送不出去: 落一条本地通知, 本机一个�
         step: 1,
       }, async () => { called = true; return { kind: 'enter', messages: 'the model would have run' } })
       assert.equal(called, false, '送不出去也不是本机跑的理由')
-      assert.deepEqual(decision, { kind: 'enter', messages: [] })
+      assert.deepEqual(decision, { kind: 'reject' })
       const notice = shadow.appended.at(-1)
       assert.equal(notice.data.source.kind, 'dsh-session-sync', '失败落成我们自己的通知')
       assert.match(notice.data.content[0].text, /没有送到/u)
@@ -828,7 +830,7 @@ test('影工作区里的一场送不出去: 落一条本地通知, 本机一个�
   })
 })
 
-test('影子里但认不出是哪个工作区: 仍然转给对端 (空名), 本机不跑', async () => {
+test('影子里但认不出是哪个工作区: 带上影子目录名转给对端, 本机不跑', async () => {
   await withMount({
     handler: async ({ wired, root, stub }) => {
       await plugin.mountState.peerRefresh()
@@ -843,8 +845,10 @@ test('影子里但认不出是哪个工作区: 仍然转给对端 (空名), 本�
         step: 1,
       }, async () => { called = true; return { kind: 'enter', messages: 'the model would have run' } })
       assert.equal(called, false)
-      assert.deepEqual(decision, { kind: 'enter', messages: [] })
-      assert.deepEqual(stub.posts.at(-1).target, { kind: 'new', id: '', name: '' }, '说不出是哪个工作区也要送出去')
+      assert.deepEqual(decision, { kind: 'reject' })
+      // 2026-10-20: 名字从影子目录里取 —— 空名到了对端只会回"解析不到这个目标", 而影子目录名
+      // 本身就是工作区名 (shadowDirName 的产物); 真机上(对端拨不通、影子注册表为空)发出去的正是那个空名
+      assert.deepEqual(stub.posts.at(-1).target, { kind: 'new', id: '', name: 'no-such-workspace' }, '说不出是哪一个, 也要把影子目录名带上')
     },
   })
 })
@@ -871,7 +875,7 @@ test('cwd 拿不到时按工作区注册表认影子 (id 优先的那一条口�
         step: 1,
       }, async () => { called = true; return { kind: 'enter', messages: [] } })
       assert.equal(called, false, '问得到工作区注册表就不该放它跑本机')
-      assert.deepEqual(decision, { kind: 'enter', messages: [] })
+      assert.deepEqual(decision, { kind: 'reject' })
     },
   })
 })
@@ -889,6 +893,98 @@ test('面板那条发送路 (/luwi-sync/send) 现在真的能把一句话送到�
       assert.equal(res.record.body.ok, true)
       assert.equal(res.record.body.sessionId, 'session-fresh-1')
       assert.deepEqual(stub.posts.at(-1).target, { kind: 'new', id: '', name: 'DSH' })
+    },
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 2c · 实时通道打不通时的那条退路 (2026-10-20)
+//
+// 真机事故: 手机只监听自己的回环, PC 拨不到它, 而配置里又写着地址 —— 旧的 peerBase 在
+// "地址来自配置"那一档把 deviceId 恒置为空, 于是队列也排不进去, 消息只回一句
+// "there is no peer device id to queue against" 就没了。现在设备 id 一律从名片取。
+// ---------------------------------------------------------------------------
+
+test('对端连不上但有它的名片: 这一句排进仓库队列, 本地落"已排队"通知, 本机不跑模型', async () => {
+  await withMount({
+    localWorkspaces: ['DSH'],
+    handler: async ({ wired, root, stub }) => {
+      await plugin.mountState.peerRefresh()
+      const shadowPath = [...wired.workspaces.values()].find(entry => entry.path.startsWith(root))?.path
+      // 名片先落到镜像里 (对端上一次推上来的那一份), 地址是它自己的回环 —— 从本机拨永远是空的
+      mkdirSync(join(root, 'repo', 'peers'), { recursive: true })
+      writeFileSync(join(root, 'repo', 'peers', 'dev-phone.json'), JSON.stringify({
+        deviceId: 'dev-phone', name: 'Luwi 手机', url: 'http://127.0.0.1:3080', updatedAt: '2026-10-20T11:00:00.000Z',
+      }))
+      stub.restore()
+      globalThis.fetch = async () => { throw new Error('connect ECONNREFUSED') }
+      const handler = wired.handlers.get('agent/pre-step')
+      const shadow = fakeSession('session-shadow-q')
+      shadow.header = { cwd: shadowPath }
+      const decision = await handler({
+        agent: { session: shadow },
+        messages: [{ role: 'user', content: [{ type: 'text', text: '在电脑上问她一句' }] }],
+        turn: 4,
+        step: 1,
+      }, async () => ({ kind: 'enter', messages: 'the model would have run' }))
+      assert.deepEqual(decision, { kind: 'reject' }, '本机一个模型调用都不花')
+      // 队列文件按**对端的设备 id** 分目录 (以前那一档根本没走到这里)
+      const queued = readdirSync(join(root, 'repo', 'inbox', 'dev-phone'))
+      assert.equal(queued.length, 1, '一句话一个文件')
+      const message = JSON.parse(readFileSync(join(root, 'repo', 'inbox', 'dev-phone', queued[0]), 'utf8'))
+      assert.equal(message.text, '在电脑上问她一句')
+      assert.match(String(message.from), /^[0-9a-f]{8}-/u, '发送方是本机设备 id, 不能是空串')
+      assert.deepEqual(message.target, { kind: 'new', id: '', name: 'DSH' })
+      const notice = shadow.appended.at(-1)
+      assert.equal(notice.data.source.kind, 'dsh-session-sync')
+      // 引擎在临时目录里推不动 (不是 git 仓), 所以这一档要说"没送到", 不许说"已排队"
+      assert.match(notice.data.content[0].text, /推送失败/u)
+      assert.equal(shadow.appended.length, 2, '主人那一句与通知都在')
+    },
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 2d · 拨不通时的"仓库回信" (2026-10-20, A 方案)
+//
+// 手机只监听自己的回环, PC 永远拨不到它 —— 那么"在 PC 上发、在 PC 上看回答"就不能只靠 HTTP。
+// 对端每一轮都会把"只要回答"的那份写进仓库 `live/<它的 id>/<会话>.json`, 随 pull 落到本机;
+// 拨不通时就从那里折回来。
+// ---------------------------------------------------------------------------
+
+test('对端拨不通: 回答从仓库里那份 live 拷贝折回本机窗口', async () => {
+  const state = {
+    peerProxies: {
+      'dev-peer|session-phone-1': { localId: 'proxy-1', lastSeq: 0, openTurn: null, turnCounter: 0, pendingTexts: [], revision: -1, running: false, snapshotV: 1 },
+    },
+  }
+  await withMount({
+    state,
+    handler: async ({ wired, root, stub }) => {
+      const session = fakeSession('proxy-1')
+      wired.sessions.set('proxy-1', session)
+      // 对端写进仓库的那一份 (它每轮都会写; 拨不通时这是唯一能拿到回答的路)
+      mkdirSync(join(root, 'repo', 'live', 'dev-peer'), { recursive: true })
+      writeFileSync(join(root, 'repo', 'live', 'dev-peer', 'session-phone-1.json'), JSON.stringify({
+        v: 2,
+        deviceId: 'dev-peer',
+        deviceName: 'Luwi 手机',
+        sessionId: 'session-phone-1',
+        title: '修一下登录',
+        cwd: '/storage/emulated/0/DSH',
+        running: false,
+        updatedAt: Date.now(),
+        truncated: false,
+        draft: null,
+        entries: [{ seq: 1, role: 'user', text: '把登录改一下' }, { seq: 2, role: 'assistant', text: '改好了, 你试试' }],
+      }))
+      stub.restore()
+      globalThis.fetch = async () => { throw new Error('connect ECONNREFUSED') }
+      const result = await plugin.mountState.peerRefresh()
+      assert.equal(result.ok, false, '拨不通这件事照旧如实报 (影子与会话表这一趟不动)')
+      assert.equal(result.folded, 1, '那一场从仓库里折回来了')
+      assert.deepEqual(session.appended.map(event => event.type), ['turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end'])
+      assert.equal(session.appended[3].data.message.content[0].text, '改好了, 你试试')
     },
   })
 })
@@ -935,7 +1031,7 @@ test('a restart does not fold the peer transcript twice', async () => {
     const stored = {}
     const first = await runOnce()
     assert.ok(first !== null)
-    assert.equal(first.session.appended.length, 4, 'the first run folds the whole transcript')
+    assert.equal(first.session.appended.length, 6, 'the first run folds the whole transcript')
     assert.equal(first.refresh.fetched, 1)
     assert.equal(stored.peerProxies['dev-peer|session-phone-1'].lastSeq, 2, 'the cursor lands in the ledger')
 
@@ -949,3 +1045,55 @@ test('a restart does not fold the peer transcript twice', async () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// 7 · queue 模式: 不拨 HTTP, 影子工作区与投影都从仓库里长出来 (2026-10-21)
+// ---------------------------------------------------------------------------
+
+test('queue 模式: 只读仓库的工作区名片与 live 快照, 一次 HTTP 都不发', async () => {
+  await withMount({
+    config: { peer: { token: TOKEN, mode: 'queue' } },
+    localWorkspaces: ['apk'],
+    handler: async ({ wired, root, lines }) => {
+      // 对端的工作区名片 (它自己报"我有一个 apk 工作区")
+      const cardDir = join(root, 'repo', 'workspace-peers')
+      mkdirSync(cardDir, { recursive: true })
+      writeFileSync(join(cardDir, 'dev-peer.json'), JSON.stringify({
+        v: 1,
+        deviceId: 'dev-peer',
+        name: 'Luwi 手机',
+        at: 1,
+        workspaces: [{ slug: 'apk', title: 'apk' }],
+      }))
+      // 对端把"只要回答"的那份投影写进了仓库 (它每一轮都会写)
+      const liveDir = join(root, 'repo', 'live', 'dev-peer')
+      mkdirSync(liveDir, { recursive: true })
+      writeFileSync(join(liveDir, 'session-phone-9.json'), JSON.stringify({
+        v: 2,
+        deviceId: 'dev-peer',
+        deviceName: 'Luwi 手机',
+        sessionId: 'session-phone-9',
+        title: '在手机上聊的那场',
+        cwd: '/storage/emulated/0/DSH',
+        running: false,
+        updatedAt: 5,
+        truncated: false,
+        entries: [{ seq: 1, role: 'user', text: '你好', at: 1 }],
+        draft: null,
+      }))
+
+      const result = await plugin.mountState.peerRefresh()
+      assert.equal(result.ok, true, JSON.stringify(result))
+      assert.equal(result.queueOnly, true, 'queue 模式走的是仓库那一条')
+      assert.equal(result.shadows, 1, '名片里的工作区建成了影子分组')
+      // 影子目录真的建出来了, 且注册表里有一条指向它
+      assert.equal(existsSync(join(root, 'lw', 'peer-workspaces', 'dev-peer', 'apk')), true)
+      const registered = [...wired.workspaces.values()].find(entry => /peer-workspaces/u.test(entry.path))
+      assert.ok(registered !== undefined, 'the shadow workspace is registered')
+      assert.equal(registered.title, 'apk（Luwi 手机）', '同名工作区带设备名标注')
+      // queue 模式不该有任何 HTTP 尝试的痕迹
+      assert.equal(lines.some(line => /api\.github|peer\.test:3080/u.test(line)), false)
+    },
+  })
+})
+

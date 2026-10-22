@@ -538,41 +538,47 @@ async function mountPlugin(mode) {
   return { ctx, fiber, root, workspaceRoot }
 }
 
-test('mounting with a workspace section wires a second engine behind the target parameter', async () => {
+test('mounting with a workspace section adds that source to the single repository', async () => {
   const harness = await mountPlugin('workspace-on')
   try {
-    const status = harness.ctx.tools.get(TOOL_STATUS)
+    const statusTool = harness.ctx.tools.get(TOOL_STATUS)
     const pull = harness.ctx.tools.get(TOOL_PULL)
     const push = harness.ctx.tools.get(TOOL_PUSH)
-    assert.ok(status !== undefined && pull !== undefined && push !== undefined, 'the three tools must register')
-    for (const tool of [status, pull, push]) {
+    assert.ok(statusTool !== undefined && pull !== undefined && push !== undefined, 'the three tools must register')
+    // target 枚举留着 (老调用不炸), 但 2026-10-20 起两种 target 落到**同一个仓库**
+    for (const tool of [statusTool, pull, push]) {
       assert.deepEqual(tool.parameters.properties.target.enum, ['sessions', 'workspace'], `${tool.name} must carry the target enum`)
     }
 
-    // 缺省打会话那根; target: workspace 打的是**另一根** (mirrorDir 是它自己的名字)
-    const sessions = await status.execute({}, {})
-    assert.equal(sessions.mirrorDir, 'sessions')
     // 工作区那根走的是配置里那个 root: 放一份 `.lw-sync` 进去, 它必须被排除表挡在门外
     put(harness.workspaceRoot, '.lw-sync/junk.txt', 'not ours to sync')
-    const workspace = await status.execute({ target: 'workspace' }, {})
-    assert.equal(workspace.ok, true, workspace.error)
-    assert.equal(workspace.mirrorDir, 'workspace')
-    assert.equal(workspace.remote, 'https://example.com/ws.git')
-    assert.deepEqual(workspace.excluded, ['.lw-sync'], `the worktree home is excluded: ${JSON.stringify(workspace)}`)
+    const status = await statusTool.execute({}, {})
+    assert.equal(status.ok, true, status.error)
+    assert.equal(status.mirrorDir, 'sessions')
+    assert.ok(Array.isArray(status.sources), 'the unified status lists every source')
+    assert.ok(status.sources.some(source => source.label === 'sessions'))
+    const workspaceSource = status.sources.find(source => source.label.startsWith('workspace: '))
+    assert.ok(workspaceSource !== undefined, `the workspace source is listed: ${JSON.stringify(status.sources)}`)
+    assert.ok(workspaceSource.excludedCount >= 1, `the worktree home is excluded: ${JSON.stringify(workspaceSource)}`)
+
+    // 老的 target=workspace 不再换引擎: 它就是同一份统一读数
+    const viaTarget = await statusTool.execute({ target: 'workspace' }, {})
+    assert.equal(viaTarget.ok, true, viaTarget.error)
+    assert.equal(viaTarget.mirrorDir, 'sessions')
   } finally {
     await harness.ctx.fiber.dispose()
     rmSync(harness.root, { recursive: true, force: true })
   }
 })
 
-test('without a workspace section the target parameter fails closed', async () => {
+test('without a workspace section the target parameter still resolves to the single repository', async () => {
   const harness = await mountPlugin('sessions-only')
   try {
-    const status = harness.ctx.tools.get(TOOL_STATUS)
-    const refused = await status.execute({ target: 'workspace' }, {})
-    assert.equal(refused.ok, false)
-    assert.match(refused.error, /workspace mirror is off/u)
-    const sessions = await status.execute({}, {})
+    const statusTool = harness.ctx.tools.get(TOOL_STATUS)
+    const status = await statusTool.execute({ target: 'workspace' }, {})
+    assert.equal(status.ok, true, status.error)
+    assert.equal(status.mirrorDir, 'sessions')
+    const sessions = await statusTool.execute({}, {})
     assert.notEqual(sessions.ok, false, 'the session target still works')
   } finally {
     await harness.ctx.fiber.dispose()

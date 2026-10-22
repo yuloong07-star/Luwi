@@ -125,6 +125,7 @@ import io.github.yuloong07star.luwi.scaffolds.SectionSmallTitle
 import io.github.yuloong07star.luwi.scaffolds.SectionTitle
 import io.github.yuloong07star.luwi.scaffolds.SuperTextField
 import io.github.yuloong07star.luwi.sync.ModeModel
+import io.github.yuloong07star.luwi.sync.PairPayload
 import io.github.yuloong07star.luwi.sync.SyncSetting
 import io.github.yuloong07star.luwi.theme.MonetKeyColorOptions
 import io.github.yuloong07star.luwi.theme.ThemeSettings
@@ -1390,47 +1391,19 @@ private fun PlaceholderItems(text: String) {
  * 里面 `apk add` 装的一切一起没, 所以点它先弹那一问; 而那一问里也要说清另一件事 —— 通道断开之后
  * 那个目录连删除按钮都够不着 (残留只能走 adb 或重装应用清)
  */
-/** 设置页「Luwi-dsh-sync」那一段的文本项 (逻辑名 → 标题/摘要/键盘形态) */
-private enum class SyncField(
-    val field: String,
-    val title: Int,
-    val summary: Int,
-    val secret: Boolean = false,
-    val uri: Boolean = false,
-    /** 对话框里那一格底下再补一句"该填成什么样" (0 = 不补) */
-    val note: Int = 0,
-) {
-    SESSION_REMOTE(SyncSetting.FIELD_SESSION_REMOTE, R.string.settings_sync_session_remote, R.string.settings_sync_session_remote_summary, uri = true, note = R.string.settings_sync_remote_hint),
-    WORKSPACE_REMOTE(SyncSetting.FIELD_WORKSPACE_REMOTE, R.string.settings_sync_workspace_remote, R.string.settings_sync_workspace_remote_summary, uri = true, note = R.string.settings_sync_remote_hint),
-    DEVICE_NAME(SyncSetting.FIELD_DEVICE_NAME, R.string.settings_sync_device_name, R.string.settings_sync_device_name_summary),
-    PUBLIC_URL(SyncSetting.FIELD_PUBLIC_URL, R.string.settings_sync_public_url, R.string.settings_sync_public_url_summary, uri = true),
-    PEER_URL(SyncSetting.FIELD_PEER_URL, R.string.settings_sync_peer_url, R.string.settings_sync_peer_url_summary, uri = true),
-    PEER_TOKEN(SyncSetting.FIELD_PEER_TOKEN, R.string.settings_sync_peer_token, R.string.settings_sync_peer_token_summary, secret = true),
-    BRANCH(SyncSetting.FIELD_BRANCH, R.string.settings_sync_branch, R.string.settings_sync_branch_summary),
-}
-
-/** 每一项现在写的是什么 (对话框的初值) */
-private fun syncInitial(field: SyncField, snapshot: SyncSetting.Snapshot): String = when (field) {
-    SyncField.SESSION_REMOTE -> snapshot.sessionRemote
-    SyncField.WORKSPACE_REMOTE -> snapshot.workspaceRemote
-    SyncField.DEVICE_NAME -> snapshot.deviceName
-    SyncField.PUBLIC_URL -> snapshot.publicUrl
-    SyncField.PEER_URL -> snapshot.peerUrl
-    SyncField.PEER_TOKEN -> snapshot.peerToken
-    SyncField.BRANCH -> snapshot.branch
-}
-
 /**
- * 设置页「Luwi-dsh-sync」那一段 (G1-2 对端)
+ * 设置页「Luwi-dsh-sync」那一段 (2026-10-20 起是扫码配对)
  *
- * 这一段写的是 `$DSH_HOME/lw/session-sync.json` —— **手机侧唯一的配置面** (插件在宿主里读它,
- * 手机侧的 overlay 行不带 config, 所以这里写下的每个键都会生效)。三条口径:
+ * 这一段写的是 `$DSH_HOME/lw/session-sync.json` —— **手机侧唯一的配置面**, 手机上现在只做三件事:
+ * **扫码配对** / 「同步」总开关 / 周期拉取, **仓库地址只在 PC 面板上填** (主人 2026-10-20 的口径):
+ * 那张二维码把仓库 / 分支 / 对端地址与口令 / 配对 id 一次带过来 (见 [PairPayload] 与
+ * [SyncSetting.applyPairing]), 手机侧不再有一排"自己填地址"的输入框
  *
- * - **远端地址与连接口令都不回显原文**: 地址只报"已配置 / 未配置" (值里可能有 token), 口令显示
- *   打码形态。要看原文去「看当前配置」那一页 (那里的口令也是打码的, 只有文件里才有真的)
- * - **改完要重启 host**: 那一条在右上角 ⋮ 里, 所以段首把那句话摆在人眼前, 而不是在这里再放一个按钮
- * - **对端那三行是一组**: 通道开关 + 对端地址 + 连接口令, 缺口令时通道是关的 (插件那一边是
- *   失败关闭), 所以状态行会把这件事说出来
+ * 三条口径:
+ * - **改完要重启 host**: 插件是**挂载时**读配置的, 所以总开关与配对这两条都当场 [DshHost.restart]
+ * - **令牌与地址不回显原文**: 「看当前配置」那一页也是打码的, 只有文件里才有真的
+ * - **相机权限没给 / 相机被视频模式占着, 都只说一句人话**: 权限那一条走 [PermissionRequests], 相机的
+ *   那一条写在窗里 (见 [QrScanDialog]), 两处都不崩
  */
 @Composable
 private fun SyncItems() {
@@ -1438,196 +1411,194 @@ private fun SyncItems() {
     val haptic = LocalHapticFeedback.current
     // 存完由 SyncSetting.revision 叫醒这一段 (与锁屏那一段同一个做法)
     val snapshot = remember(SyncSetting.revision) { SyncSetting.snapshot(context) }
-    var field by remember { mutableStateOf<SyncField?>(null) }
+    var scanning by remember { mutableStateOf(false) }
     var showRaw by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    // 换了一台机器再扫时先问一句: 重新配对会重置同步基线, 确认之后才写
+    var pending by remember { mutableStateOf<PairPayload?>(null) }
     var interval by remember(snapshot.pullInterval) { mutableIntStateOf(snapshot.pullInterval) }
+
+    val pairDone = stringResource(R.string.settings_sync_pair_done)
+    val switchedOn = stringResource(R.string.settings_sync_switched_on)
+    val switchedOff = stringResource(R.string.settings_sync_switched_off)
+    // 已配对那台机器的名字 (配对码里 from 是空的就按 PC 说)
+    val pairedName = snapshot.pairedFrom.ifBlank { "PC" }
+    // 状态那一句里的"仓库在哪": 有主机名就报主机名, 本机路径就报那一段路径
+    val repoWhere = snapshot.repoHost.ifBlank { snapshot.sessionRemote }
+
+    /** 一张合法配对码落到配置里: 写 → 说一声 → 重启 host → 关窗 (一个动作四件事) */
+    fun applyPairing(payload: PairPayload) {
+        val problem = SyncSetting.applyPairing(context, payload)
+        if (problem != null) {
+            notice = problem
+            return
+        }
+        notice = null
+        pending = null
+        scanning = false
+        Toast.makeText(context, pairDone, Toast.LENGTH_LONG).show()
+        DshHost.restart(context)
+    }
 
     PlaceholderItems(stringResource(R.string.settings_sync_note))
 
-    // ---- 第一排: 让 agent 帮你配置 (主人 2026-10-14) ----
-    // 这一段要填的东西不少, 而"照着上下文改一份配置"正好是 agent 拿手的: 点一下就把一段提示词投给
-    // 会话 (走的就是快捷指令那条路 —— VoiceInbox + SOURCE_QUICK), 它拿 `lw_sync` 工具自己看状态、
-    // 问主人要仓库地址、写下去。**它够不到 `$DSH_HOME` 是这条工具存在的理由**: dsh 的 fs 工具关在
-    // 工作区, lw_linux 的 proot 也只 bind 工作区
-    var asked by remember { mutableStateOf<String?>(null) }
-    ArrowPreference(
-        title = stringResource(R.string.settings_sync_ask_agent),
-        summary = stringResource(R.string.settings_sync_ask_agent_summary),
-        onClick = {
-            val seq = VoiceInbox.append(
-                context,
-                context.getString(R.string.settings_sync_agent_prompt),
-                source = VoiceInbox.SOURCE_QUICK,
-            )
-            asked = context.getString(
-                if (seq == null) R.string.settings_sync_agent_failed else R.string.settings_sync_agent_sent,
-            )
-        },
-    )
-    asked?.let { said -> PlaceholderItems(said) }
-
-    // ---- 总开关: **默认关** (新装没有远端地址 = 关), 打开之后才出现下面那几件该填的东西 ----
-    // 打开时如果还没填过地址, 直接就把地址那一行的对话框摆出来 (少走一次"自己去找那一行"), 存完
-    // 由 pendingSyncOn 把开关补上 —— 于是"想开同步"这件事是两次点击而不是四次
-    var pendingSyncOn by remember { mutableStateOf(false) }
+    // ---- 「同步」总开关: **默认关** (没有仓库地址 = 关), 打开与关掉都当场重启 host ----
     SwitchPreference(
         title = stringResource(R.string.settings_sync_master),
-        summary = stringResource(
-            if (snapshot.syncOn) R.string.settings_sync_master_on else R.string.settings_sync_master_off,
-        ),
+        summary = when {
+            // 还没配对时这一行只指路: 仓库地址在 PC 面板上, 这个开关本身替代不了那张二维码
+            !snapshot.paired -> stringResource(R.string.settings_sync_master_need_pair)
+            snapshot.syncOn -> stringResource(R.string.settings_sync_master_on)
+            else -> stringResource(R.string.settings_sync_master_off)
+        },
         checked = snapshot.syncOn,
         onCheckedChange = { wanted ->
             val problem = SyncSetting.setSyncOn(context, wanted)
-            if (problem == null && wanted && snapshot.sessionRemote.isBlank()) {
-                pendingSyncOn = true
-                field = SyncField.SESSION_REMOTE
+            if (problem == null) {
+                Toast.makeText(context, if (wanted) switchedOn else switchedOff, Toast.LENGTH_LONG).show()
+                DshHost.restart(context)
+            } else {
+                // 没有仓库地址可开: 把那句原因照实说 (它同时是一条"先去配对"的指路)
+                Toast.makeText(context, problem, Toast.LENGTH_LONG).show()
             }
         },
     )
 
-    if (!snapshot.syncOn) {
-        PlaceholderItems(stringResource(R.string.settings_sync_off_hint))
-    } else {
-        PlaceholderItems(stringResource(R.string.settings_sync_on_hint))
-
-        // ① 仓库: 会话那根是同步的主体 (工作区那根是可选的第二根)
-        PlaceholderItems(stringResource(R.string.settings_sync_step_git))
-        for (entry in listOf(SyncField.SESSION_REMOTE, SyncField.WORKSPACE_REMOTE)) {
-            val set = if (entry == SyncField.SESSION_REMOTE) snapshot.sessionRemoteSet else snapshot.workspaceRemoteSet
-            ArrowPreference(
-                title = stringResource(entry.title),
-                summary = stringResource(if (set) R.string.settings_sync_remote_set else R.string.settings_sync_remote_unset),
-                onClick = { field = entry },
-            )
-        }
-
-        // ② 什么时候同步 (三个都不选 = 只用时手动点, 这是刚打开时的样子)
-        PlaceholderItems(stringResource(R.string.settings_sync_step_auto))
-        SwitchPreference(
-            title = stringResource(R.string.settings_sync_auto_pull),
-            summary = stringResource(R.string.settings_sync_auto_pull_summary),
-            checked = snapshot.autoPull,
-            onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_AUTO_PULL, it) },
-        )
-        SwitchPreference(
-            title = stringResource(R.string.settings_sync_auto_push),
-            summary = stringResource(R.string.settings_sync_auto_push_summary),
-            checked = snapshot.autoPush,
-            onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_AUTO_PUSH, it) },
-        )
-        ArrowSlider(
-            title = stringResource(R.string.settings_sync_interval),
-            summary = stringResource(R.string.settings_sync_interval_summary, interval),
-            value = interval.toFloat(),
-            onValueChange = { raw ->
-                val next = raw.roundToInt().coerceIn(0, 60)
-                // 拖动时每一帧都写一次文件没有必要: 取整之后变了才存
-                if (next != interval) {
-                    interval = next
-                    SyncSetting.setPullInterval(context, next)
+    // ---- 扫码配对: 这一段唯一需要人的动作 (仓库地址不再手填) ----
+    ArrowPreference(
+        title = stringResource(R.string.settings_sync_pair),
+        summary = if (snapshot.paired) {
+            stringResource(R.string.settings_sync_pair_paired, pairedName)
+        } else {
+            stringResource(R.string.settings_sync_pair_unpaired)
+        },
+        onClick = {
+            haptic.contextClick()
+            notice = null
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                scanning = true
+            } else {
+                // 权限只能由 Activity 发起: 这一次点击只把要什么写进队列, 拿到答案再开窗
+                PermissionRequests.request(listOf(Manifest.permission.CAMERA)) {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        scanning = true
+                    } else {
+                        notice = context.getString(R.string.settings_sync_pair_error_camera)
+                    }
                 }
-            },
-            valueRange = 0f..60f,
-            steps = 0,
-            showKeyPoints = true,
-            keyPoints = listOf(0f, 1f, 5f, 15f, 30f, 60f),
-            unit = "min",
-            inputSummary = stringResource(R.string.settings_sync_interval_dialog),
-            inputLabel = "min",
-            inputInitialValue = interval.toString(),
-            inputFilter = { text -> text.filter(Char::isDigit) },
-            inputValueRange = 0f..60f,
-            onInputConfirm = { raw ->
-                raw.toIntOrNull()?.let { typed ->
-                    val next = typed.coerceIn(0, 60)
-                    interval = next
-                    SyncSetting.setPullInterval(context, next)
-                }
-            },
-        )
-        ArrowPreference(
-            title = stringResource(SyncField.BRANCH.title),
-            summary = if (snapshot.branch.isBlank()) "main" else snapshot.branch,
-            onClick = { field = SyncField.BRANCH },
-        )
-
-        // ③ 工作区那一根 (可选): 文件走的是另一个远端, 与上面会话那根各记各的账
-        PlaceholderItems(stringResource(R.string.settings_sync_step_workspace))
-        SwitchPreference(
-            title = stringResource(R.string.settings_sync_workspace_on),
-            summary = stringResource(R.string.settings_sync_workspace_on_summary),
-            checked = snapshot.workspaceOn,
-            onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_WORKSPACE_ON, it) },
-        )
-    }
-
-    // ---- 身份与跨设备通道: **与同步开关无关**, 关着同步时这几行照样能用 ----
-    PlaceholderItems(stringResource(R.string.settings_sync_step_peer))
-    ArrowPreference(
-        title = stringResource(SyncField.DEVICE_NAME.title),
-        summary = if (snapshot.deviceName.isBlank()) stringResource(R.string.settings_sync_device_name_none) else snapshot.deviceName,
-        onClick = { field = SyncField.DEVICE_NAME },
-    )
-    ArrowPreference(
-        title = stringResource(SyncField.PUBLIC_URL.title),
-        summary = if (snapshot.publicUrl.isBlank()) stringResource(R.string.settings_sync_remote_unset) else snapshot.publicUrl,
-        onClick = { field = SyncField.PUBLIC_URL },
-    )
-    SwitchPreference(
-        title = stringResource(R.string.settings_sync_peer_on),
-        summary = stringResource(R.string.settings_sync_peer_on_summary),
-        checked = snapshot.peerOn,
-        onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_PEER_ON, it) },
-    )
-    ArrowPreference(
-        title = stringResource(SyncField.PEER_URL.title),
-        summary = if (snapshot.peerUrl.isBlank()) stringResource(R.string.settings_sync_peer_url_none) else snapshot.peerUrl,
-        onClick = { field = SyncField.PEER_URL },
-    )
-    ArrowPreference(
-        title = stringResource(SyncField.PEER_TOKEN.title),
-        summary = stringResource(R.string.settings_sync_peer_token_state, SyncSetting.maskedToken(snapshot.peerToken)),
-        onClick = { field = SyncField.PEER_TOKEN },
-    )
-    SwitchPreference(
-        title = stringResource(R.string.settings_sync_peer_listen),
-        summary = stringResource(R.string.settings_sync_peer_listen_summary),
-        checked = snapshot.peerListen,
-        onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_PEER_LISTEN, it) },
-    )
-    SwitchPreference(
-        title = stringResource(R.string.settings_sync_peer_proxy),
-        summary = stringResource(R.string.settings_sync_peer_proxy_summary),
-        checked = snapshot.peerProxy,
-        onCheckedChange = { SyncSetting.setFlag(context, SyncSetting.FLAG_PEER_PROXY, it) },
+            }
+        },
     )
 
+    // ---- 周期拉取: 滑块与手打都留着 (0 = 关, 与插件那一侧同一个口径) ----
+    ArrowSlider(
+        title = stringResource(R.string.settings_sync_interval),
+        summary = stringResource(R.string.settings_sync_interval_summary, interval),
+        value = interval.toFloat(),
+        onValueChange = { raw ->
+            val next = raw.roundToInt().coerceIn(0, 60)
+            // 拖动时每一帧都写一次文件没有必要: 取整之后变了才存
+            if (next != interval) {
+                interval = next
+                SyncSetting.setPullInterval(context, next)
+            }
+        },
+        valueRange = 0f..60f,
+        steps = 0,
+        showKeyPoints = true,
+        keyPoints = listOf(0f, 1f, 5f, 15f, 30f, 60f),
+        unit = "min",
+        inputSummary = stringResource(R.string.settings_sync_interval_dialog),
+        inputLabel = "min",
+        inputInitialValue = interval.toString(),
+        inputFilter = { text -> text.filter(Char::isDigit) },
+        inputValueRange = 0f..60f,
+        onInputConfirm = { raw ->
+            raw.toIntOrNull()?.let { typed ->
+                val next = typed.coerceIn(0, 60)
+                interval = next
+                SyncSetting.setPullInterval(context, next)
+            }
+        },
+    )
+
+    // ---- 看当前配置: 只读, 令牌打码 (与那一段别处同一个打码实现) ----
     ArrowPreference(
         title = stringResource(R.string.settings_sync_show),
         summary = stringResource(R.string.settings_sync_show_summary),
         onClick = { showRaw = true },
     )
 
+    // ---- 一句状态: 关着 / 已配对 / 没配对 ----
+    if (!snapshot.syncOn) {
+        PlaceholderItems(stringResource(R.string.settings_sync_status_off))
+    } else if (snapshot.paired) {
+        PlaceholderItems(
+            stringResource(
+                R.string.settings_sync_status_paired,
+                pairedName,
+                repoWhere.ifBlank { "?" },
+                snapshot.branch.ifBlank { "main" },
+                interval,
+            ),
+        )
+    } else {
+        PlaceholderItems(stringResource(R.string.settings_sync_status_unpaired))
+    }
+
+    notice?.let { said -> PlaceholderItems(said) }
     SyncSetting.message?.let { said -> PlaceholderItems(said) }
 
-    field?.let { picking ->
-        SyncFieldDialog(
-            field = picking,
-            initial = syncInitial(picking, snapshot),
-            onDismissRequest = {
-                field = null
-                pendingSyncOn = false
-            },
-            onSave = { text ->
-                val problem = SyncSetting.setText(context, picking.field, text)
-                field = null
-                // "想开同步 → 先填地址"那一趟: 地址存下去了就把开关当场补上, 不用再点第二下
-                if (problem == null && pendingSyncOn && picking.field == SyncSetting.FIELD_SESSION_REMOTE) {
-                    pendingSyncOn = false
-                    SyncSetting.setSyncOn(context, true)
+    // 扫码窗: 解出第一张合法的码就交给 applyPairing (它自己关窗); 换了一台机器则先问一句
+    if (scanning) {
+        QrScanDialog(
+            onDismissRequest = { scanning = false },
+            onPayload = { payload ->
+                if (snapshot.paired && snapshot.pairedId.isNotBlank() && snapshot.pairedId != payload.id) {
+                    scanning = false
+                    pending = payload
+                } else {
+                    applyPairing(payload)
                 }
             },
         )
+    }
+
+    // 重新配对那一问: 说清它会重置什么, 确认之后才写 (取消就什么都不动)
+    pending?.let { payload ->
+        OverlayDialog(
+            show = true,
+            title = stringResource(R.string.settings_sync_pair_reconfirm_title),
+            summary = stringResource(
+                R.string.settings_sync_pair_reconfirm_body,
+                pairedName,
+                payload.from.ifBlank { "PC" },
+            ),
+            defaultWindowInsetsPadding = false,
+            onDismissRequest = { pending = null },
+        ) {
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.button_cancel),
+                    onClick = {
+                        haptic.contextClick()
+                        pending = null
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = stringResource(R.string.settings_sync_pair_reconfirm_ok),
+                    onClick = {
+                        haptic.confirm()
+                        applyPairing(payload)
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+            }
+        }
     }
 
     if (showRaw) {
@@ -1653,66 +1624,6 @@ private fun SyncItems() {
                     colors = ButtonDefaults.textButtonColorsPrimary(),
                 )
             }
-        }
-    }
-}
-
-/** 一个文本项的对话框 (与「注入密码」那一个同一个形制: 取 `rememberSaveable` 的初值 + 确认写回) */
-@Composable
-private fun SyncFieldDialog(
-    field: SyncField,
-    initial: String,
-    onDismissRequest: () -> Unit,
-    onSave: (String) -> Unit,
-) {
-    val haptic = LocalHapticFeedback.current
-    OverlayDialog(
-        show = true,
-        title = stringResource(field.title),
-        summary = stringResource(field.summary),
-        defaultWindowInsetsPadding = false,
-        onDismissRequest = onDismissRequest,
-    ) {
-        var text by rememberSaveable(initial) { mutableStateOf(initial) }
-        SuperTextField(
-            modifier = Modifier.padding(bottom = if (field.note != 0) 8.dp else 16.dp),
-            value = text,
-            onValueChange = { text = it },
-            singleLine = true,
-            useLabelAsPlaceholder = true,
-            visualTransformation = if (field.secret) PasswordVisualTransformation() else VisualTransformation.None,
-            keyboardOptions = KeyboardOptions(
-                imeAction = ImeAction.Done,
-                keyboardType = if (field.uri) KeyboardType.Uri else KeyboardType.Text,
-            ),
-        )
-        // 「说清楚这一空该填什么」: 地址那两格底下补一句例子 (与「添加模型」那三个框同一个做法)
-        if (field.note != 0) {
-            Text(
-                text = stringResource(field.note),
-                color = colorScheme.onSurfaceVariantActions,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 16.dp),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(
-                text = stringResource(R.string.button_cancel),
-                onClick = {
-                    haptic.contextClick()
-                    onDismissRequest()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                text = stringResource(R.string.settings_sync_confirm),
-                onClick = {
-                    haptic.confirm()
-                    onSave(text)
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
         }
     }
 }

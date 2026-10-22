@@ -360,6 +360,9 @@ dependencies {
     implementation(libs.miuix.squircle)
 
     implementation(libs.kotlinx.serialization.json)
+    // 扫码配对 (2026-10-20): 二维码的解码用 ZXing 的 core (纯 Java, 不依赖 Android 也不依赖它那个
+    // 旧 camera 包 —— 相机那一路是我们自己的 Camera2, 见 sync/QrScanner.kt)
+    implementation(libs.zxing.core)
     // LW 插件的接口那一份 (手写 Binder 的两个接口 + 常量, 批次 9): 伴侣样例与这里引的是同一个模块,
     // 于是"两侧同一份接口"不是一句口号 —— 描述符与 transaction code 只有一处定义
     implementation(project(":lwplugin-api"))

@@ -83,16 +83,30 @@ export function proxyEventsFrom(entries, state = {}, maxEvents = LIVE_LIMITS.MAX
       openTurn = turnCounter
       events.push({ type: 'turn/start', data: { turn: openTurn }, surface: false })
     }
+    // step/start 与 step/end 不能省: 界面的对话流把一条 assistant 消息归进**某一步**里,
+    // 没有这一对边界时它只画出"已完成"、不画正文 (2026-10-22 真机实测: 会话文件里明明有回答,
+    // 打开着的界面只有两行「已完成」)
+    events.push({ type: 'step/start', data: { turn: openTurn, step: 1 }, surface: false })
     events.push({
       type: 'assistant/message',
       data: {
         turn: openTurn,
         step: 1,
-        message: { id: `peer-${seq}`, role: 'assistant', content: [{ type: 'text', text }] },
+        message: {
+          id: `peer-${seq}`,
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+          // 2026-10-22 晚补: 宿主自己写的 assistant/message **一定**带 source.kind='model'
+          // (provider / model / replayState 那一坨), 界面拿它画模型标签与回放信息。折回来的
+          // 消息从前没有这一个字段 —— 真机上那场会话整页空白 (日志里问答都齐, 界面上什么都没有),
+          // 而宿主自己写的会话渲染正常。补一个同形的 source, 让折回的那条与宿主写的没有区别
+          source: { kind: 'model', provider: 'luwi-peer', model: 'luwi-peer' },
+        },
         stream: [],
       },
       surface: true,
     })
+    events.push({ type: 'step/end', data: { turn: openTurn, step: 1 }, surface: false })
     events.push({ type: 'turn/end', data: { turn: openTurn, reason: { kind: 'completed' } }, surface: false })
     openTurn = null
     applied += 1
@@ -125,16 +139,31 @@ export function proxyUserMessage(text, turn) {
 
 /**
  * 一条"这一句没能送到对端"的本地通知 (进投影会话的日志, 并且**不调模型**)。
- * 用的是本插件自己的 source kind (与冲突通知同一形制), 界面会把它画成注入的上下文行
+ * 用的是本插件自己的 source kind (与冲突通知同一形制), 界面会把它画成注入的上下文行。
+ *
+ * **`id` 与 `role` 一个都不能少** (2026-10-20 真机事故): 投影的 `deriveEventMessage` 把
+ * `user/message` 的 `data` 原样当作历史消息交给 provider, 少了 `role` 就会发出
+ * `{"content":[…]}` 这样的消息, DeepSeek 那头回 `messages[1]: missing field role`
+ * (400 INVALID_REQUEST) —— 而且这条日志留在会话里, 之后每一轮都撞同一堵墙。
+ * 少了 `id`, 从盘上重新装载这份会话时事件形状校验也会拒 (`lacks an identified message`)
  * @param {string} reason - 为什么没送到。
  * @param {string} device - 对端叫什么。
+ * @param {{text?: string, id?: string}} [options] - 改写正文 (排进仓库队列那一档) 与显式消息 id。
  * @returns {Array<{type: string, data: object, surface: boolean}>} 事件。
  */
-export function proxyNoticeEvents(reason, device) {
+export function proxyNoticeEvents(reason, device, options = {}) {
+  const text = typeof options.text === 'string' && options.text.trim() !== ''
+    ? options.text.trim()
+    : `这一句没有送到 ${device}: ${reason}`
+  const id = typeof options.id === 'string' && options.id !== ''
+    ? options.id
+    : `peer-notice-${Math.random().toString(36).slice(2, 10)}`
   return [{
     type: 'user/message',
     data: {
-      content: [{ type: 'text', text: `这一句没有送到 ${device}: ${reason}` }],
+      id,
+      role: 'user',
+      content: [{ type: 'text', text }],
       source: { kind: 'dsh-session-sync', form: 'notice', summary: 'a cross-device line did not go out' },
     },
     surface: true,

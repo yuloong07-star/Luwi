@@ -4,6 +4,16 @@
 repository (`index.mjs` and `lib/`) is original work by the dsh-session-sync
 contributors, licensed under Apache-2.0 (see `LICENSE`).
 
+**Luwi 例外 (2026-10-20)**: 扫码配对要在 PC 这一侧把二维码画出来, 而项目不引构建步骤 ——
+`lib/vendor/qrcode.mjs` 是 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
+`1.4.4` 的 `qrcode.js` + `qrcode_UTF8.js` **逐字拼接** (只在末尾补了一个 ESM 默认导出):
+
+| Bundled file | Upstream | Version | License | Purpose |
+|---|---|---|---|---|
+| `lib/vendor/qrcode.mjs` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) | 1.4.4 | MIT (Copyright (c) 2009 Kazuhiko Arase) | 把配对载荷画成二维码 (PC 面板显示, 手机扫) |
+
+'QR Code' is a registered trademark of DENSO WAVE INCORPORATED.
+
 The package depends on the following software. None of it is bundled into the
 published tarball; these are install-time dependencies:
 

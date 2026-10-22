@@ -159,8 +159,8 @@ test('the window cuts by count and by characters, and says so', () => {
 })
 
 test('condense survives empty and malformed input', () => {
-  assert.deepEqual(condense([]), { entries: [], draft: null, truncated: false })
-  assert.deepEqual(condense(undefined), { entries: [], draft: null, truncated: false })
+  assert.deepEqual(condense([]), { entries: [], draft: null, truncated: false, all: [] })
+  assert.deepEqual(condense(undefined), { entries: [], draft: null, truncated: false, all: [] })
   assert.deepEqual(condense(['nonsense', null, { type: 'user/message', data: null }]).entries, [])
 })
 

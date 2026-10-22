@@ -14,6 +14,8 @@ junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 # Edge 在线朗读走 WebSocket, 而安卓 SDK 里没有 WebSocket 客户端; 手写一次 RFC 6455 握手不值当
 okhttp = "5.2.3"
+# 扫码配对: ZXing 是纯 Java 的二维码解码器 (只用 core, 不碰那个旧 camera 包)
+zxing = "3.5.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -32,6 +34,9 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 
 # WebSocket 客户端: 「Edge 在线」那条引擎要用 (见 tool/LwEdgeTts.kt)
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+
+# 二维码解码 (扫码配对): 只要 core 那一份, 相机那一路是我们自己的 Camera2 (见 sync/QrScanner.kt)
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 
 # Miuix comes from Maven Central; SFA's composite build against the source tree is
 # only needed when patching Miuix itself. Never edit the Miuix library.

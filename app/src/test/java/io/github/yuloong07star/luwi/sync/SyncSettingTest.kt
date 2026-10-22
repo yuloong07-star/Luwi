@@ -260,4 +260,92 @@ class SyncSettingTest {
         assertNotNull("要说清为什么", problem)
         assertFalse(SyncSetting.snapshotOf(target).syncOn)
     }
+
+    /* ── 扫码配对 (2026-10-20) ────────────────────────────────── */
+
+    /** 一份能写进去的配对载荷 (各个用例只换自己关心的那一项) */
+    private fun paired(
+        remote: String = "https://user:token@github.com/me/sessions.git",
+        branch: String = "release/2.0.0",
+        peerUrl: String = "http://100.64.0.7:3080",
+        peerToken: String = "0123456789abcdef0123456789abcdef",
+        from: String = "书房 电脑",
+        at: Long? = 1760000000000L,
+    ) = PairPayload(
+        v = 1,
+        id = "3f9a1c2e-8b4d-4c1a-9f2e-7d6b5a4c3e21",
+        remote = remote,
+        branch = branch,
+        peerUrl = peerUrl,
+        peerToken = peerToken,
+        from = from,
+        at = at,
+    )
+
+    @Test
+    fun `扫码配对把该写的写全, lw 与 workspace 一个字节都不动`() {
+        val root = dir()
+        val target = file(root)
+        target.writeText(
+            """{"remote":"git://old/sessions.git","lw":{"savedRemote":"git://parked/x.git"},""" +
+                """"workspace":{"remote":"git://ws.git","enabled":true},"futureKey":42}""",
+        )
+        assertNull(SyncSetting.applyPairingIn(target, paired(), now = 1L))
+        val snapshot = SyncSetting.snapshotOf(target)
+        assertEquals("https://user:token@github.com/me/sessions.git", snapshot.sessionRemote)
+        assertEquals("release/2.0.0", snapshot.branch)
+        assertTrue("对端通道要打开", snapshot.peerOn)
+        assertTrue("影子工作区也要打开", snapshot.peerProxy)
+        assertTrue(snapshot.peerReady)
+        assertEquals("http://100.64.0.7:3080", snapshot.peerUrl)
+        assertTrue(snapshot.paired)
+        assertEquals("书房 电脑", snapshot.pairedFrom)
+        assertEquals(1760000000000L, snapshot.pairedAt)
+        assertEquals("github.com", snapshot.repoHost)
+        assertTrue(snapshot.autoPull)
+        assertTrue(snapshot.autoPush)
+        assertEquals("原来没有拉取间隔, 配对时补 15 分钟", 15, snapshot.pullInterval)
+        assertEquals("Luwi 手机", snapshot.deviceName)
+        val text = target.readText()
+        assertTrue("lw 段一个字都不动", text.contains("savedRemote"))
+        assertTrue("workspace 段一个字都不动", text.contains("git://ws.git"))
+        assertTrue("未知键留着", text.contains("futureKey"))
+    }
+
+    @Test
+    fun `配对保留 peer 段别的键与已经填好的间隔`() {
+        val root = dir()
+        val target = file(root)
+        target.writeText(
+            """{"deviceName":"我的手机","pullIntervalMinutes":30,""" +
+                """"peer":{"listen":false,"token":"zzzzzzzzzzzzzzzz","sendTimeoutMs":8000}}""",
+        )
+        assertNull(SyncSetting.applyPairingIn(target, paired(peerToken = ""), now = 1L))
+        val snapshot = SyncSetting.snapshotOf(target)
+        assertFalse("listen 是别人写的键", snapshot.peerListen)
+        assertTrue("间隔已经填过就不覆盖", snapshot.pullInterval == 30)
+        assertEquals("设备名已经起过就不覆盖", "我的手机", snapshot.deviceName)
+        assertTrue("口令留空就沿用原来那一份", snapshot.peerToken.isNotEmpty())
+        val text = target.readText()
+        assertTrue(text.contains("sendTimeoutMs"))
+        assertTrue(text.contains("\"listen\": false") || text.contains("\"listen\":false"))
+    }
+
+    @Test
+    fun `配对时分支留空按 main, at 缺了用当下时刻`() {
+        val root = dir()
+        val target = file(root)
+        assertNull(SyncSetting.applyPairingIn(target, paired(branch = "", at = null), now = 1234L))
+        val snapshot = SyncSetting.snapshotOf(target)
+        assertEquals("main", snapshot.branch)
+        assertEquals(1234L, snapshot.pairedAt)
+    }
+
+    @Test
+    fun `配对码没有仓库地址时拒写`() {
+        val root = dir()
+        val target = file(root)
+        assertNotNull(SyncSetting.applyPairingIn(target, paired(remote = "  "), now = 1L))
+        assertFalse("拒了就不该写出文件", target.isFile)
+    }
 }

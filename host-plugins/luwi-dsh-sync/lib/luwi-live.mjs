@@ -52,18 +52,19 @@ export const LIVE_SNAPSHOT_VERSION = 2
 export const LIVE_SNAPSHOT_VERSION_LEGACY = 1
 
 /**
- * 把一场会话的事件折成投影快照里的那两坨。
+ * 把一场会话的事件折成"条目 + 草稿" —— **不截窗口**。
  *
- * @param {Array<{seq?: number, time?: number, type?: string, data?: unknown}>} events - 日志顺序的事件 (sessionQuery.readSurface / readSession 的产物)。
- * @param {{maxEntries?: number, maxChars?: number, running?: boolean}} [options] - 窗口 (缺省取 LIVE_LIMITS 的下界与常量缺省) 与"这一场此刻在不在跑" (在跑则最后那一轮的回答进 draft, 否则它也算落定)。
- * @returns {{entries: Array<{seq: number, role: string, text: string, at: number}>, draft: {seq: number, text: string}|null, truncated: boolean}} 投影内容。
+ * live 快照只留最近 N 条 (滚动窗口), 而方案文档 §5.4 的 `conv/` 对话账要的是**全部**已落定的
+ * 条目: 对端离线一轮再回来时, 窗口可能已经滑过它的游标, 中间那段只有这本能补。两条口径同一份
+ * 代码折 (见 [condense]), 不各写一遍
+ * @param {Array<{seq?: number, time?: number, type?: string, data?: unknown}>} events - 日志顺序的事件。
+ * @param {{running?: boolean}} [options] - "这一场此刻在不在跑" (在跑则最后那一轮的回答进草稿)。
+ * @returns {{entries: Array<{seq: number, role: string, text: string, at: number}>, draft: {seq: number, text: string}|null}} 全部条目与草稿。
  */
-export function condense(events, options = {}) {
-  const maxEntries = clampInt(options.maxEntries, LIVE_LIMITS.MIN_MAX_ENTRIES, LIVE_LIMITS.MAX_MAX_ENTRIES, 40)
-  const maxChars = clampInt(options.maxChars, LIVE_LIMITS.MIN_MAX_CHARS, LIVE_LIMITS.MAX_MAX_CHARS, 16000)
+export function collectLiveEntries(events, options = {}) {
   const running = options.running === true
   const list = Array.isArray(events) ? events : []
-  /** 有序的收条: 先按日志顺序摆好, 最后一步才截窗口 */
+  /** 有序的收条: 先按日志顺序摆好, 最后一步才排序合并 */
   const items = []
   /**
    * 每一轮的"最后那段回答": 一条 user/message 开一个桶, 之后的 assistant/message 往当前那个桶里写
@@ -113,18 +114,32 @@ export function condense(events, options = {}) {
   }
   // 落定: 桶被 turn/end 收过, 或者**它后面还有一条主人自己的用户消息**(下一轮开了这一轮就落了),
   // 最后那个桶由 running 说话 (在跑 = 还在流, 进 draft)
-  const entries = []
+  const answers = []
   let draft = null
   for (const [index, turn] of turns.entries()) {
     if (turn.text === '') continue
     const settled = turn.ended || index !== turns.length - 1 || !running
-    if (settled) entries.push({ seq: turn.seq, role: 'assistant', text: turn.text, at: turn.at })
+    if (settled) answers.push({ seq: turn.seq, role: 'assistant', text: turn.text, at: turn.at })
     else draft = { seq: turn.seq, text: turn.text }
   }
-  const merged = [...items, ...entries].sort((left, right) => left.seq - right.seq || left.role.localeCompare(right.role))
+  const entries = [...items, ...answers].sort((left, right) => left.seq - right.seq || left.role.localeCompare(right.role))
+  return { entries, draft }
+}
+
+/**
+ * 把一场会话的事件折成投影快照里的那两坨。
+ *
+ * @param {Array<{seq?: number, time?: number, type?: string, data?: unknown}>} events - 日志顺序的事件 (sessionQuery.readSurface / readSession 的产物)。
+ * @param {{maxEntries?: number, maxChars?: number, running?: boolean}} [options] - 窗口 (缺省取 LIVE_LIMITS 的下界与常量缺省) 与"这一场此刻在不在跑" (在跑则最后那一轮的回答进 draft, 否则它也算落定)。
+ * @returns {{entries: Array<{seq: number, role: string, text: string, at: number}>, draft: {seq: number, text: string}|null, truncated: boolean, all: Array<{seq: number, role: string, text: string, at: number}>}} 投影内容 (外加**不截窗口**的那一份 `all`: 对话账 conv/ 用它)。
+ */
+export function condense(events, options = {}) {
+  const maxEntries = clampInt(options.maxEntries, LIVE_LIMITS.MIN_MAX_ENTRIES, LIVE_LIMITS.MAX_MAX_ENTRIES, 40)
+  const maxChars = clampInt(options.maxChars, LIVE_LIMITS.MIN_MAX_CHARS, LIVE_LIMITS.MAX_MAX_CHARS, 16000)
+  const collected = collectLiveEntries(events, { running: options.running === true })
   // 窗口: 先按条数, 再按字数 (从最老的开始丢), 丢了就如实标记
   let truncated = false
-  let kept = merged
+  let kept = collected.entries
   if (kept.length > maxEntries) {
     kept = kept.slice(kept.length - maxEntries)
     truncated = true
@@ -141,7 +156,7 @@ export function condense(events, options = {}) {
     kept = kept.slice(cut)
     truncated = true
   }
-  return { entries: kept, draft, truncated }
+  return { entries: kept, draft: collected.draft, truncated, all: collected.entries }
 }
 
 /**

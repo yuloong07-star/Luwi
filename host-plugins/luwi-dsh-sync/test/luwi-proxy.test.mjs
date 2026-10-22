@@ -25,17 +25,22 @@ test('a user entry opens a turn and an assistant entry closes it', () => {
   assert.equal(first.events[1].data.source.kind, 'user', 'the bubble has to read as the human speaking')
 
   const second = proxyEventsFrom([entry(2, 'assistant', '答一句')], first)
-  assert.deepEqual(second.events.map(event => event.type), ['assistant/message', 'turn/end'])
+  assert.deepEqual(second.events.map(event => event.type), ['step/start', 'assistant/message', 'step/end', 'turn/end'])
   assert.equal(second.events[0].data.turn, 1)
-  assert.equal(second.events[0].surface, true)
-  assert.equal(second.events[1].surface, false)
+  assert.equal(second.events[0].surface, false, 'step boundaries are not surface events')
+  assert.equal(second.events[1].surface, true)
+  assert.equal(second.events[1].data.message.content[0].text, '答一句')
+  // 宿主自己写的 assistant/message 一定带 source.kind='model' (界面拿它画模型标签);
+  // 折回来的那条少了它, 真机上整页空白 (2026-10-22 晚补)
+  assert.equal(second.events[1].data.message.source.kind, 'model')
+  assert.equal(typeof second.events[1].data.message.source.model, 'string')
   assert.equal(second.openTurn, null)
   assert.equal(second.turnCounter, 1)
 })
 
 test('an assistant entry with no open turn opens one of its own', () => {
   const result = proxyEventsFrom([entry(7, 'assistant', '没有问题的回答')])
-  assert.deepEqual(result.events.map(event => event.type), ['turn/start', 'assistant/message', 'turn/end'])
+  assert.deepEqual(result.events.map(event => event.type), ['turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end'])
   assert.equal(result.turnCounter, 1)
   assert.equal(result.openTurn, null)
 })
@@ -59,7 +64,7 @@ test('the text we already appended locally is recognized once when the peer echo
   assert.equal(local.data.turn, undefined, 'the local append rides the turn the host already opened')
   const state = { lastSeq: 0, openTurn: null, turnCounter: 1, pendingTexts: ['在 PC 上打的这一句'] }
   const applied = proxyEventsFrom([entry(1, 'user', '在 PC 上打的这一句'), entry(2, 'assistant', '手机那边的回答')], state)
-  assert.deepEqual(applied.events.map(event => event.type), ['turn/start', 'assistant/message', 'turn/end'], 'the echo does not become a second user bubble')
+  assert.deepEqual(applied.events.map(event => event.type), ['turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end'], 'the echo does not become a second user bubble')
   assert.equal(applied.skipped, 1)
   assert.deepEqual(applied.pendingTexts, [])
 })
@@ -72,7 +77,7 @@ test('a batch that does not fit moves no cursor past what it emitted', () => {
   assert.deepEqual(result.events.map(event => event.type), ['turn/start', 'user/message'])
   assert.equal(result.lastSeq, 1, 'the cursor stops at what was emitted, so nothing is lost')
   const next = proxyEventsFrom(many, result, 8)
-  assert.deepEqual(next.events.map(event => event.type), ['assistant/message', 'turn/end', 'turn/start', 'user/message'])
+  assert.deepEqual(next.events.map(event => event.type), ['step/start', 'assistant/message', 'step/end', 'turn/end', 'turn/start', 'user/message'])
 })
 
 test('malformed entries are ignored instead of breaking the fold', () => {
@@ -90,6 +95,17 @@ test('a missing answer still says so in the session log without waking a model',
   assert.equal(notice[0].surface, true)
   assert.equal(notice[0].data.source.kind, 'dsh-session-sync')
   assert.match(notice[0].data.content[0].text, /没有送到 Luwi 手机/u)
+  // 2026-10-20 真机事故: 少了这两个字段, 投影的 deriveEventMessage 会把 `data` 原样交给
+  // provider (`messages[1]: missing field role`, 400), 而且从盘上重装时形状校验也拒
+  assert.equal(notice[0].data.role, 'user', 'user/message 必须带 role')
+  assert.match(String(notice[0].data.id), /^peer-notice-/u, 'user/message 必须带 id')
+})
+
+test('a notice can carry its own wording and a stable id', () => {
+  const [queued] = proxyNoticeEvents('', 'Luwi 手机', { id: 'peer-queued-7', text: '已经排进仓库队列' })
+  assert.equal(queued.data.id, 'peer-queued-7')
+  assert.equal(queued.data.content[0].text, '已经排进仓库队列')
+  assert.equal(queued.data.role, 'user')
 })
 
 test('the projection title follows the peer session, with a fallback', () => {
@@ -115,3 +131,4 @@ test('appending stops at the first event the host refuses, without throwing', ()
   assert.equal(count, 2)
   assert.deepEqual(appended, [['turn/start', 1, false], ['user/message', 1, true]])
 })
+

@@ -56,6 +56,10 @@ for (const name of ['workspace', 'peer', 'branch', 'exclude', 'maxFileBytes', 'e
 }
 for (const name of ['token', 'url', 'sendTimeoutMs', 'pollSeconds', 'listen', 'proxy']) pluginKeys.add(name)
 for (const name of ['maxEntries', 'maxChars', 'keepMinutes']) pluginKeys.add(name)
+// 2026-10-20: 扫码配对段 / 会话基线窗口 / 新的工作区配置面 (插件那一侧认它们)
+for (const name of ['pairing', 'v', 'id', 'at', 'from', 'sessions', 'currentWindowMinutes', 'maxFiles', 'maxBytes', 'slug']) {
+  pluginKeys.add(name)
+}
 
 /** SyncSetting.kt 里声明的文件键 (`const val XXX_KEY = "..."`) */
 const declaredKeys = [...setting.matchAll(/const val ([A-Z_]+)_KEY = "([^"]+)"/gu)].map((one) => [one[1], one[2]])
@@ -179,19 +183,20 @@ check('两份 strings.xml 里这些键的顺序一致', orderIn(zh), orderIn(en)
 check('这一段至少引用了 20 个键 (段标题 + 十来行 + 两个对话框)', uniqueUsed.length >= 20, true)
 
 check(
-  '带参数的键都在 (状态行与令牌那两行)',
-  ['settings_sync_peer_token_state', 'settings_sync_interval_summary']
+  '带参数的键都在 (配对行 / 间隔 / 状态行)',
+  ['settings_sync_pair_paired', 'settings_sync_interval_summary', 'settings_sync_status_paired']
     .map((name) => zh.includes(`name="${name}"`) && en.includes(`name="${name}"`)),
-  [true, true],
+  [true, true, true],
 )
 
 check(
   '带参数的键在两份里占位符一致',
   [
-    zh.includes('现在 %1$s') && en.includes('now %1$s'),
+    zh.includes('已配对：%1$s') && en.includes('paired: %1$s'),
     zh.includes('%1$d 分钟一次') && en.includes('%1$d minute(s)'),
+    zh.includes('仓库 %2$s') && en.includes('repository %2$s'),
   ],
-  [true, true],
+  [true, true, true],
 )
 
 /* ── 五、令牌纪律 ─────────────────────────────────────────────────────── */
@@ -199,12 +204,13 @@ check(
 check(
   '设置页那一段只出现打码形态 (没有一处把原文交给界面)',
   [
-    /maskedToken\(snapshot\.peerToken\)/u.test(screen),
-    // 打码只有一处实现 (SyncSetting.maskedToken), 别处只能调它
+    // 2026-10-20: 对端那几行从设置页撤了 (配对下发), 口令只剩「看当前配置」那一页能看见 —— 也是打码的
     /fun maskedToken\(value: String\): String/u.test(setting),
-    /SyncSetting\.maskedToken/u.test(screen),
+    /SyncSetting\.pretty\(context\)/u.test(screen),
     // 「看当前配置」那一页也要打码
     /maskTokensIn\(file\.readText\(\)\)/u.test(setting),
+    // 手机侧不再自己填地址与口令: 配对只有一个入口 (扫码)
+    /SyncSetting\.applyPairing\(context, payload\)/u.test(screen),
   ],
   [true, true, true, true],
 )

@@ -54,10 +54,19 @@ test('a short token, a non-http url, and out-of-range numbers fail loudly', () =
   assert.throws(() => resolvePeerSpec([]), /must be an object/u)
 })
 
+test('peer.mode=queue 关掉 listen (一条对端路由都不接), 别的值加载期报错', () => {
+  const spec = resolvePeerSpec({ token: TOKEN, mode: 'queue', listen: true })
+  assert.equal(spec.mode, 'queue')
+  assert.equal(spec.listen, false, 'queue 模式不接对端调用')
+  assert.throws(() => resolvePeerSpec({ token: TOKEN, mode: 'http' }), /peer\.mode/u)
+  assert.throws(() => resolvePeerSpec({ token: TOKEN, mode: 1 }), /peer\.mode/u)
+})
+
 test('a valid peer section carries defaults for listen, proxy, timeout, poll and the two caps', () => {
   const spec = resolvePeerSpec({ token: TOKEN, url: 'http://100.64.0.7:3080' })
   assert.deepEqual(spec, {
     enabled: true,
+    mode: 'auto',
     listen: true,
     proxy: true,
     token: TOKEN,

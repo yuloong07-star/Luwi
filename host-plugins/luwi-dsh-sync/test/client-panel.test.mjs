@@ -272,7 +272,7 @@ test('面板渲染: 通道没开时画"通道没开"那一屏, 不抛', async ()
   }
 })
 
-test('面板渲染: 有快照时三档页签与两根镜像都在, 成本预告按字节给人读的数', async () => {
+test('面板渲染: 单页里配对在最上方、两根镜像都在, 没有诊断板块与名片', async () => {
   const { definition, restore } = await loadBundle()
   const snapshot = {
     ok: true,
@@ -299,8 +299,8 @@ test('面板渲染: 有快照时三档页签与两根镜像都在, 成本预告�
       { target: 'workspace', label: '工作区', on: false, remote: { state: 'unset', display: '' }, cost: null, meta: {}, status: null },
     ],
   }
-  // useState 顺序: [bump(useLocaleTick), snap, fault, tab, pending, answer, doctor, peers, auto, busy, copied, actionTarget, loadedAt]
-  const React = fakeReact([0, snapshot, null, 'overview'])
+  // useState 顺序: [bump(useLocaleTick), snap, fault, pending, answer, auto, busy, copied, actionTarget, loadedAt]
+  const React = fakeReact([0, snapshot, null])
   const services = sidebarServices()
   const restoreFetch = stubFetch({ handshake: 'luwi-dsh-sync/panel', config: { panelSeats: 'both', panelOps: true } })
   const { ctx, state } = makeCtx(services)
@@ -311,9 +311,6 @@ test('面板渲染: 有快照时三档页签与两根镜像都在, 成本预告�
     const panelComponent = state.registrations.find(r => r.spec.name === 'main').component
     const text = textsOf(panelComponent({})).join(' | ')
     assert.match(text, /已挂载/)
-    assert.match(text, /总览/)
-    assert.match(text, /操作/)
-    assert.match(text, /诊断/)
     assert.match(text, /PC/)
     assert.match(text, /runner=subprocess/)
     assert.match(text, /v=0\.2\.24/)
@@ -321,7 +318,15 @@ test('面板渲染: 有快照时三档页签与两根镜像都在, 成本预告�
     assert.match(text, /工作区/)
     assert.match(text, /221/)
     assert.match(text, /187\.8 MB/)
-    assert.match(text, /名片/)
+    // 2026-10-22 主人: 配对操作放最上方 —— 配对卡必须排在仓库卡前面
+    const atPair = text.indexOf('配对手机')
+    const atRepo = text.indexOf('仓库')
+    assert.ok(atPair >= 0, '配对卡要在页面上')
+    assert.ok(atRepo > atPair, '配对卡要排在仓库卡前面')
+    // 2026-10-22 主人: 诊断板块与名片撤掉
+    assert.doesNotMatch(text, /诊断/)
+    assert.doesNotMatch(text, /名片/)
+    assert.doesNotMatch(text, /自检/)
   } finally {
     for (const effect of state.effects) { if (typeof effect.off === 'function') effect.off() }
     for (const off of state.injectedCleanups) off()

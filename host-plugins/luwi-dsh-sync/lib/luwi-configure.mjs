@@ -14,11 +14,16 @@
 
 import { readFile, writeFile, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { WORKSPACE_LIMITS } from './constants.mjs'
 
 /** 顶层键 (与 app 的 SyncSetting.kt 逐字对齐; tools/check-sync-setting.mjs 也在钉这几个). */
 export const KEYS = Object.freeze({
   REMOTE: 'remote',
+  // Luwi 加 (2026-10-20): 私有仓库的访问令牌, **单独一个键** —— 面板那一格只存令牌,
+  // 真正给 git 的地址由 lib/luwi-remote.mjs 的 composeRemoteWithToken 拼出来
+  REMOTE_TOKEN: 'remoteToken',
   BRANCH: 'branch',
+  PUBLIC_URL: 'publicUrl',
   AUTO_PULL: 'autoPullOnStart',
   AUTO_PUSH: 'autoPushOnTurnEnd',
   INTERVAL: 'pullIntervalMinutes',
@@ -27,6 +32,18 @@ export const KEYS = Object.freeze({
   SAVED_AUTO_PULL: 'savedAutoPull',
   SAVED_AUTO_PUSH: 'savedAutoPush',
   SAVED_INTERVAL: 'savedInterval',
+  // Luwi 加 (2026-10-20): 扫码配对与新的工作区/基线配置面
+  PAIRING: 'pairing',
+  WORKSPACE: 'workspace',
+  SESSIONS: 'sessions',
+})
+
+/** 配对段里的键 */
+export const PAIRING_KEYS = Object.freeze({
+  VERSION: 'v',
+  ID: 'id',
+  AT: 'at',
+  FROM: 'from',
 })
 
 /** 间隔上限 (分钟), 与 SyncSetting.MAX_PULL_INTERVAL 同值. */
@@ -153,8 +170,12 @@ function applyOn(tree, on) {
 /**
  * 把一个补丁写进那份配置. **只动传进来的键**, 别的键一个字节都不碰.
  *
+ * 2026-10-20 扩了四块: `publicUrl` (手机要访问的本机地址)、`pairing` (扫码配对的 id)、
+ * `workspace` (root / maxFiles / maxBytes)、`sessions` (currentWindowMinutes)。
+ * `pairing` 由宿主决定什么时候写 (保存仓库/显式重新配对), 这里只校验与落盘
+ *
  * @param {string} file - `$DSH_HOME/lw/session-sync.json`。
- * @param {object} patch - `{remote?, branch?, autoPullOnStart?, autoPushOnTurnEnd?, pullIntervalMinutes?, on?}`。
+ * @param {object} patch - `{remote?, branch?, publicUrl?, autoPullOnStart?, autoPushOnTurnEnd?, pullIntervalMinutes?, workspace?, sessions?, pairing?, on?}`。
  * @returns {Promise<{ok: boolean, changed: string[], error?: string}>} 结果; 一处被拒就停在那一条上。
  */
 export async function applyConfigure(file, patch) {
@@ -169,6 +190,16 @@ export async function applyConfigure(file, patch) {
     changed.push(`remote = ${raw}`)
   }
 
+  // Luwi 加 (2026-10-20): 令牌单独一格 —— 空串 = 删掉 (清掉令牌), 不改地址
+  if (Object.prototype.hasOwnProperty.call(patch, 'remoteToken')) {
+    const raw = typeof patch.remoteToken === 'string' ? patch.remoteToken.trim() : String(patch.remoteToken ?? '')
+    if (raw.length > 4096) return { ok: false, changed, error: 'the access token is longer than 4096 characters' }
+    if (/\s/u.test(raw)) return { ok: false, changed, error: 'the access token must not contain whitespace' }
+    if (raw === '') delete tree[KEYS.REMOTE_TOKEN]
+    else tree[KEYS.REMOTE_TOKEN] = raw
+    changed.push(raw === '' ? 'remoteToken = (cleared)' : 'remoteToken = (set)')
+  }
+
   if (Object.prototype.hasOwnProperty.call(patch, 'branch')) {
     const raw = typeof patch.branch === 'string' ? patch.branch.trim() : String(patch.branch ?? '')
     const problem = branchProblem(raw)
@@ -176,6 +207,16 @@ export async function applyConfigure(file, patch) {
     if (raw === '') delete tree[KEYS.BRANCH]
     else tree[KEYS.BRANCH] = raw
     changed.push(`branch = ${raw === '' ? 'main' : raw}`)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'publicUrl')) {
+    const raw = typeof patch.publicUrl === 'string' ? patch.publicUrl.trim() : String(patch.publicUrl ?? '')
+    if (raw !== '' && !/^https?:\/\/[^\s]+$/iu.test(raw)) {
+      return { ok: false, changed, error: 'publicUrl must be an http(s) URL (it is the address the phone will call)' }
+    }
+    if (raw === '') delete tree[KEYS.PUBLIC_URL]
+    else tree[KEYS.PUBLIC_URL] = raw
+    changed.push(`publicUrl = ${raw === '' ? '(cleared)' : raw}`)
   }
 
   if (Object.prototype.hasOwnProperty.call(patch, 'pullIntervalMinutes')) {
@@ -195,6 +236,24 @@ export async function applyConfigure(file, patch) {
     changed.push(`${field} = ${value}`)
   }
 
+  if (Object.prototype.hasOwnProperty.call(patch, 'sessions')) {
+    const problem = applySessions(tree, patch.sessions)
+    if (problem !== null) return { ok: false, changed, error: problem }
+    changed.push('sessions.currentWindowMinutes')
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'workspace')) {
+    const problem = applyWorkspace(tree, patch.workspace)
+    if (problem !== null) return { ok: false, changed, error: problem }
+    changed.push('workspace settings')
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'pairing')) {
+    const problem = applyPairing(tree, patch.pairing)
+    if (problem !== null) return { ok: false, changed, error: problem }
+    changed.push(patch.pairing === null ? 'pairing = (cleared)' : `pairing.id = ${patch.pairing.id}`)
+  }
+
   if (Object.prototype.hasOwnProperty.call(patch, 'on')) {
     const value = patch.on
     if (typeof value !== 'boolean') return { ok: false, changed, error: 'on must be true or false' }
@@ -204,7 +263,7 @@ export async function applyConfigure(file, patch) {
   }
 
   if (changed.length === 0) {
-    return { ok: false, changed, error: 'nothing to change: pass remote, branch, autoPullOnStart, autoPushOnTurnEnd, pullIntervalMinutes or on' }
+    return { ok: false, changed, error: 'nothing to change: pass remote, branch, publicUrl, workspace, sessions, pairing, autoPullOnStart, autoPushOnTurnEnd, pullIntervalMinutes or on' }
   }
 
   // 目录可能还不存在 (全新机器上 lw/ 还没建)
@@ -221,4 +280,81 @@ export async function applyConfigure(file, patch) {
     }
   }
   return { ok: true, changed }
+}
+
+/** 取一个对象段 (不是对象就当空树)。 */
+function sectionOf(tree, key) {
+  const value = tree[key]
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {}
+}
+
+/**
+ * 写 sessions 段 (当前对话窗口, 分钟)。
+ * @param {object} tree - 整棵树 (就地改)。
+ * @param {unknown} patch - `{currentWindowMinutes?}`。
+ * @returns {string|null} 拒了就回原因。
+ */
+function applySessions(tree, patch) {
+  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) return 'sessions must be an object'
+  const section = sectionOf(tree, KEYS.SESSIONS)
+  if (Object.prototype.hasOwnProperty.call(patch, 'currentWindowMinutes')) {
+    const value = Number(patch.currentWindowMinutes)
+    if (!Number.isInteger(value) || value < 0 || value > MAX_INTERVAL_MINUTES) {
+      return `sessions.currentWindowMinutes must be an integer in [0, ${MAX_INTERVAL_MINUTES}]`
+    }
+    section.currentWindowMinutes = value
+  }
+  tree[KEYS.SESSIONS] = section
+  return null
+}
+
+/**
+ * 写 workspace 段 (只碰 root / maxFiles / maxBytes; 其余键原样留着)。
+ * @param {object} tree - 整棵树 (就地改)。
+ * @param {unknown} patch - `{root?, maxFiles?, maxBytes?}`; 空串 = 删掉那一项。
+ * @returns {string|null} 拒了就回原因。
+ */
+function applyWorkspace(tree, patch) {
+  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) return 'workspace must be an object'
+  const section = sectionOf(tree, KEYS.WORKSPACE)
+  if (Object.prototype.hasOwnProperty.call(patch, 'root')) {
+    const raw = typeof patch.root === 'string' ? patch.root.trim() : String(patch.root ?? '')
+    if (raw.length > 1024) return 'workspace.root is longer than 1024 characters'
+    if (raw === '') delete section.root
+    else section.root = raw
+  }
+  for (const [field, min, max] of [
+    ['maxFiles', WORKSPACE_LIMITS.MIN_MAX_FILES, WORKSPACE_LIMITS.MAX_MAX_FILES],
+    ['maxBytes', WORKSPACE_LIMITS.MIN_MAX_BYTES, WORKSPACE_LIMITS.MAX_MAX_BYTES],
+  ]) {
+    if (!Object.prototype.hasOwnProperty.call(patch, field)) continue
+    const value = Number(patch[field])
+    if (!Number.isInteger(value) || value < min || value > max) {
+      return `workspace.${field} must be an integer in [${min}, ${max}]`
+    }
+    section[field] = value
+  }
+  tree[KEYS.WORKSPACE] = section
+  return null
+}
+
+/**
+ * 写 pairing 段 (`{v,id,at,from}`); null = 删掉 (只在显式清理时用)。
+ * @param {object} tree - 整棵树 (就地改)。
+ * @param {unknown} patch - 配对段。
+ * @returns {string|null} 拒了就回原因。
+ */
+function applyPairing(tree, patch) {
+  if (patch === null) {
+    delete tree[KEYS.PAIRING]
+    return null
+  }
+  if (typeof patch !== 'object' || Array.isArray(patch)) return 'pairing must be an object'
+  const raw = /** @type {Record<string, unknown>} */ (patch)
+  const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+  if (!/^[0-9A-Za-z][0-9A-Za-z-]{7,127}$/u.test(id)) return 'pairing.id must be a uuid-like string'
+  const at = Number.isFinite(raw.at) ? Number(raw.at) : Date.now()
+  const from = typeof raw.from === 'string' ? raw.from.trim().slice(0, 64) : ''
+  tree[KEYS.PAIRING] = { v: 1, id, at, from }
+  return null
 }

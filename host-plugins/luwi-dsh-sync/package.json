@@ -1,7 +1,7 @@
 {
   "name": "luwi-dsh-sync",
   "description": "Luwi-dsh-sync: cross-device sync for DeepSeek Harness sessions — two git mirrors (session store + workspace), append-only keep-both merge with fork conflict resolution, a cross-device peer channel that hands a line to the agent on the other machine, /sync and sync_* tools, /sync doctor. · Luwi 二开, fork 自 PerryLink/dsh-session-sync (Apache-2.0): 手机侧 git 经 Linux 沙盒桥, 跨设备对端通道与投影会话, 相对上游改了什么见 UPSTREAM.md",
-  "version": "0.0.2",
+  "version": "0.3.3",
   "luwi": {
     "forkOf": "dsh-session-sync",
     "forkVersion": "0.2.24",

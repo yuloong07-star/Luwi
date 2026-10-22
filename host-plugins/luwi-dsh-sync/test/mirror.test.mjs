@@ -89,13 +89,14 @@ test('mirror never follows symlinked directories out of the root', async (t) => 
   }
 })
 
-test('ensureDeviceFile writes once and reports later identity changes', async (t) => {
+test('ensureDeviceFile writes once and never overwrites the first identity', async (t) => {
   const { root, clean } = await makeTemp()
   t.after(clean)
   assert.equal(await ensureDeviceFile(root, 'device.txt', 'dev-1'), true)
   assert.equal(await ensureDeviceFile(root, 'device.txt', 'dev-1'), false)
-  assert.equal(await ensureDeviceFile(root, 'device.txt', 'dev-2'), true)
-  assert.equal(await fs.readFile(path.join(root, 'device.txt'), 'utf8'), 'dev-2\n')
+  // 第二台设备进来时**不改写**: 两边各写各的 id 会每轮互相覆盖, 每轮长一个 fork
+  assert.equal(await ensureDeviceFile(root, 'device.txt', 'dev-2'), false)
+  assert.equal(await fs.readFile(path.join(root, 'device.txt'), 'utf8'), 'dev-1\n')
 })
 
 // 宿主私有会话产物（租约 + 迁移暂存）不进镜像；generation log（同步载荷）照常同步。

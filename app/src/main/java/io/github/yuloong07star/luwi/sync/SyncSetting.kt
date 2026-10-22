@@ -14,6 +14,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 
 /**
@@ -56,6 +57,20 @@ internal object SyncSetting {
     const val PEER_PROXY_KEY = "proxy"
     const val PEER_TOKEN_KEY = "token"
     const val PEER_URL_KEY = "url"
+
+    // --- 扫码配对留下的那一段 (2026-10-20, 键名与插件 `lib/luwi-configure.mjs` 的 PAIRING_KEYS 一致) --
+    //
+    // 扫一次码就把上面那些值全写好了, 而这一段记的是"这一台手机是被哪一张配对码配过来的" —— 界面靠它
+    // 说「已配对: <from>」, 再次扫码时要拿 id 比一下是不是换了一台机器
+    const val PAIRING_KEY = "pairing"
+    const val PAIRING_VERSION_KEY = "v"
+    const val PAIRING_ID_KEY = "id"
+    const val PAIRING_AT_KEY = "at"
+    const val PAIRING_FROM_KEY = "from"
+
+    /** 配对时补上的缺省值: 设备名没起过就叫这个, 周期拉取的 0 (插件的"关") 抬到 15 分钟 */
+    const val DEFAULT_DEVICE_NAME = "Luwi 手机"
+    const val DEFAULT_PULL_INTERVAL = 15
 
     // --- 「同步」总开关记在这里的东西 (`lw` 段是**应用自己那一层**, 插件不读它) ----------
     //
@@ -100,6 +115,9 @@ internal object SyncSetting {
     private val BRANCH_RE = Regex("^[A-Za-z0-9._/-]+$")
     private val DRIVE_RE = Regex("^[A-Za-z]:[\\\\/]")
 
+    /** 从仓库地址里取主机名 (与插件 `remoteHostOf` 同一个式子; 本机路径取不到就回空串) */
+    private val HOST_RE = Regex("^(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:[^@/]+@)?([^/:?#]+)")
+
     /** 设置页那一段要画的全部取值 */
     data class Snapshot(
         val sessionRemote: String = "",
@@ -118,10 +136,19 @@ internal object SyncSetting {
         val peerToken: String = "",
         /** `lw` 段里存着的上一次填过的地址 (关掉同步之后还回得来) */
         val savedRemote: String = "",
+        /** 这一台手机被哪一张配对码配过 (id / from / at 都取自 `pairing` 段) */
+        val pairedId: String = "",
+        val pairedFrom: String = "",
+        val pairedAt: Long = 0,
+        /** 仓库地址里那个主机名 (只给界面显示, 不碰凭据) */
+        val repoHost: String = "",
         val fileExists: Boolean = false,
     ) {
         val sessionRemoteSet: Boolean get() = sessionRemote.isNotBlank()
         val workspaceRemoteSet: Boolean get() = workspaceRemote.isNotBlank()
+
+        /** 配过对没有 (`pairing.id` 有值就是, 手填地址那条老路仍然算未配对) */
+        val paired: Boolean get() = pairedId.isNotBlank()
 
         /**
          * 「同步」总开关现在开着吗
@@ -171,6 +198,22 @@ internal object SyncSetting {
     fun setSyncOn(context: Context, on: Boolean): String? =
         finish(setSyncOnIn(file(context), on))
 
+    /**
+     * 把一张扫码配对得到的载荷写成配置 (2026-10-20)
+     *
+     * 一个动作把该写的全写掉, 于是"扫一次就能用"这件事不是靠界面上按顺序点出来的:
+     *   · 会话: `remote` 与 `branch` (配对码里空分支按 main)
+     *   · 对端: `enabled=true` / `proxy=true`, 地址与口令**非空才写** (空了就沿用手机现在那一份)
+     *   · `pairing` 段: v / id / at / from —— 界面靠它说「已配对: <from>」, 再扫码时拿 id 比
+     *   · 缺省值: 设备名没起过补 `Luwi 手机`, 周期拉取是 0 (插件的"关") 就抬到 15 分钟
+     *
+     * **`lw` 段与 `workspace` 段一个字节都不动** (前者是"关同步时把地址存着"那一笔, 后者是
+     * 工作区镜像那一根, 与配对无关), 别的键照旧整棵树抄过去
+     * @return null 成功, 否则是一句能给人看的原因
+     */
+    fun applyPairing(context: Context, payload: PairPayload): String? =
+        finish(applyPairingIn(file(context), payload))
+
     /** 配置文件里那棵树的原文 (令牌已打码; 设置页「看当前配置」用) */
     fun pretty(context: Context): String = prettyOf(file(context))
 
@@ -189,8 +232,10 @@ internal object SyncSetting {
         val workspace = root[WORKSPACE_KEY] as? JsonObject
         val peer = root[PEER_KEY] as? JsonObject
         val lw = root[LW_KEY] as? JsonObject
+        val pairing = root[PAIRING_KEY] as? JsonObject
+        val remote = text(root, SESSION_REMOTE_KEY)
         Snapshot(
-            sessionRemote = text(root, SESSION_REMOTE_KEY),
+            sessionRemote = remote,
             branch = text(root, BRANCH_KEY),
             deviceName = text(root, DEVICE_NAME_KEY),
             publicUrl = text(root, PUBLIC_URL_KEY),
@@ -205,6 +250,10 @@ internal object SyncSetting {
             peerUrl = peer?.let { text(it, PEER_URL_KEY) } ?: "",
             peerToken = peer?.let { text(it, PEER_TOKEN_KEY) } ?: "",
             savedRemote = lw?.let { text(it.toMap(), SAVED_REMOTE_KEY) } ?: "",
+            pairedId = pairing?.let { text(it, PAIRING_ID_KEY) } ?: "",
+            pairedFrom = pairing?.let { text(it, PAIRING_FROM_KEY) } ?: "",
+            pairedAt = pairing?.let { (it[PAIRING_AT_KEY] as? JsonPrimitive)?.longOrNull } ?: 0,
+            repoHost = remoteHostOf(remote),
             fileExists = file.isFile,
         )
     }.getOrElse { Snapshot() }
@@ -227,7 +276,8 @@ internal object SyncSetting {
         val root = readOf(file)
         val lwNow = (root[LW_KEY] as? JsonObject)?.toMap() ?: emptyMap()
         if (on && text(root, SESSION_REMOTE_KEY).ifBlank { text(lwNow, SAVED_REMOTE_KEY) }.isBlank()) {
-            return "还没填过仓库地址 —— 先在「仓库地址」那一行填一个"
+            // 2026-10-20 起手机侧不再有「仓库地址」那一行: 地址只有一个来处 = 扫码配对
+            return "还没配对 —— 先在 PC 面板生成二维码, 再点「扫码配对」"
         }
         return runCatching {
             val next = root.toMutableMap()
@@ -250,6 +300,45 @@ internal object SyncSetting {
             }
             if (lw.isEmpty()) next.remove(LW_KEY) else next[LW_KEY] = JsonObject(lw)
             write(file, JsonObject(next))
+            null
+        }.getOrElse { "写入失败: ${it.message}" }
+    }
+
+    /**
+     * 扫码配对写盘那一半 (纯文件, 单测直接吃它)
+     *
+     * @param now 配对时刻 (载荷里没带 `at` 时用它, 也是写进 `pairing.at` 的那个数)
+     */
+    fun applyPairingIn(file: File, payload: PairPayload, now: Long = System.currentTimeMillis()): String? {
+        if (payload.remote.isBlank()) return "配对码里没有仓库地址"
+        return runCatching {
+            val root = readOf(file).toMutableMap()
+            root[SESSION_REMOTE_KEY] = JsonPrimitive(payload.remote)
+            root[BRANCH_KEY] = JsonPrimitive(payload.branch.ifBlank { "main" })
+            // 对端那一段: 别的键 (listen / sendTimeoutMs / …) 都留着, 只改这三件
+            val peer = (root[PEER_KEY] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+            peer[PEER_ENABLED_KEY] = JsonPrimitive(true)
+            peer[PEER_PROXY_KEY] = JsonPrimitive(true)
+            if (payload.peerUrl.isNotEmpty()) peer[PEER_URL_KEY] = JsonPrimitive(payload.peerUrl)
+            if (payload.peerToken.isNotEmpty()) peer[PEER_TOKEN_KEY] = JsonPrimitive(payload.peerToken)
+            root[PEER_KEY] = JsonObject(peer)
+            // 配对那一段: 界面靠它说「已配对: <from>」, 再扫一次时靠 id 认出换了一台机器
+            val pairing = (root[PAIRING_KEY] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+            pairing[PAIRING_VERSION_KEY] = JsonPrimitive(payload.v)
+            pairing[PAIRING_ID_KEY] = JsonPrimitive(payload.id)
+            pairing[PAIRING_AT_KEY] = JsonPrimitive(payload.at ?: now)
+            pairing[PAIRING_FROM_KEY] = JsonPrimitive(payload.from)
+            root[PAIRING_KEY] = JsonObject(pairing)
+            if (text(root, DEVICE_NAME_KEY).isBlank()) {
+                root[DEVICE_NAME_KEY] = JsonPrimitive(DEFAULT_DEVICE_NAME)
+            }
+            // 配对之后默认就是"该自动的自动": 挂载拉一次, 每轮推一次, 周期拉取 15 分钟
+            root[AUTO_PULL_KEY] = JsonPrimitive(true)
+            root[AUTO_PUSH_KEY] = JsonPrimitive(true)
+            if ((number(root, PULL_INTERVAL_KEY) ?: 0) == 0) {
+                root[PULL_INTERVAL_KEY] = JsonPrimitive(DEFAULT_PULL_INTERVAL)
+            }
+            write(file, JsonObject(root))
             null
         }.getOrElse { "写入失败: ${it.message}" }
     }
@@ -370,6 +459,13 @@ internal object SyncSetting {
     }
 
     // --- 校验 -----------------------------------------------------------------
+
+    /** 仓库地址里的主机名 (只给界面显示, 不碰凭据; 本机路径取不到就回空串) */
+    private fun remoteHostOf(value: String): String {
+        val text = value.trim()
+        if (text.isEmpty()) return ""
+        return HOST_RE.find(text)?.groupValues?.getOrNull(1).orEmpty()
+    }
 
     private fun remoteProblem(value: String): String? {
         if (value.isEmpty()) return null

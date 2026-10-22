@@ -133,9 +133,12 @@ test('a configured peer channel shows up in the startup line, the routes, the co
     }
     const startup = lines.find(line => line.startsWith('session-sync: '))
     assert.ok(startup !== undefined, 'the startup line is printed')
-    assert.match(startup, /peer=on listen=on proxy=on url=card live=on/u)
+    assert.match(startup, /peer=on mode=auto listen=on proxy=on url=card live=on/u)
     assert.ok(!startup.includes(TOKEN), 'the token never reaches the startup line')
-    assert.match(startup, /ws=off/u, 'the workspace mirror is untouched by the peer section')
+    // 2026-10-20: 启动行改报源的**个数** (一个仓库里现在放会话与每台设备的工作区);
+    // peer 段不该多挂一根 —— 当前工作区一根, 就只该是 1
+    assert.match(startup, /ws=1\b/u, 'the peer section adds no workspace source of its own')
+    assert.match(startup, /baseline=legacy\b/u, 'no pairing section on disk = legacy full mirror')
 
     const paths = wired.routes.map(route => route.path).sort()
     assert.deepEqual(paths, [
@@ -242,7 +245,7 @@ test('an explicit peer section beats the JSON layer, and live can be narrowed fr
     })
     if (plugin.mountState.mounted !== true) return
     const startup = lines.find(line => line.startsWith('session-sync: '))
-    assert.match(startup, /peer=on listen=on proxy=off/u, 'the explicit cordis keys win over the JSON layer')
+    assert.match(startup, /peer=on mode=auto listen=on proxy=off/u, 'the explicit cordis keys win over the JSON layer')
     assert.match(startup, /live=off/u)
     for (const dispose of wired.disposers) dispose()
   })

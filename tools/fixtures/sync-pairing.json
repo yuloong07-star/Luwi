@@ -1,0 +1,19 @@
+{
+  "payload": {
+    "v": 1,
+    "id": "4d5c70a7-1c2b-4a3d-9e8f-1234567890ab",
+    "remote": "https://user:secret@github.com/example/dsh-sync.git",
+    "branch": "main",
+    "peerUrl": "http://192.168.1.23:19387",
+    "peerToken": "0123456789abcdef0123456789abcdef",
+    "from": "PC",
+    "at": 1760000000000
+  },
+  "expected": {
+    "repoHost": "github.com",
+    "peerHost": "192.168.1.23",
+    "hasPeerToken": true,
+    "scheme": "luwi-sync://pair?d=",
+    "keys": ["v", "id", "remote", "branch", "peerUrl", "peerToken", "from", "at"]
+  }
+}

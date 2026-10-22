@@ -11,9 +11,37 @@
 //   run(args, { cwd, signal, timeoutMs, binary, maxBytes }) → { code, stdout, stderr }
 //   stdout：binary=false 时为 UTF-8 文本；binary=true 时为 Buffer（原始字节）。
 
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { redactText } from './sanitize.mjs'
 import { gitFailed, pushRejected } from './errors.mjs'
 import { LIMITS } from './constants.mjs'
+
+/**
+ * 清掉上一趟被强杀留下的 `.git/index.lock` (Luwi 加 2026-10-20)。
+ *
+ * 宿主在 commit 中途被重启 / 被 Electron 收掉时, 锁文件不会被清 —— 之后每一条 add/commit
+ * 都报 `Unable to create '…/index.lock': File exists`, 同步就彻底停住 (PC 上真量到过:
+ * lastError 卡在这一句, API 退路又因为"这不是网络错误"一次都没跑)。
+ *
+ * 只清**足够老**的锁 (缺省 2 分钟): 同一进程里正常的 commit 是毫秒级, 老锁只可能是死的。
+ * 手机侧 `.git` 是 sandbox 里的 gitfile (不是目录), `stat` 会 ENOTDIR → 返回 false, 不误删。
+ * @param {string} repoDir - 工作树根。
+ * @param {{minAgeMs?: number}} [options] - 最小年龄。
+ * @returns {Promise<boolean>} 真的清掉了一个锁。
+ */
+export async function clearStaleIndexLock(repoDir, options = {}) {
+  const minAgeMs = Number.isFinite(options.minAgeMs) ? options.minAgeMs : 120_000
+  const lock = path.join(repoDir, '.git', 'index.lock')
+  try {
+    const info = await fs.stat(lock)
+    if (Date.now() - info.mtimeMs < minAgeMs) return false
+    await fs.rm(lock, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** 允许的顶层动词。 */
 export const ALLOWED_VERBS = new Set([
@@ -62,6 +90,9 @@ export function assertSafe(args) {
   }
 }
 
+/** 网络命令被冷却闸拦下时的错误文案 (looksLikeNetworkFailure 认这一句, 于是仍会退到 API) */
+export const GIT_NETWORK_SKIPPED = 'git network skipped: the api.github.com fallback is in its cooldown window'
+
 /**
  * git 同步后端。所有命令串行经内部互斥链执行（每仓库一把）。
  */
@@ -82,9 +113,11 @@ export class GitBackend {
   #chain = Promise.resolve()
   /** @type {number} 单条命令超时。 */
   #timeoutMs
+  /** @type {(() => boolean)|undefined} 网络命令冷却闸 (true = 现在跳过网络, 直接走 API). */
+  #networkSkip
 
   /**
-   * @param {object} deps - {repoDir, remote, branch, commitName, commitEmail, run, timeoutMs}。
+   * @param {object} deps - {repoDir, remote, branch, commitName, commitEmail, run, timeoutMs, networkSkip}。
    */
   constructor(deps) {
     this.#run = deps.run
@@ -94,6 +127,7 @@ export class GitBackend {
     this.#commitName = deps.commitName
     this.#commitEmail = deps.commitEmail
     this.#timeoutMs = deps.timeoutMs
+    this.#networkSkip = typeof deps.networkSkip === 'function' ? deps.networkSkip : undefined
   }
 
   /**
@@ -144,6 +178,28 @@ export class GitBackend {
     return result.code === 0 ? result : null
   }
 
+  /**
+   * 带 `index.lock` 自愈的操作 (Luwi 加 2026-10-20)。
+   * 先短等重试 (可能是同机另一条 git 正在收尾), 还不行就按年龄清陈旧锁, 再试。
+   * @template T
+   * @param {() => Promise<T>} fn - 操作。
+   * @returns {Promise<T>}
+   */
+  async #withIndexLockRetry(fn) {
+    let last
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await fn()
+      } catch (error) {
+        last = error
+        if (!/index\.lock/iu.test(String(error?.message ?? error)) || attempt >= 2) throw error
+        if (await clearStaleIndexLock(this.#repoDir) === true) continue
+        await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)))
+      }
+    }
+    throw last
+  }
+
   /** 该目录是否已是 git 仓库。 */
   async isRepo() {
     const out = await this.#maybe(['rev-parse', '--is-inside-work-tree'])
@@ -173,6 +229,8 @@ export class GitBackend {
    */
   async bootstrap() {
     await this.ensureRepo()
+    // 上一趟 host 被强杀留下的锁: 只在够老时清 (见 clearStaleIndexLock)
+    await clearStaleIndexLock(this.#repoDir, { minAgeMs: 300_000 })
     const current = await this.#maybe(['remote', 'get-url', 'origin'])
     if (current === null) {
       await this.#must(['remote', 'add', 'origin', this.#remote])
@@ -235,11 +293,13 @@ export class GitBackend {
    * @returns {Promise<string|null>}
    */
   async commitAll(message, opts = {}) {
-    await this.#must(['add', '-A'])
-    const status = await this.#must(['status', '--porcelain'])
-    if (String(status.stdout).trim() === '' && !(opts.allowEmpty ?? false)) return null
-    await this.#must(['commit', '-m', message.slice(0, LIMITS.MAX_COMMIT_MESSAGE_LENGTH), ...(opts.allowEmpty === true ? ['--allow-empty'] : [])])
-    return this.headSha() ?? null
+    return await this.#withIndexLockRetry(async () => {
+      await this.#must(['add', '-A'])
+      const status = await this.#must(['status', '--porcelain'])
+      if (String(status.stdout).trim() === '' && !(opts.allowEmpty ?? false)) return null
+      await this.#must(['commit', '-m', message.slice(0, LIMITS.MAX_COMMIT_MESSAGE_LENGTH), ...(opts.allowEmpty === true ? ['--allow-empty'] : [])])
+      return this.headSha() ?? null
+    })
   }
 
   /**
@@ -249,6 +309,7 @@ export class GitBackend {
    * @returns {Promise<void>}
    */
   async push(opts = {}) {
+    if (this.#networkSkip?.() === true) throw gitFailed('push', GIT_NETWORK_SKIPPED)
     const result = await this.#git(['push', 'origin', `HEAD:refs/heads/${this.#branch}`], { signal: opts.signal })
     if (result.code !== 0) {
       throw pushRejected(redactText(String(result.stderr ?? '')).trim().split('\n').slice(-3).join(' | ') || `exit ${result.code}`)
@@ -262,6 +323,7 @@ export class GitBackend {
    * @returns {Promise<boolean>} 是否拿到远端分支。
    */
   async fetch(opts = {}) {
+    if (this.#networkSkip?.() === true) throw gitFailed('fetch', GIT_NETWORK_SKIPPED)
     const result = await this.#git(['fetch', 'origin', `+${this.#branch}:refs/remotes/origin/${this.#branch}`], { signal: opts.signal })
     if (result.code === 0) return true
     const stderr = String(result.stderr ?? '')
@@ -280,14 +342,16 @@ export class GitBackend {
    * @returns {Promise<{conflicted: boolean, inProgress: boolean}>}
    */
   async beginMerge(remoteHead) {
-    const result = await this.#git(['merge', '--no-commit', '--allow-unrelated-histories', remoteHead])
-    if (result.code === 0) {
-      const stderr = String(result.stderr ?? '')
-      if (/already up to date/i.test(stderr)) return { conflicted: false, inProgress: false }
-      return { conflicted: false, inProgress: true }
-    }
-    const inProgress = await this.mergeInProgress()
-    return { conflicted: inProgress, inProgress }
+    return await this.#withIndexLockRetry(async () => {
+      const result = await this.#git(['merge', '--no-commit', '--allow-unrelated-histories', remoteHead])
+      if (result.code === 0) {
+        const stderr = String(result.stderr ?? '')
+        if (/already up to date/i.test(stderr)) return { conflicted: false, inProgress: false }
+        return { conflicted: false, inProgress: true }
+      }
+      const inProgress = await this.mergeInProgress()
+      return { conflicted: inProgress, inProgress }
+    })
   }
 
   /** 是否存在进行中的合并（MERGE_HEAD）。 */
@@ -351,14 +415,18 @@ export class GitBackend {
 
   /** 暂存全部（冲突解决后、合并提交前）。 */
   async addAll() {
-    await this.#must(['add', '-A'])
+    await this.#withIndexLockRetry(async () => {
+      await this.#must(['add', '-A'])
+    })
   }
 
   /** 落合并提交（MERGE_HEAD 在时生成真正的双亲合并提交）。 */
   async commitMerge() {
-    if (!(await this.mergeInProgress())) return null
-    await this.#must(['commit', '--no-edit'])
-    return this.headSha() ?? null
+    return await this.#withIndexLockRetry(async () => {
+      if (!(await this.mergeInProgress())) return null
+      await this.#must(['commit', '--no-edit'])
+      return this.headSha() ?? null
+    })
   }
 
   /** 最近 N 条提交摘要（log --oneline -n）。 */

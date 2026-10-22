@@ -56,6 +56,17 @@ export function inboxFileName(messageId) {
 }
 
 /**
+ * 目标的三种 kind 原样带过去。`new` (在工作区里新开一场) 必须活到对端 —— 2026-10-20 之前它
+ * 被折成 `session` + 空 id, 于是走队列的那一句话到了对端只回一条"解析不到会话": 队列这条退路
+ * 对"新开一场"从来就是死路, 而实时通道那条 (HTTP body) 一直是好的
+ * @param {Record<string, unknown>} target - 目标字段。
+ * @returns {'session'|'workspace'|'new'} 规范化后的 kind。
+ */
+function targetKindOf(target) {
+  return target.kind === 'workspace' ? 'workspace' : target.kind === 'new' ? 'new' : 'session'
+}
+
+/**
  * 造一份队列消息 (发送方)。
  * @param {object} input 输入。
  * @param {string} input.id - 消息 id。
@@ -75,7 +86,7 @@ export function buildMessage(input) {
     fromName: String(input.fromName ?? ''),
     text: String(input.text ?? ''),
     target: {
-      kind: target.kind === 'workspace' ? 'workspace' : 'session',
+      kind: targetKindOf(target),
       id: String(target.id ?? ''),
       ...(typeof target.name === 'string' && target.name !== '' ? { name: target.name } : {}),
     },
@@ -91,6 +102,7 @@ export function buildMessage(input) {
  * @param {boolean} [input.running] - 那一轮是插进正在跑的 (true) 还是新排的 (false)。
  * @param {number} input.at - 投递时刻。
  * @param {string} [input.error] - 失败原因 (投不动时写它, 也留一份回执)。
+ * @param {string} [input.code] - 失败的机器可读原因 (`NO_TARGET` / `NO_CONTROLLER` / `DELIVERY_FAILED`), 面板与日志按它分类。
  * @returns {object} 回执 JSON。
  */
 export function buildAck(input) {
@@ -101,6 +113,7 @@ export function buildAck(input) {
     running: input.running === true,
     at: Number.isFinite(input.at) ? input.at : 0,
     ...(typeof input.error === 'string' && input.error !== '' ? { error: input.error } : {}),
+    ...(typeof input.code === 'string' && input.code !== '' ? { code: input.code } : {}),
   }
 }
 
@@ -123,7 +136,7 @@ export function parseMessage(value) {
     fromName: typeof raw.fromName === 'string' ? raw.fromName : '',
     text,
     target: {
-      kind: targetValue.kind === 'workspace' ? 'workspace' : 'session',
+      kind: targetKindOf(targetValue),
       id: typeof targetValue.id === 'string' ? targetValue.id : '',
       ...(typeof targetValue.name === 'string' && targetValue.name !== '' ? { name: targetValue.name } : {}),
     },
@@ -134,7 +147,7 @@ export function parseMessage(value) {
 /**
  * 校验一份回执。
  * @param {unknown} value - 解析出来的对象。
- * @returns {{id: string, sessionId: string, running: boolean, at: number, error?: string}|null} 合格的回执。
+ * @returns {{id: string, sessionId: string, running: boolean, at: number, error?: string, code?: string}|null} 合格的回执。
  */
 export function parseAck(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
@@ -148,6 +161,7 @@ export function parseAck(value) {
     running: raw.running === true,
     at: Number.isFinite(raw.at) ? Number(raw.at) : 0,
     ...(typeof raw.error === 'string' && raw.error !== '' ? { error: raw.error } : {}),
+    ...(typeof raw.code === 'string' && raw.code !== '' ? { code: raw.code } : {}),
   }
 }
 
@@ -239,7 +253,7 @@ export function rememberId(list, id, max = 500) {
  * @param {unknown} value - 原始段。
  * @returns {string} 安全段。
  */
-function safeSegment(value) {
+export function safeSegment(value) {
   const cleaned = String(value ?? '').replace(SAFE_ID_RE, '').replace(/^\.+/u, '')
   return cleaned === '' ? 'unknown' : cleaned.slice(0, 128)
 }

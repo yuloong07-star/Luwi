@@ -14,10 +14,12 @@
 // - 单文件上限缺省 8 MiB: 超限的文件不进镜像, 但也不删远端已有那一份 (见 lib/mirror.mjs)
 
 import { statSync } from 'node:fs'
+import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { LIMITS, WORKSPACE_DEFAULTS, WORKSPACE_LIMITS, WORKSPACE_MIRROR_DIR, TRASH_DIR } from './constants.mjs'
+import { LIMITS, TRASH_DIR, WORKSPACE_BUDGET, WORKSPACE_DEFAULTS, WORKSPACE_LIMITS, WORKSPACE_MIRROR_DIR, WORKSPACES_DIR } from './constants.mjs'
 import { badConfig } from './errors.mjs'
 import { luwiWorktreeProblem } from './luwi-bridge-runner.mjs'
+import { listRelFiles, makeExcludeMatcher } from './mirror.mjs'
 
 /** 工作区镜面缺省的工作树落点 (相对工作区根, 在排除表盖着的 `.lw-sync` 底下)。 */
 export const WORKSPACE_REPO_RELATIVE = '.lw-sync/workspace-sync/repo'
@@ -159,4 +161,157 @@ export function resolveWorkspaceMirror(deps) {
     // 非致命提醒 (加载期照挂, 只是说清哪一块动不了)
     problems: hasRemote ? [] : ['workspace.remote is empty: status/diff work, pull/push will refuse, and the automatic modes stay off'],
   }
+}
+
+// ---------------------------------------------------------------------------
+// 2026-10-20 新形制: 一个同步仓库, 每台设备一个命名空间
+//
+// 与上面那根"第二棵工作树 / 第二个仓库"的区别 (主人 2026-10-20 定的口径):
+//   · 路径 = `workspaces/<设备名>/<工作区名>/` —— 两台设备的同名工作区**不合并**,
+//     手机侧仍然是 `dsh（PC）` 这种带设备名的分组 (来源一眼分得清, 也不互相制造 fork)
+//   · 与会话同一次 commit / 同一次 push (引擎的多源形态), 不再有第二个远端
+//   · 文件只推不拉: 拉取之后对端那份物化成影子 (lib/luwi-sync-shadow.mjs), 本机工作区不动
+// ---------------------------------------------------------------------------
+
+/**
+ * 把设备名/工作区名收成一个能当目录段的形状 (CJK 保留; 空白与控制字符/路径分隔符折成 `-`)。
+ * @param {unknown} value - 原始名字。
+ * @param {number} [maxLength] - 段长度上限。
+ * @param {string} [fallback] - 收完为空时的兜底词。
+ * @returns {string} 目录段。
+ */
+export function slugSegment(value, maxLength = 60, fallback = 'workspace') {
+  const cleaned = String(value ?? '')
+    .replace(/[\u0000-\u001f/\\:*?"<>|]/gu, '-')
+    .replace(/\s+/gu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^[.\-]+/u, '')
+    .replace(/[.\-]+$/u, '')
+    .slice(0, Math.max(1, maxLength))
+  return cleaned === '' ? fallback : cleaned
+}
+
+/**
+ * 解析工作区源 (新形制)。**缺省是开的** (配对之后"先同步所有工作区"就是这个意思);
+ * `workspace.enabled: false` 才关掉。老的 `remote`/`branch`/`repoDir`/`trashDir` 不再生效,
+ * 只回一条 problems 让人知道为什么。
+ *
+ * 校验在加载期响亮失败: 排除表形态、单文件上限、预算越界。
+ * @param {object} deps 依赖。
+ * @param {string} deps.workspace - 工作区根 (host 的 cwd; 绑给沙盒 /work 的那一棵)。
+ * @param {unknown} [deps.config] - `workspace` 配置段。
+ * @param {string} [deps.deviceName] - 本机设备名 (命名空间用)。
+ * @param {string} [deps.deviceId] - 本机设备 id (设备名空时兜底)。
+ * @param {string} [deps.repoDir] - 同步仓库工作树 (要算进排除表)。
+ * @param {string} [deps.shadowRoot] - 影子根 (要算进排除表)。
+ * @param {(root: string) => string|undefined} [deps.titleFor] - 由工作区根取注册表标题。
+ * @returns {{sources: object[], problems: string[]}} 源清单与提醒。
+ */
+export function resolveWorkspaceSources(deps = {}) {
+  const problems = []
+  const raw = deps.config
+  if (raw !== undefined && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+    throw badConfig('workspace config must be an object')
+  }
+  const config = raw ?? {}
+  if (config.enabled === false) return { sources: [], problems }
+  const workspace = deps.workspace
+  if (typeof workspace !== 'string' || workspace === '') {
+    problems.push('the workspace root is unknown, so the workspace mirror stays off')
+    return { sources: [], problems }
+  }
+  const legacy = ['remote', 'branch', 'repoDir', 'trashDir'].filter(key => typeof config[key] === 'string' && config[key].trim() !== '')
+  if (legacy.length > 0) {
+    problems.push(`workspace.${legacy.join(' / workspace.')} no longer applies: sessions and workspaces now share the single sync repository`)
+  }
+  const root = typeof config.root === 'string' && config.root.trim() !== ''
+    ? path.resolve(workspace, config.root.trim())
+    : path.resolve(workspace)
+  try {
+    if (!statSync(root).isDirectory()) throw new Error('not a directory')
+  } catch {
+    problems.push(`workspace.root ${JSON.stringify(root)} is not a directory, so the workspace mirror stays off`)
+    return { sources: [], problems }
+  }
+  const registryTitle = typeof deps.titleFor === 'function' ? deps.titleFor(root) : undefined
+  const title = typeof registryTitle === 'string' && registryTitle.trim() !== '' ? registryTitle.trim() : path.basename(root)
+  const name = slugSegment(title, 60, 'workspace')
+  const deviceSource = typeof deps.deviceName === 'string' && deps.deviceName.trim() !== ''
+    ? deps.deviceName.trim()
+    : `device-${String(deps.deviceId ?? '').replace(/[^0-9A-Za-z]/gu, '').slice(0, 8) || 'unknown'}`
+  const device = slugSegment(deviceSource, 40, 'device')
+  const mirrorDir = `${WORKSPACES_DIR}/${device}/${name}`
+
+  const maxFileBytes = config.maxFileBytes === undefined ? WORKSPACE_DEFAULTS.MAX_FILE_BYTES : config.maxFileBytes
+  if (!Number.isInteger(maxFileBytes) || maxFileBytes < WORKSPACE_LIMITS.MIN_MAX_FILE_BYTES || maxFileBytes > WORKSPACE_LIMITS.MAX_MAX_FILE_BYTES) {
+    throw badConfig(`workspace.maxFileBytes must be an integer in [${WORKSPACE_LIMITS.MIN_MAX_FILE_BYTES}, ${WORKSPACE_LIMITS.MAX_MAX_FILE_BYTES}] (0 = no cap)`)
+  }
+  const maxFiles = config.maxFiles === undefined ? WORKSPACE_BUDGET.MAX_FILES : config.maxFiles
+  if (!Number.isInteger(maxFiles) || maxFiles < WORKSPACE_LIMITS.MIN_MAX_FILES || maxFiles > WORKSPACE_LIMITS.MAX_MAX_FILES) {
+    throw badConfig(`workspace.maxFiles must be an integer in [${WORKSPACE_LIMITS.MIN_MAX_FILES}, ${WORKSPACE_LIMITS.MAX_MAX_FILES}]`)
+  }
+  const maxBytes = config.maxBytes === undefined ? WORKSPACE_BUDGET.MAX_BYTES : config.maxBytes
+  if (!Number.isInteger(maxBytes) || maxBytes < WORKSPACE_LIMITS.MIN_MAX_BYTES || maxBytes > WORKSPACE_LIMITS.MAX_MAX_BYTES) {
+    throw badConfig(`workspace.maxBytes must be an integer in [${WORKSPACE_LIMITS.MIN_MAX_BYTES}, ${WORKSPACE_LIMITS.MAX_MAX_BYTES}]`)
+  }
+
+  const exclude = normalizeExclude([...WORKSPACE_DEFAULTS.EXCLUDE, ...(config.exclude === undefined ? [] : config.exclude)])
+  // 算出来的排除项: 同步仓库工作树 / 影子根 / 回收站 若落在工作区里, 绝不镜像它们自己
+  for (const candidate of [deps.repoDir, deps.shadowRoot]) {
+    if (typeof candidate !== 'string' || candidate === '') continue
+    const rel = relativeInside(root, path.resolve(candidate))
+    if (rel !== undefined && !exclude.includes(rel)) exclude.push(rel)
+  }
+
+  return {
+    sources: [{
+      label: `workspace: ${name}`,
+      title,
+      slug: name,
+      device,
+      root,
+      mirrorDir,
+      exclude,
+      maxFileBytes,
+      // 工作区文件没有"旧对话"这回事
+      useBaseline: false,
+      budget: { maxFiles, maxBytes },
+    }],
+    problems,
+  }
+}
+
+/**
+ * 量一棵工作区树 (文件数 + 字节数) 是否在预算内; 超了就停 (不把整棵树量完)。
+ * @param {string} root - 源根。
+ * @param {string[]} [exclude] - 排除表。
+ * @param {{maxFiles: number, maxBytes: number}} [budget] - 预算。
+ * @returns {Promise<{over: boolean, files: number, bytes: number, reason?: string}>} 读数。
+ */
+export async function measureWorkspaceBudget(root, exclude, budget) {
+  const maxFiles = Number.isInteger(budget?.maxFiles) ? budget.maxFiles : WORKSPACE_BUDGET.MAX_FILES
+  const maxBytes = Number.isInteger(budget?.maxBytes) ? budget.maxBytes : WORKSPACE_BUDGET.MAX_BYTES
+  const walked = await listRelFiles(root, makeExcludeMatcher(exclude))
+  let files = 0
+  let bytes = 0
+  for (const file of walked.files) {
+    files += 1
+    try {
+      bytes += (await fs.stat(file.absolute)).size
+    } catch {
+      // 刚被删掉/读不动: 不算它 (镜像那边也会跳)
+    }
+    if (files > maxFiles) {
+      return { over: true, files, bytes, reason: `${files} files, more than the ${maxFiles} budget` }
+    }
+    if (bytes > maxBytes) {
+      return {
+        over: true,
+        files,
+        bytes,
+        reason: `${(bytes / (1024 * 1024)).toFixed(1)} MiB, more than the ${(maxBytes / (1024 * 1024)).toFixed(0)} MiB budget`,
+      }
+    }
+  }
+  return { over: false, files, bytes }
 }

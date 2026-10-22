@@ -60,6 +60,15 @@ export function resolvePeerSpec(config) {
   if (url !== '' && !HTTP_URL_RE.test(url)) {
     throw badConfig('peer.url must be an http(s) URL (empty = take it from the peer card in the mirror)')
   }
+  // mode: auto = 先拨 HTTP, 打不通落队列; queue = 一句话都不拨, 只写仓库队列 (2026-10-21 主人选定)
+  if (raw.mode !== undefined && typeof raw.mode !== 'string') {
+    throw badConfig('peer.mode must be "auto" or "queue" (empty = auto)')
+  }
+  const rawMode = typeof raw.mode === 'string' ? raw.mode.trim().toLowerCase() : ''
+  if (rawMode !== '' && rawMode !== 'auto' && rawMode !== 'queue') {
+    throw badConfig('peer.mode must be "auto" or "queue" (empty = auto)')
+  }
+  const mode = rawMode === 'queue' ? 'queue' : 'auto'
   const sendTimeoutMs = raw.sendTimeoutMs === undefined ? PEER_DEFAULTS.SEND_TIMEOUT_MS : raw.sendTimeoutMs
   if (!Number.isInteger(sendTimeoutMs)
     || sendTimeoutMs < PEER_LIMITS.MIN_SEND_TIMEOUT_MS
@@ -87,8 +96,10 @@ export function resolvePeerSpec(config) {
   }
   return {
     enabled: true,
+    // mode: 'queue' 时出站只写队列、也不接对端调用 (listen 跟着强制 false)
+    mode,
     // listen: 本机接不接受对端调用 (关掉只影响进来那半, 出去那半照旧)
-    listen: typeof raw.listen === 'boolean' ? raw.listen : true,
+    listen: mode === 'queue' ? false : (typeof raw.listen === 'boolean' ? raw.listen : true),
     // proxy: 要不要为对端工作区建影子目录与投影会话 (关掉 = 回到逐字节取回)
     proxy: typeof raw.proxy === 'boolean' ? raw.proxy : true,
     token,

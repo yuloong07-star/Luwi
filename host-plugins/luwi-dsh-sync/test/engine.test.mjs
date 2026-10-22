@@ -8,12 +8,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { GitBackend } from '../lib/git.mjs'
 import { SyncEngine } from '../lib/engine.mjs'
 import { sessionIdOfForkPath } from '../lib/paths.mjs'
+import { adoptMergedSessions } from '../lib/luwi-adopt.mjs'
+import { assembleParts, inspectPartsSet } from '../lib/luwi-parts.mjs'
 
 const GIT_OK = (() => {
   try {
@@ -44,7 +48,7 @@ async function makeTemp() {
   return { root, clean: () => fs.rm(root, { recursive: true, force: true }) }
 }
 
-async function setupDevice(root, name, deviceId, remotePath, events) {
+async function setupDevice(root, name, deviceId, remotePath, events, options = {}) {
   const sessionRoot = path.join(root, name, 'sessions')
   const repoDir = path.join(root, name, 'repo')
   await fs.mkdir(sessionRoot, { recursive: true })
@@ -57,7 +61,7 @@ async function setupDevice(root, name, deviceId, remotePath, events) {
     run: realRunner,
     timeoutMs: 60000,
   })
-  const engine = new SyncEngine({
+  const deps = {
     git,
     sessionRoot,
     repoDir,
@@ -68,8 +72,33 @@ async function setupDevice(root, name, deviceId, remotePath, events) {
     reportError: (message) => { events.errors.push(message) },
     onForks: (forkPaths) => { events.forks.push(...forkPaths) },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
-  })
+  }
+  if (options.chunk === true) {
+    // 与 index.mjs 的会话那根同形: 切段 + 取回 (2026-10-22)
+    deps.sources = [{
+      label: 'sessions',
+      root: sessionRoot,
+      mirrorDir: 'sessions',
+      chunkSessionLogs: true,
+      chunkMinBytes: 0,
+      chunkBytes: options.chunkBytes ?? 256,
+      adoptRemote: () => adoptMergedSessions({ targetRoot: sessionRoot, repoDir, mirrorDir: 'sessions' }),
+    }]
+  }
+  const engine = new SyncEngine(deps)
   return { sessionRoot, repoDir, engine, git }
+}
+
+/** 多帧 zstd: 与宿主的 append-only 写入口径一致 (每批追加一帧) */
+function framesOf(count, size = 120) {
+  const out = []
+  for (let at = 0; at < count; at += 1) out.push(zlib.zstdCompressSync(randomBytes(size)))
+  return out
+}
+
+/** 一份文件的 sha256 (与段索引同口径) */
+async function sha256OfFile(target) {
+  return createHash('sha256').update(await fs.readFile(target)).digest('hex')
 }
 
 async function writeSession(sessionRoot, rel, content) {
@@ -260,4 +289,71 @@ test('engine status reports dirty mirror and fork files', { skip: !GIT_OK && 'gi
   await writeSession(device.sessionRoot, 's2/new.jsonl', 'new\n')
   const dirty = await device.engine.status()
   assert.ok(dirty.dirty.includes('sessions/s2/new.jsonl'))
+})
+
+test('engine picks one whole parts set when both devices appended to the same session', { skip: !GIT_OK && 'git binary not available' }, async (t) => {
+  const { root, clean } = await makeTemp()
+  t.after(clean)
+  const remotePath = path.join(root, 'remote.git')
+  spawnSync('git', ['init', '--bare', remotePath], { stdio: 'ignore' })
+  const eventsA = { meta: [], errors: [], forks: [] }
+  const eventsB = { meta: [], errors: [], forks: [] }
+  const chunk = { chunk: true, chunkBytes: 200 }
+  const a = await setupDevice(root, 'A', 'aaaaaaaa', remotePath, eventsA, chunk)
+  const b = await setupDevice(root, 'B', 'bbbbbbbb', remotePath, eventsB, chunk)
+  const rel = 'p1/s1/session.v4.jsonl.zstd'
+  const segments = rel.split('/')
+  const base = Buffer.concat(framesOf(4))
+  await writeSession(a.sessionRoot, rel, base)
+  assert.equal((await a.engine.push()).ok, true)
+  assert.equal((await b.engine.pull()).ok, true)
+  // B 取回之后追加一帧并推上去
+  await fs.appendFile(path.join(b.sessionRoot, ...segments), framesOf(1, 90)[0])
+  assert.equal((await b.engine.push()).ok, true)
+  // A 也追加一帧 (同样大小, 内容不同): 两边都在同一个基点上各写了一段
+  await fs.appendFile(path.join(a.sessionRoot, ...segments), framesOf(1, 90)[0])
+  const shaA = await sha256OfFile(path.join(a.sessionRoot, ...segments))
+  const shaB = await sha256OfFile(path.join(b.sessionRoot, ...segments))
+  const pulled = await a.engine.pull()
+  assert.equal(pulled.ok, true, `A pull failed: ${pulled.error}`)
+  assert.equal(pulled.partSets, 1, '两组段都被改过, 必须按整组选边而不是逐段合并')
+  const mirrorParts = path.join(a.repoDir, 'sessions', 'p1', 's1', 'parts')
+  const state = await inspectPartsSet(mirrorParts)
+  assert.equal(state.complete, true)
+  assert.deepEqual(state.extra, [], '落选那一侧的段不该留在组里')
+  const assembled = await assembleParts(mirrorParts)
+  assert.notEqual(assembled, null, '两条血脉不能拼成一份 (sha256 会拦住)')
+  assert.ok([shaA, shaB].includes(assembled.index.sha256), '留下的必须是某一侧完整的整组')
+})
+
+test('engine lets the longer remote parts set replace the local one as one unit', { skip: !GIT_OK && 'git binary not available' }, async (t) => {
+  const { root, clean } = await makeTemp()
+  t.after(clean)
+  const remotePath = path.join(root, 'remote.git')
+  spawnSync('git', ['init', '--bare', remotePath], { stdio: 'ignore' })
+  const eventsA = { meta: [], errors: [], forks: [] }
+  const eventsB = { meta: [], errors: [], forks: [] }
+  const chunk = { chunk: true, chunkBytes: 200 }
+  const a = await setupDevice(root, 'A', 'aaaaaaaa', remotePath, eventsA, chunk)
+  const b = await setupDevice(root, 'B', 'bbbbbbbb', remotePath, eventsB, chunk)
+  const rel = 'p2/s1/session.v4.jsonl.zstd'
+  const segments = rel.split('/')
+  await writeSession(a.sessionRoot, rel, Buffer.concat(framesOf(4)))
+  assert.equal((await a.engine.push()).ok, true)
+  assert.equal((await b.engine.pull()).ok, true)
+  // B 追加三段再推: 远端的组更完整
+  for (let at = 0; at < 3; at += 1) await fs.appendFile(path.join(b.sessionRoot, ...segments), framesOf(1, 110)[0])
+  assert.equal((await b.engine.push()).ok, true)
+  // A 也追加一帧 (本地改过 = 真冲突, 不是快进), 两边比 bytes, 远端那一组更长
+  await fs.appendFile(path.join(a.sessionRoot, ...segments), framesOf(1, 100)[0])
+  const shaB = await sha256OfFile(path.join(b.sessionRoot, ...segments))
+  const pulled = await a.engine.pull()
+  assert.equal(pulled.ok, true, `A pull failed: ${pulled.error}`)
+  assert.equal(pulled.partSets, 1)
+  const mirrorParts = path.join(a.repoDir, 'sessions', 'p2', 's1', 'parts')
+  const assembled = await assembleParts(mirrorParts)
+  assert.notEqual(assembled, null)
+  assert.equal(assembled.index.sha256, shaB, '远端那一组更长, 整组换成它')
+  // 取回跟着更新: A 的本地会话 = B 的那一份
+  assert.equal(await sha256OfFile(path.join(a.sessionRoot, ...segments)), shaB)
 })

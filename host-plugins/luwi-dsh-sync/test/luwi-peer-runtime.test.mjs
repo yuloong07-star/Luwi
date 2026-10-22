@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { createPeerRuntime, normalizeTarget } from '../lib/luwi-peer-runtime.mjs'
 import { inboxDirectory, inboxFileName, buildMessage, writeJsonFile } from '../lib/luwi-inbox.mjs'
 import { liveDirectory } from '../lib/luwi-live.mjs'
+import { appendTranscriptEntries, transcriptDir } from '../lib/luwi-transcript.mjs'
 
 const TOKEN = 't'.repeat(24)
 
@@ -82,7 +83,11 @@ function makeDeps(root, overrides = {}) {
     listWorkspaces: async () => [{ name: 'DSH', title: 'DSH', path: '/work/DSH', sessionIds: ['s1'] }],
     listSessions: async () => [{ id: 's1', title: '一个会话', cwd: '/work/DSH', workspace: 'DSH', running: false, updatedAt: 1 }],
     projectSession: async sessionId => (sessionId === 's1'
-      ? { v: 1, deviceId: 'dev-me', deviceName: 'PC', sessionId, title: 't', cwd: '/work', running: false, updatedAt: 5, truncated: false, entries: [{ seq: 1, role: 'user', text: 'hi', at: 1 }], draft: null }
+      ? {
+          snapshot: { v: 1, deviceId: 'dev-me', deviceName: 'PC', sessionId, title: 't', cwd: '/work', running: false, updatedAt: 5, truncated: false, entries: [{ seq: 1, role: 'user', text: 'hi', at: 1 }], draft: null },
+          // 2026-10-22: projectSession 现在连"不截窗口的全量条目"一起给 (对话账 conv/ 要它)
+          entries: [{ seq: 1, role: 'user', text: 'hi', at: 1 }],
+        }
       : null),
     deliver: async (sessionId, message) => {
       calls.delivered.push({ sessionId, text: message.text })
@@ -282,6 +287,31 @@ test('send falls back to the queue and pushes the repository when the peer is un
   }
 })
 
+test('peer.mode=queue 时一条 HTTP 都不拨, 直接写队列', async () => {
+  const root = makeRoot('lw-peer-send-queue-only')
+  const original = globalThis.fetch
+  let fetched = 0
+  try {
+    globalThis.fetch = async () => {
+      fetched += 1
+      throw new Error('should never be called in queue mode')
+    }
+    const { deps, calls } = makeDeps(root, {
+      spec: { enabled: true, mode: 'queue', listen: false, proxy: true, token: TOKEN, url: '', sendTimeoutMs: 1000, pollSeconds: 3 },
+    })
+    const runtime = createPeerRuntime(deps)
+    const answer = await runtime.send({ text: '只走队列', target: { kind: 'new', id: '', name: 'DSH' } })
+    assert.equal(answer.ok, true)
+    assert.equal(answer.via, 'queue')
+    assert.equal(fetched, 0, 'queue 模式下不该有任何 fetch')
+    assert.equal(calls.pushes, 1)
+    assert.equal((await runtime.status()).mode, 'queue')
+  } finally {
+    globalThis.fetch = original
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('send refuses to queue when there is no peer device id to queue against', async () => {
   const root = makeRoot('lw-peer-send-noid')
   const original = globalThis.fetch
@@ -320,11 +350,62 @@ test('consumeInbox delivers once, writes receipts, and never delivers the same i
     assert.equal(acks.id, 'm1')
     assert.equal(acks.sessionId, 's1')
     assert.equal(acks.running, true)
+    const ackText = readFileSync(join(root, 'inbox-ack', 'dev-peer', 'm1.json'), 'utf8')
 
     const second = await runtime.consumeInbox()
     assert.equal(second.delivered, 0, 'the ledger stops a second delivery')
     assert.equal(calls.delivered.length, 2)
     assert.equal(second.acks, 2, 'receipts are still refreshed for the peer')
+    // 补的那份回执内容没变 → 不再重写: `at` 一变就会在对端判 DIVERGED, 每轮长一个 fork
+    assert.equal(readFileSync(join(root, 'inbox-ack', 'dev-peer', 'm1.json'), 'utf8'), ackText)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('回执带机器可读的失败码: 解析不到会话写 NO_TARGET', async () => {
+  const root = makeRoot('lw-peer-consume-code')
+  try {
+    const directory = inboxDirectory(root, 'dev-me')
+    await writeJsonFile(join(directory, inboxFileName('bad')), buildMessage({
+      id: 'bad',
+      from: 'dev-peer',
+      text: '有人吗',
+      target: { kind: 'new', id: '' },
+      createdAt: 3,
+    }))
+    const { deps } = makeDeps(root, { resolveTarget: async () => '' })
+    const runtime = createPeerRuntime(deps)
+    const result = await runtime.consumeInbox()
+    assert.equal(result.failed, 1)
+    const ack = JSON.parse(readFileSync(join(root, 'inbox-ack', 'dev-peer', 'bad.json'), 'utf8'))
+    assert.equal(ack.code, 'NO_TARGET')
+    assert.match(ack.error, /could not resolve the target/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('consumeInbox 不等推送: 推送卡住也不会把 pull 拖住', async () => {
+  const root = makeRoot('lw-peer-consume-noblock')
+  try {
+    const directory = inboxDirectory(root, 'dev-me')
+    await writeJsonFile(join(directory, inboxFileName('m9')), buildMessage({ id: 'm9', from: 'dev-peer', text: '别等我', target: { kind: 'session', id: 's1' }, createdAt: 9 }))
+    let pushes = 0
+    const { deps } = makeDeps(root, {
+      pushRepo: () => {
+        pushes += 1
+        // 永远不落定: 模拟"push 卡在网络上"
+        return new Promise(() => {})
+      },
+    })
+    const runtime = createPeerRuntime(deps)
+    const result = await Promise.race([
+      runtime.consumeInbox(),
+      new Promise((resolve, reject) => setTimeout(() => reject(new Error('consumeInbox waited for the push')), 800)),
+    ])
+    assert.equal(result.delivered, 1)
+    assert.equal(pushes, 1, '推送仍然被发起, 只是不等它')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -361,7 +442,10 @@ test('projections are written under live/<device>/ and stale ones are swept', as
     const { deps } = makeDeps(root, {
       now: () => T,
       projectSession: async sessionId => (sessionId === 's1'
-        ? { v: 1, deviceId: 'dev-me', deviceName: 'PC', sessionId, title: 't', cwd: '/work', running: false, updatedAt: T, truncated: false, entries: [{ seq: 1, role: 'user', text: 'hi', at: 1 }], draft: null }
+        ? {
+            snapshot: { v: 1, deviceId: 'dev-me', deviceName: 'PC', sessionId, title: 't', cwd: '/work', running: false, updatedAt: T, truncated: false, entries: [{ seq: 1, role: 'user', text: 'hi', at: 1 }], draft: null },
+            entries: [{ seq: 1, role: 'user', text: 'hi', at: 1 }],
+          }
         : null),
     })
     const runtime = createPeerRuntime(deps)
@@ -427,6 +511,33 @@ test('a call refused by the peer keeps its reason for the panel', async () => {
     assert.match(status.lastError, /token did not match/u)
   } finally {
     globalThis.fetch = original
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('repoTranscript reads the peer transcript and never our own copy', async () => {
+  const root = makeRoot('lw-peer-transcript')
+  try {
+    // 对端写的那一本 + 本机自己那一本 (同一场会话): 只认对端的
+    await appendTranscriptEntries(transcriptDir(root, 'dev-peer', 's9'), [
+      { seq: 1, role: 'user', text: 'hi', at: 1 },
+      { seq: 2, role: 'assistant', text: 'yo', at: 2 },
+    ], { deviceId: 'dev-peer', sessionId: 's9' })
+    await appendTranscriptEntries(transcriptDir(root, 'dev-me', 's9'), [
+      { seq: 1, role: 'user', text: 'mine', at: 1 },
+    ], { deviceId: 'dev-me', sessionId: 's9' })
+    const { deps } = makeDeps(root)
+    const runtime = createPeerRuntime(deps)
+    const all = await runtime.repoTranscript('s9', 0)
+    assert.equal(all.ok, true)
+    assert.equal(all.device, 'dev-peer')
+    assert.deepEqual(all.entries.map(entry => entry.text), ['hi', 'yo'])
+    const cursor = await runtime.repoTranscript('s9', 1)
+    assert.equal(cursor.ok, true)
+    assert.deepEqual(cursor.entries.map(entry => entry.seq), [2])
+    const missing = await runtime.repoTranscript('nope', 0)
+    assert.equal(missing.ok, false)
+  } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })

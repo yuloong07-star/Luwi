@@ -34,6 +34,7 @@ import {
   writeJsonFile,
 } from './luwi-inbox.mjs'
 import { liveDirectory, liveFileName, readLiveSnapshot, LIVE_SNAPSHOT_VERSION } from './luwi-live.mjs'
+import { TRANSCRIPT_DIR, readTranscriptEntries, transcriptDir } from './luwi-transcript.mjs'
 import { maskSecret, peerHeaders, peerUrlState, sameSecret } from './luwi-peer.mjs'
 import { readJsonBody, sendJson } from './panel-routes.mjs'
 
@@ -109,29 +110,37 @@ export function createPeerRuntime(deps) {
   }
 
   /**
-   * 对端的 base URL: 配置里写了就用配置, 没写则从名片里挑最新一张带 http(s) 的
-   * (把自己摘掉; 名片是随会话推拉过来的, 所以这一步不额外触网)
+   * 对端的 base URL 与**设备 id**: 地址优先用配置, 没有配置就用名片里最新那张带 http(s) 的
+   * (把自己摘掉; 名片是随会话推拉过来的, 所以这一步不额外触网)。
+   *
+   * 设备 id 一律从**最新那张非自己的名片**取, 与地址从哪儿来无关 —— 它是队列的投递地址
+   * (`inbox/<id>/`)。2026-10-20 真机事故: 配置里写着地址时 `deviceId` 恒为空, 于是
+   * 手机打不通 (它只监听自己的回环) 的那一档连队列都排不进去, 只回一句
+   * "there is no peer device id to queue against" —— 消息就那么没了
    * @returns {Promise<{url: string, source: 'config'|'card'|'none', deviceId: string, deviceName: string}>} 结果。
    */
   async function peerBase() {
     if (spec === null) return { url: '', source: 'none', deviceId: '', deviceName: '' }
-    if (spec.url !== '') return { url: spec.url, source: 'config', deviceId: '', deviceName: '' }
     let cards = []
     try {
       cards = await deps.readPeerCards()
     } catch (error) {
       warn(`peer: could not read the peer cards: ${messageOf(error)}`)
-      return { url: '', source: 'none', deviceId: '', deviceName: '' }
     }
-    const usable = cards
-      .filter(card => card.self !== true && /^https?:\/\//iu.test(String(card.url ?? '')))
+    const others = cards
+      .filter(card => card.self !== true)
       .sort((left, right) => String(right.updatedAt ?? '').localeCompare(String(left.updatedAt ?? '')))
-    if (usable.length === 0) return { url: '', source: 'none', deviceId: '', deviceName: '' }
+    // 队列的地址要一个 id; 地址那一半要一张真能拨的 URL —— 两件事分开挑
+    const owner = others.find(card => /^https?:\/\//iu.test(String(card.url ?? ''))) ?? others[0]
+    const cardUrl = owner === undefined ? '' : String(owner.url ?? '').replace(/\/+$/u, '')
+    const url = spec.url !== ''
+      ? spec.url
+      : (/^https?:\/\//iu.test(cardUrl) ? cardUrl : '')
     return {
-      url: String(usable[0].url).replace(/\/+$/u, ''),
-      source: 'card',
-      deviceId: String(usable[0].deviceId ?? ''),
-      deviceName: String(usable[0].name ?? ''),
+      url,
+      source: spec.url !== '' ? 'config' : (url === '' ? 'none' : 'card'),
+      deviceId: owner === undefined ? '' : String(owner.deviceId ?? ''),
+      deviceName: owner === undefined ? '' : String(owner.name ?? ''),
     }
   }
 
@@ -198,6 +207,18 @@ export function createPeerRuntime(deps) {
     if (text === '') return { ok: false, error: 'nothing to send: the text is empty' }
     const target = normalizeTarget(request?.target)
     const base = await peerBase()
+    if (spec.mode === 'queue') {
+      // 只走队列 (2026-10-21 主人选定): 一句话都不拨 —— 从前每条消息先白等一次
+      // sendTimeoutMs (20 s) 才落队列, 而这条路本来就是不通的
+      if (base.deviceId === '') {
+        return { ok: false, via: 'none', error: 'queue-only mode, but there is no peer device id to queue against (no peer card in the mirror yet)' }
+      }
+      try {
+        return await queuedAnswer(base, text, target)
+      } catch (error) {
+        return { ok: false, via: 'none', error: `queueing failed: ${messageOf(error)}` }
+      }
+    }
     const http = await call('/luwi-sync/peer/send', {
       method: 'POST',
       body: {
@@ -216,12 +237,33 @@ export function createPeerRuntime(deps) {
       return { ok: false, via: 'none', error: `${http.error ?? 'the peer is unreachable'}; and there is no peer device id to queue against` }
     }
     try {
-      const queued = await enqueue({ text, target, deviceId: base.deviceId })
-      state.queued += 1
-      state.lastSend = { at: now(), via: 'queue', sessionId: '', target, textLength: text.length, messageId: queued.id }
-      return { ok: true, via: 'queue', messageId: queued.id, error: http.error }
+      return { ...(await queuedAnswer(base, text, target)), error: http.error }
     } catch (error) {
       return { ok: false, via: 'none', error: `${http.error ?? 'the peer is unreachable'}; and queueing failed: ${messageOf(error)}` }
+    }
+  }
+
+  /**
+   * 把一句话写进队列表并记读数 (HTTP 与只走队列两条路共用)。
+   * @param {{deviceId: string}} base - 对端名片那一份。
+   * @param {string} text - 正文。
+   * @param {object} target - 规范化后的目标。
+   * @returns {Promise<object>} 引擎形状的投递结果。
+   */
+  async function queuedAnswer(base, text, target) {
+    const queued = await enqueue({ text, target, deviceId: base.deviceId })
+    state.queued += 1
+    state.lastSend = { at: now(), via: 'queue', sessionId: '', target, textLength: text.length, messageId: queued.id }
+    // `pushed` 必须带出去: 写进本地工作树却没推上去的话, 对端一次也拉不到 ——
+    // 那是"没送到", 不能按成功报 (2026-10-20)
+    return {
+      ok: true,
+      via: 'queue',
+      messageId: queued.id,
+      // 回执回来时要用它拼投影账的键 (<设备 id>|<对端会话 id>)
+      deviceId: base.deviceId,
+      pushed: queued.pushed,
+      pushedError: queued.pushed ? undefined : (queued.pushError ?? 'the push did not report ok'),
     }
   }
 
@@ -267,12 +309,12 @@ export function createPeerRuntime(deps) {
     let failed = 0
     for (const message of messages) {
       if (ledger.includes(message.id)) {
-        // 已经投过: 只补一份回执 (对端可能没收到上一次的回执)
-        await writeAck(message, { sessionId: '', running: false }, 'already delivered')
+        // 已经投过: 只在**没有回执**时补一份 (覆盖成功那份既误导读数, 又多一次写)
+        await writeAck(message, { sessionId: '', running: false, code: 'ALREADY_DELIVERED' }, 'already delivered', { onlyIfMissing: true })
         continue
       }
       const outcome = await receive(message)
-      await writeAck(message, outcome.ok ? outcome : { sessionId: '', running: false }, outcome.ok ? undefined : outcome.error)
+      await writeAck(message, outcome.ok ? outcome : { sessionId: '', running: false, code: outcome.code }, outcome.ok ? undefined : outcome.error)
       if (outcome.ok) {
         delivered += 1
         state.deliveredFromQueue += 1
@@ -282,12 +324,10 @@ export function createPeerRuntime(deps) {
       }
     }
     if (delivered > 0) {
-      // 回执也要让对端看见: 推一次 (失败只记一行, 下次 pull 会再补)
-      try {
-        await deps.pushRepo()
-      } catch (error) {
-        warn(`peer: pushing the receipts failed: ${messageOf(error)}`)
-      }
+      // 回执也要让对端看见: 推一次。**不等它** —— 这一趟正跑在 pull 里, 而 push 要抢引擎
+      // 同一把串行锁, await 就是自己等自己 (2026-10-22 实测: pull 停在这一行十几分钟,
+      // 之后每次 pull 都排不上)。回执已经落在工作树里, 定时推送会把它带上去
+      void deps.pushRepo().catch(error => warn(`peer: pushing the receipts failed: ${messageOf(error)}`))
     }
     return { delivered, failed, acks: messages.length, broken }
   }
@@ -299,15 +339,15 @@ export function createPeerRuntime(deps) {
    */
   async function receive(message) {
     const text = typeof message?.text === 'string' ? message.text.trim() : ''
-    if (text === '') return { ok: false, error: 'the peer sent an empty message' }
+    if (text === '') return { ok: false, code: 'EMPTY_MESSAGE', error: 'the peer sent an empty message' }
     let sessionId = ''
     try {
       sessionId = await deps.resolveTarget(normalizeTarget(message?.target))
     } catch (error) {
-      return { ok: false, error: `could not resolve the target: ${messageOf(error)}` }
+      return { ok: false, code: 'NO_TARGET', error: `could not resolve the target: ${messageOf(error)}` }
     }
     if (typeof sessionId !== 'string' || sessionId === '') {
-      return { ok: false, error: 'could not resolve the target to a session on this host' }
+      return { ok: false, code: 'NO_TARGET', error: 'could not resolve the target to a session on this host' }
     }
     try {
       const userMessage = await deps.makeUserMessage(text)
@@ -315,7 +355,7 @@ export function createPeerRuntime(deps) {
       state.received += 1
       return { ok: true, sessionId, running: outcome?.running === true }
     } catch (error) {
-      return { ok: false, sessionId, error: messageOf(error) }
+      return { ok: false, code: 'DELIVERY_FAILED', sessionId, error: messageOf(error) }
     }
   }
 
@@ -336,6 +376,94 @@ export function createPeerRuntime(deps) {
   }
 
   /**
+   * 仓库里"别人写的"投影快照所在的设备目录名 (不含自己那一份)。
+   * @returns {Promise<string[]>} 设备 id 列表 (最近写过的先排)。
+   */
+  async function liveDeviceIds() {
+    const own = ownDeviceId()
+    const names = await listNames(join(deps.repoDir, 'live'))
+    return names.filter(name => name !== own).sort().reverse()
+  }
+
+  /**
+   * **退路**: 实时通道 (HTTP) 拨不通时, 从仓库里读对端写的那一份投影快照。
+   *
+   * 每一台设备都会把"只要回答"的那份写进 `<repoDir>/live/<自己的 id>/<会话>.json`
+   * (`writeProjection`, 每个 turn/end 与 assistant/message 之后 400 ms 去抖写一次), 随 pull
+   * 落到对端的工作树里。手机只监听自己的回环时 (拨不通), 这是唯一能拿到回答的路 ——
+   * 2026-10-20 之前只写了没人读, 于是"对端回答回到本机"在拨不通的设备上永远不成立
+   * @param {string} sessionId - 对端那一场的会话 id。
+   * @returns {Promise<{ok: boolean, snapshot?: object, via?: string, device?: string, error?: string}>} 结果。
+   */
+  async function liveTranscript(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, error: 'sessionId is required' }
+    const file = `${liveFileName(sessionId)}.json`
+    for (const device of await liveDeviceIds()) {
+      let text
+      try {
+        text = await readFile(join(liveDirectory(deps.repoDir, device), file), 'utf8')
+      } catch {
+        continue
+      }
+      let parsed
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        continue
+      }
+      const snapshot = readLiveSnapshot(parsed)
+      if (snapshot !== null) return { ok: true, via: 'repo', device, snapshot }
+    }
+    return { ok: false, error: `no repository copy of ${sessionId} (the peer has not written one yet)` }
+  }
+
+  /**
+   * 仓库里那本**对话账** (`conv/<对端 id>/<会话>/`) —— 2026-10-22, 方案文档 §5.4。
+   *
+   * 与 [liveTranscript] 的分工: 那一份是滚动窗口 (最近 40 条), 这一本只追加、装整本对话。
+   * 本机投影的游标落在窗口之外时 (对端离线了几轮), 中间那段只有这里补得回来
+   * @param {string} sessionId - 对端那一场的会话 id。
+   * @param {number} [afterSeq] - 只要 `seq` 大于它的条目。
+   * @returns {Promise<{ok: boolean, entries: Array<object>, meta?: object, device?: string, error?: string}>} 结果。
+   */
+  async function repoTranscript(sessionId, afterSeq = 0) {
+    if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, entries: [], error: 'sessionId is required' }
+    const own = ownDeviceId()
+    let devices = []
+    try {
+      devices = (await listNames(join(deps.repoDir, TRANSCRIPT_DIR))).filter(name => name !== own)
+    } catch {
+      devices = []
+    }
+    for (const device of devices) {
+      const answer = await readTranscriptEntries(transcriptDir(deps.repoDir, device, sessionId), { afterSeq })
+      if (answer.ok !== true) continue
+      // 目录名可以伪造, meta 里的会话 id 才是这本账的身份证
+      if (answer.meta !== null && typeof answer.meta.sessionId === 'string'
+        && answer.meta.sessionId !== '' && answer.meta.sessionId !== sessionId) continue
+      if (answer.entries.length === 0) continue
+      return { ok: true, entries: answer.entries, meta: answer.meta, device }
+    }
+    return { ok: false, entries: [], error: `no repository transcript of ${sessionId}` }
+  }
+
+  /**
+   * 对端对本机排进队列那些话的回执 (`acks/<本机 id>/<消息 id>.json`)。
+   * 队列这条路是"对端下次拉取才收到", 回执里带回来的会话 id 是本机把那一场绑成投影的唯一线索。
+   * @returns {Promise<Map<string, {sessionId: string, running: boolean, at: number, error?: string}>>} 消息 id → 回执。
+   */
+  async function outboundAcks() {
+    const id = ownDeviceId()
+    if (id === '') return new Map()
+    try {
+      return await readAcks(ackDirectory(deps.repoDir, id))
+    } catch (error) {
+      warn(`peer: reading the outbound receipts failed: ${messageOf(error)}`)
+      return new Map()
+    }
+  }
+
+  /**
    * 现算一份投影快照 (对端要的那一份"只要回答")。
    * @param {string} sessionId - 会话 id。
    * @returns {Promise<object>} {ok, snapshot?|error}。
@@ -344,7 +472,8 @@ export function createPeerRuntime(deps) {
     if (!deps.live.enabled) return { ok: false, error: 'the live projection is off on this host (live.enabled: false)' }
     if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, error: 'sessionId is required' }
     try {
-      const snapshot = await deps.projectSession(sessionId)
+      const projected = await deps.projectSession(sessionId)
+      const snapshot = projected?.snapshot ?? null
       if (snapshot === null) return { ok: false, error: `no such session: ${sessionId}` }
       const text = JSON.stringify(snapshot)
       if (text.length > MAX_TRANSCRIPT_BYTES) {
@@ -361,6 +490,8 @@ export function createPeerRuntime(deps) {
    * @returns {Promise<{ok: boolean, info?: object, error?: string}>} 结果。
    */
   async function peerInfo() {
+    // 只走队列时这一条注定失败 (而且要先等满 sendTimeoutMs): 直接给一句原因
+    if (spec.mode === 'queue') return { ok: false, error: 'peer.mode is queue: peer info needs the http channel' }
     const answer = await call('/luwi-sync/peer/info')
     if (!answer.ok) return { ok: false, error: answer.error }
     return { ok: true, info: answer.body }
@@ -372,6 +503,7 @@ export function createPeerRuntime(deps) {
    * @returns {Promise<object>} {ok, device?, workspaces?, sessions?, live: Array<{sessionId, title, running, draft, entries}>, error?}。
    */
   async function peerLive() {
+    if (spec.mode === 'queue') return { ok: false, error: 'peer.mode is queue: live answers need the http channel', live: [] }
     const answer = await call('/luwi-sync/peer/info')
     if (!answer.ok) return { ok: false, error: answer.error, live: [] }
     const info = answer.body ?? {}
@@ -453,6 +585,7 @@ export function createPeerRuntime(deps) {
     const queue = await readQueue()
     return {
       enabled: spec !== null,
+      mode: spec === null ? 'off' : spec.mode,
       listen: spec !== null && spec.listen,
       proxy: spec !== null && spec.proxy,
       token: maskSecret(spec === null ? '' : spec.token),
@@ -477,7 +610,11 @@ export function createPeerRuntime(deps) {
     if (base.deviceId === '') return { pending: 0, sent: [], acks: 0 }
     const outboxDirectory = inboxDirectory(deps.repoDir, base.deviceId)
     const names = await listNames(outboxDirectory)
-    const acks = await readAcks(ackDirectory(deps.repoDir, base.deviceId))
+    // 回执按"寄件方 id"分目录: 我们发出去的消息, 对端把回执写进 **本机 id** 那一格
+    // (writeAck 用的是 message.from)。从前这里拿 base.deviceId (对端 id) 去读, 读到的
+    // 是"对端发给我们的消息的回执", 与自己发出去的那一批对不上 —— 于是 sync_peer 的
+    // queue 读数永远报着早就送达的那几条 (2026-10-21 实测: 5 条全是已送达)
+    const acks = await readAcks(ackDirectory(deps.repoDir, ownDeviceId()))
     const pending = names
       .map(name => name.replace(/\.json$/u, ''))
       .filter(name => !acks.has(name))
@@ -505,14 +642,52 @@ export function createPeerRuntime(deps) {
     }
   }
 
-  /** 写一份回执 */
-  async function writeAck(message, outcome, error) {
+  /**
+   * 写一份回执 (失败原因带机器可读的 `code`, 面板与日志按它分类)。
+   * @param {object} message - 队列消息。
+   * @param {object} outcome - {sessionId, running, code}。
+   * @param {string} [error] - 失败原因。
+   * @param {{onlyIfMissing?: boolean}} [options] - `onlyIfMissing`: 已经有一份就不再动它
+   *   (补回执那一支用 —— 覆盖已经成功的回执既会误导读数, 又会每轮写一次长出 fork)。
+   */
+  async function writeAck(message, outcome, error, options = {}) {
     try {
       const from = typeof message.from === 'string' && message.from !== '' ? message.from : 'unknown'
-      await writeJsonFile(
-        join(ackDirectory(deps.repoDir, from), inboxFileName(message.id)),
-        buildAck({ id: message.id, sessionId: outcome.sessionId, running: outcome.running === true, at: now(), error }),
-      )
+      const code = typeof outcome.code === 'string' ? outcome.code : undefined
+      const target = join(ackDirectory(deps.repoDir, from), inboxFileName(message.id))
+      if (options.onlyIfMissing === true) {
+        try {
+          await readFile(target)
+          return
+        } catch {
+          // 没有 → 照写
+        }
+      }
+      // 内容一样的回执就别重写: `at` 每趟都变, 两端每次都判 DIVERGED, 每轮 pull 长出一个 fork
+      // (2026-10-21 清理时那 8 个 inbox-ack 的 fork 全是"已投过, 补一份回执"这一支刷出来的)
+      try {
+        const current = JSON.parse(await readFile(target, 'utf8'))
+        if (
+          current !== null && typeof current === 'object' && !Array.isArray(current)
+          && current.id === message.id
+          && String(current.sessionId ?? '') === String(outcome.sessionId ?? '')
+          && (current.running === true) === (outcome.running === true)
+          && String(current.error ?? '') === String(error ?? '')
+          && String(current.code ?? '') === String(code ?? '')
+        ) {
+          return
+        }
+      } catch {
+        // 不在 / 不是 JSON → 照写
+      }
+      await writeJsonFile(target, buildAck({
+        id: message.id,
+        sessionId: outcome.sessionId,
+        running: outcome.running === true,
+        at: now(),
+        error,
+        code,
+      }))
     } catch (thrown) {
       warn(`peer: writing a receipt failed: ${messageOf(thrown)}`)
     }
@@ -528,9 +703,17 @@ export function createPeerRuntime(deps) {
     const id = ownDeviceId()
     if (id === '') return { written: false, error: 'no device id yet' }
     try {
-      const snapshot = await deps.projectSession(sessionId)
+      const projected = await deps.projectSession(sessionId)
+      const snapshot = projected?.snapshot ?? null
       if (snapshot === null) return { written: false, error: `no such session: ${sessionId}` }
       await writeJsonFile(join(liveDirectory(deps.repoDir, id), `${liveFileName(sessionId)}.json`), snapshot)
+      // 对话账 (conv/) 跟 live 快照同一趟写: 窗口之外的历史只有这一本留得住 (2026-10-22)
+      if (typeof deps.writeTranscript === 'function') {
+        const written = await deps.writeTranscript(sessionId, projected)
+        if (Number.isFinite(written?.appended) && written.appended > 0) {
+          deps.logger?.info?.(`peer: transcript ${sessionId} +${written.appended} entr(ies) (${written.entries ?? '?'} total)`)
+        }
+      }
       return { written: true }
     } catch (error) {
       return { written: false, error: messageOf(error) }
@@ -670,6 +853,10 @@ export function createPeerRuntime(deps) {
     peerInfo,
     peerLive,
     peerTranscript,
+    liveTranscript,
+    // 仓库里的对话账 (conv/): 补 live 窗口之外的那一段历史
+    repoTranscript,
+    outboundAcks,
     transcript,
     status,
     consumeInbox,
