@@ -220,3 +220,25 @@ test('the inbound loop keeps accepting until stopped', async () => {
   assert.equal(sidecar.calls.stopped, 1)
 })
 
+
+test('the device id may be a getter resolved at session time (engine meta arrives after mount)', async () => {
+  let current = ''
+  let seen = null
+  const sidecar = makeSidecar()
+  const runner = new P2pRunner({
+    sidecar,
+    config: { enabled: true, power: 'resident' },
+    repoDir: os.tmpdir(),
+    deviceId: () => current,
+    deviceName: 'Me',
+    peerProvider: () => PEER,
+    sessionFactory: (input) => {
+      seen = input.myDeviceId
+      return { run: async () => ({ ok: true, role: 'pull-first', pulled: { files: 0, bytes: 0 }, served: { files: 0, bytes: 0 } }) }
+    },
+  })
+  current = 'device-late'
+  const result = await runner.runOutbound()
+  assert.equal(result.ok, true)
+  assert.equal(seen, 'device-late')
+})

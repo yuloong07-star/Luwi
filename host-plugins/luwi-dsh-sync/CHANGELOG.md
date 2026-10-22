@@ -96,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The first real device session carried no device id in HELLO** (2026-10-22, found in the PC↔phone
+  run). `P2pService` hands the runner a *getter* for the engine's device id (meta arrives after mount),
+  but the runner passed that function straight into `P2pPeerSession` — `JSON.stringify` turned it into
+  nothing, so the peer saw `deviceId: undefined` and refused with `P2P_UNTRUSTED`. The runner now
+  resolves the getter when a session starts (regression test included).
 - **The API push uploaded the P2P private key** (2026-10-22, caught during the first cross-device run).
   The `noGit` path (Android) builds the Git tree by walking `repoDir` itself and only skipped `.git`;
   the new `.p2p/` directory (ed25519 key, trust table, tmp/trash) was therefore pushed to the remote,

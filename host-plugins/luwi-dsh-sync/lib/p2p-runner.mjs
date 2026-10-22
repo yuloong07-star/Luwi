@@ -116,10 +116,17 @@ export class P2pRunner {
       return this.#failure(error, 'P2P_TIMEOUT', { silent: true })
     }
     if (peer === null || inbound.peer !== expectedNode) {
+      console.log(`p2p inbound rejected: peer=${inbound.peer} expected=${String(expectedNode)} card=${peer === null ? 'none' : 'set'}`)
       inbound.stream.close()
       return this.#failure(new SyncError(ERROR_CODES.P2P_NODE_CHANGED, `inbound node ${inbound.peer} is not the expected ${String(expectedNode)}`), 'P2P_NODE_CHANGED')
     }
+    console.log(`p2p inbound accepted: peer=${inbound.peer}`)
     return this.#run({ path: 'ip', rttMs: 0, peer: inbound.peer, stream: inbound.stream }, peer, options.timeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
+  }
+
+  /** 本机设备 id: 允许迟到 (engine 的 meta 在挂载之后才读出来), 所以可能是 getter。 */
+  #deviceId() {
+    return typeof this.deviceId === 'function' ? String(this.deviceId() ?? '') : String(this.deviceId ?? '')
   }
 
   /** 跑一场会话（带总预算；超时先关流再记账）。 */
@@ -128,7 +135,7 @@ export class P2pRunner {
     const session = this.sessionFactory({
       stream: connection.stream,
       repoDir: this.repoDir,
-      myDeviceId: this.deviceId,
+      myDeviceId: this.#deviceId(),
       peerDeviceId: peer.id,
       deviceName: this.deviceName,
     })
