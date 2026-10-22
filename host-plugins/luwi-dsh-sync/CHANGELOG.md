@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P garbage collection (the plan's T3 tail)** (2026-10-22). `lib/p2p-gc.mjs` handles the three
+  reclaimable leftovers from §6.3 and leaves the mailbox alone: `.p2p/tmp` is cleared at startup or
+  after 24 h; a revoked or 90-day-unseen peer loses only its `base/<peerId>/` manifest cache; and a path
+  that is absent from the peer's manifest for two consecutive rounds *and* has a local copy older than
+  30 days is deleted through the same tombstone path (trash + `.p2p/deleted.json`). All three counters
+  fold into `status.p2p.gc` via `gcSummary`.
 - **P2P peer sessions and a real loopback e2e (the plan's T3 core)** (2026-10-22).
   `lib/p2p-peer.mjs` runs one session over any frame stream: HELLO (version + device id checked),
   HEADS, then two half-duplex segments ordered by device id — pull a root's manifest (paged), diff it,
