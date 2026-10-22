@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P peer sessions and a real loopback e2e (the plan's T3 core)** (2026-10-22).
+  `lib/p2p-peer.mjs` runs one session over any frame stream: HELLO (version + device id checked),
+  HEADS, then two half-duplex segments ordered by device id — pull a root's manifest (paged), diff it,
+  `NEED` the missing paths, consume `BLOB`s in batches, apply single files atomically and `conv` sets only
+  after the whole set verifies, answer `MANIFEST_REQ`/`NEED` for the other side, and propagate
+  tombstones into `.p2p/trash` (never touching the mailbox or the local device's files). `P2pSidecar`
+  now opens both directions of the data plane (`openFrameStream` / `acceptInbound`, `p2p.inbound`
+  defaults on) and closes its callback server on `stop()`. The opt-in loopback test (`LW_P2P_E2E=1`)
+  drives two real sidecars over QUIC and moves a live file, a conv set and a tombstone deletion.
 - **P2P apply and manifests (the plan's T3, continued)** (2026-10-22). `lib/p2p-apply.mjs` encodes the
   author rules (`maySend`/`mayReceive`, with the mailbox exception), rejects absolute/`..`/NUL paths,
   writes single files atomically with sha256 verification, finalises a `conv/<device>/<session>/` set only

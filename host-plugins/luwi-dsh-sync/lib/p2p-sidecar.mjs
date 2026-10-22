@@ -12,9 +12,11 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { request } from 'node:http'
+import { connect as netConnect, createServer as netCreateServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { P2pFrameDecoder, encodeFrame } from './p2p-frame.mjs'
 import {
   p2pBinaryCandidates,
   p2pStatusShell,
@@ -37,6 +39,112 @@ const defaultDeps = () => ({
   now: () => Date.now(),
   randomToken: () => randomBytes(16).toString('hex'),
 })
+
+/**
+ * 从 socket 读一行（带行后剩余字节）；超时/断开都 reject。
+ * @param {import('node:net').Socket} socket - 已连接的 socket。
+ * @param {number} timeoutMs - 超时。
+ * @returns {Promise<{line: string, rest: Buffer}>} 行与剩余。
+ */
+function readLineFromSocket(socket, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let buffer = Buffer.alloc(0)
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error(`timed out after ${timeoutMs}ms waiting for a line`))
+    }, timeoutMs)
+    const cleanup = () => {
+      clearTimeout(timer)
+      socket.off('data', onData)
+      socket.off('error', onError)
+      socket.off('close', onClose)
+    }
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, chunk])
+      const at = buffer.indexOf(0x0a)
+      if (at >= 0) {
+        const line = buffer.subarray(0, at).toString('utf8')
+        const rest = buffer.subarray(at + 1)
+        cleanup()
+        resolve({ line, rest })
+        return
+      }
+      if (buffer.length > 64 * 1024) {
+        cleanup()
+        reject(new Error('line is over 64 KiB'))
+      }
+    }
+    const onError = (error) => {
+      cleanup()
+      reject(error)
+    }
+    const onClose = () => {
+      cleanup()
+      reject(new Error('socket closed before the line arrived'))
+    }
+    socket.on('data', onData)
+    socket.on('error', onError)
+    socket.on('close', onClose)
+  })
+}
+
+/**
+ * 把一条 socket 变成"帧进帧出"的流（组帧/解帧都在这里）。
+ * @param {import('node:net').Socket} socket - 已连接的 socket。
+ * @param {Buffer} [initial] - 行协议阶段多读出来的字节（已经是帧的开头）。
+ * @returns {{sendFrame: Function, nextFrame: Function, close: Function}} 帧流。
+ */
+function makeFrameStream(socket, initial = Buffer.alloc(0)) {
+  const decoder = new P2pFrameDecoder()
+  const queue = []
+  const waiters = []
+  let closed = false
+  const deliver = (frame) => {
+    const waiter = waiters.shift()
+    if (waiter !== undefined) waiter(frame)
+    else queue.push(frame)
+  }
+  const fail = () => {
+    if (closed) return
+    closed = true
+    for (const waiter of waiters.splice(0)) waiter(null)
+  }
+  socket.on('data', (chunk) => {
+    try {
+      for (const frame of decoder.push(chunk)) deliver(frame)
+    } catch (error) {
+      fail()
+      socket.destroy(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+  socket.on('close', fail)
+  socket.on('error', fail)
+  if (initial.length > 0) {
+    try {
+      for (const frame of decoder.push(initial)) deliver(frame)
+    } catch {
+      fail()
+    }
+  }
+  return {
+    sendFrame(type, body = Buffer.alloc(0)) {
+      if (closed) throw new Error('frame stream is closed')
+      socket.write(encodeFrame(type, body))
+    },
+    nextFrame() {
+      if (queue.length > 0) return Promise.resolve(queue.shift())
+      if (closed) return Promise.resolve(null)
+      return new Promise((resolve) => {
+        waiters.push(resolve)
+      })
+    },
+    close() {
+      closed = true
+      socket.destroy()
+      for (const waiter of waiters.splice(0)) waiter(null)
+    },
+  }
+}
 
 /**
  * 一次 HTTP 调用（只用于回环控制面）。
@@ -106,6 +214,11 @@ export class P2pSidecar {
     this.restartTimer = null
     this.stdoutBuffer = ''
     this.readyWaiters = []
+    /** 入站回调（sidecar → 本机 JS）: LW_INBOUND 端口与排队中的会话 */
+    this.inboundServer = null
+    this.inboundPort = 0
+    this.inboundQueue = []
+    this.inboundWaiters = []
   }
 
   /**
@@ -205,6 +318,7 @@ export class P2pSidecar {
       this.deps.clearTimeout(this.restartTimer)
       this.restartTimer = null
     }
+    this.#closeInbound()
     const child = this.child
     if (child === null) {
       this.state = 'stopped'
@@ -238,7 +352,149 @@ export class P2pSidecar {
     this.state = 'stopped'
     // 故意不把 stopping 复位: kill() 的 exit 事件晚一拍才到, 复位早了它会当成一次崩溃去重启;
     // 下一次 ensure() 的 #start 会把它置回 false (2026-10-22 单测逮到的)
+    this.#closeInbound()
     return this.status()
+  }
+
+  /** 关掉入站回调 server 与排队中的会话（stop 与测试收尾共用）。 */
+  #closeInbound() {
+    if (this.inboundServer !== null) {
+      try {
+        this.inboundServer.close()
+      } catch {
+        // ignore
+      }
+      this.inboundServer = null
+      this.inboundPort = 0
+    }
+    for (const waiter of this.inboundWaiters.splice(0)) {
+      this.deps.clearTimeout(waiter.timer)
+      waiter.reject(new Error('sidecar stopped'))
+    }
+    this.inboundQueue = []
+  }
+
+  /**
+   * 等一条对端拨入的会话（入站回调）。
+   *
+   * sidecar 收到 QUIC 双向流后会连 `LW_INBOUND` 并先写一行 `{peer}`；这里把它变成与出站完全
+   * 一样的帧流。信任表那一层（T5）在拿到 `peer` 之后判，不认就 `stream.close()`。
+   * @param {{timeoutMs?: number}} [options] - 超时（缺省 30 s）。
+   * @returns {Promise<{peer: string, stream: object}>} 入站会话。
+   */
+  async acceptInbound(options = {}) {
+    const timeoutMs = options.timeoutMs ?? 30000
+    if (this.inboundQueue.length > 0) return this.inboundQueue.shift()
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: null }
+      waiter.timer = this.deps.setTimeout(() => {
+        this.inboundWaiters = this.inboundWaiters.filter(item => item !== waiter)
+        reject(new Error(`no inbound session within ${timeoutMs}ms`))
+      }, timeoutMs)
+      this.inboundWaiters.push(waiter)
+    })
+  }
+
+  /**
+   * 拨一条数据面会话：连本机 sidecar 的数据端口，交 ticket/nodeId，拿回一条帧流。
+   *
+   * 帧体由调用方给（`sendFrame(type, bodyBuffer)`）；组帧在这一层，解帧也在这一层。
+   * @param {{to: string, timeoutMs?: number}} options - `to` 是对端 ticket 或 endpoint id。
+   * @returns {Promise<{path: string, rttMs: number, remote: string, peer: string, stream: object}>} 会话。
+   */
+  async openFrameStream({ to, timeoutMs = this.config.connectTimeoutMs }) {
+    const status = this.state === 'running' ? await this.status() : await this.ensure()
+    if (status.running !== true) {
+      throw new Error(`p2p sidecar is not running (${status.reason ?? 'no reason'}${status.detail === undefined ? '' : `: ${status.detail}`})`)
+    }
+    const socket = netConnect({ host: '127.0.0.1', port: this.dataPort })
+    socket.setNoDelay(true)
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        socket.destroy()
+        reject(new Error(`data plane connect timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      socket.once('connect', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+      socket.once('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+    })
+    socket.write(`${JSON.stringify({ op: 'connect', to, token: this.token })}\n`)
+    const { line, rest } = await readLineFromSocket(socket, timeoutMs)
+    let reply
+    try {
+      reply = JSON.parse(line)
+    } catch {
+      socket.destroy()
+      throw new Error('data plane reply is not JSON')
+    }
+    if (reply.ok !== true) {
+      socket.destroy()
+      throw new Error(`data plane dial failed: ${String(reply.error ?? 'unknown')}`)
+    }
+    return {
+      path: String(reply.path ?? ''),
+      rttMs: Number(reply.rttMs) || 0,
+      remote: String(reply.remote ?? ''),
+      peer: String(reply.peer ?? ''),
+      stream: makeFrameStream(socket, rest),
+    }
+  }
+
+  /** 起（或复用）入站回调的 TCP server；返回端口，0 = 不收。 */
+  async #ensureInboundServer() {
+    if (this.config.inbound !== true) return 0
+    if (this.inboundServer !== null) return this.inboundPort
+    const server = netCreateServer((socket) => {
+      this.#handleInbound(socket).catch((error) => {
+        this.lastDetail = `inbound callback failed: ${error instanceof Error ? error.message : String(error)}`
+        socket.destroy()
+      })
+    })
+    await new Promise((resolve, reject) => {
+      const onError = (error) => reject(error)
+      server.once('error', onError)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', onError)
+        resolve()
+      })
+    })
+    this.inboundServer = server
+    this.inboundPort = /** @type {import('node:net').AddressInfo} */ (server.address()).port
+    return this.inboundPort
+  }
+
+  /** sidecar 的回调连接：首行 `{peer}`，之后是帧流。 */
+  async #handleInbound(socket) {
+    socket.setNoDelay(true)
+    const { line, rest } = await readLineFromSocket(socket, 10000)
+    let hello
+    try {
+      hello = JSON.parse(line)
+    } catch {
+      socket.destroy()
+      throw new Error('inbound callback line is not JSON')
+    }
+    if (typeof hello.peer !== 'string' || hello.peer === '') {
+      socket.destroy()
+      throw new Error('inbound callback has no peer id')
+    }
+    const session = { peer: hello.peer, stream: makeFrameStream(socket, rest) }
+    const waiter = this.inboundWaiters.shift()
+    if (waiter !== undefined) {
+      this.deps.clearTimeout(waiter.timer)
+      waiter.resolve(session)
+      return
+    }
+    this.inboundQueue.push(session)
+    if (this.inboundQueue.length > 8) {
+      const dropped = this.inboundQueue.shift()
+      dropped?.stream.close()
+    }
   }
 
   /** 起一次进程并等 READY。内部方法，失败只记账不抛。 */
@@ -260,7 +516,7 @@ export class P2pSidecar {
       LW_TOKEN: this.token,
       LW_PORT: '0',
       LW_DATA_PORT: '0',
-      LW_INBOUND: '0', // 入站回调端口由 T4 接（这里先不收入站）
+      LW_INBOUND: String(await this.#ensureInboundServer()),
       LW_IDLE_MS: String(this.config.idleMs),
       LW_ONLINE_MS: String(Math.max(1000, this.config.startTimeoutMs - 5000)),
       LW_PORTMAPPER: this.config.portmapper ? '1' : '0',

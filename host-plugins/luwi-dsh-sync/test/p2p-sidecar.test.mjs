@@ -55,7 +55,7 @@ function makeHttp({ failId = false } = {}) {
   return { httpJson, calls }
 }
 
-function makeSidecar({ exists = () => true, plan = {}, http = makeHttp(), config = {} } = {}) {
+function makeSidecar({ exists = () => true, plan = {}, http = makeHttp(), config = {} } = {}, t = undefined) {
   const fake = fakeSpawn(plan)
   const sidecar = new P2pSidecar({
     config: { enabled: true, ...config },
@@ -73,9 +73,9 @@ function makeSidecar({ exists = () => true, plan = {}, http = makeHttp(), config
       randomToken: () => 'test-token',
     },
   })
+  if (t !== undefined) t.after(() => sidecar.stop().catch(() => {}))
   return { sidecar, fake, http }
 }
-
 async function waitFor(predicate, timeoutMs = 2000) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
@@ -85,8 +85,8 @@ async function waitFor(predicate, timeoutMs = 2000) {
   return false
 }
 
-test('status: no binary is available=false + P2P_UNAVAILABLE, and never throws', async () => {
-  const { sidecar, fake } = makeSidecar({ exists: () => false })
+test('status: no binary is available=false + P2P_UNAVAILABLE, and never throws', async (t) => {
+  const { sidecar, fake } = makeSidecar({ exists: () => false }, t)
   const status = await sidecar.status()
   assert.equal(status.available, false)
   assert.equal(status.running, false)
@@ -96,8 +96,8 @@ test('status: no binary is available=false + P2P_UNAVAILABLE, and never throws',
   assert.equal((await sidecar.ensure()).available, false, 'ensure also reports instead of throwing')
 })
 
-test('ensure: spawns once, parses READY, exposes /v1/id readings', async () => {
-  const { sidecar, fake, http } = makeSidecar()
+test('ensure: spawns once, parses READY, exposes /v1/id readings', async (t) => {
+  const { sidecar, fake, http } = makeSidecar({}, t)
   const status = await sidecar.ensure()
   assert.equal(fake.calls.length, 1)
   assert.deepEqual(fake.calls[0].args, ['daemon'])
@@ -112,8 +112,8 @@ test('ensure: spawns once, parses READY, exposes /v1/id readings', async () => {
   assert.equal(http.calls.some(call => call.path === '/v1/id'), true)
 })
 
-test('ensure: a disabled p2p section reports P2P_DISABLED and does not spawn', async () => {
-  const { sidecar, fake } = makeSidecar({ config: { enabled: false } })
+test('ensure: a disabled p2p section reports P2P_DISABLED and does not spawn', async (t) => {
+  const { sidecar, fake } = makeSidecar({ config: { enabled: false } }, t)
   const status = await sidecar.ensure()
   assert.equal(fake.calls.length, 0)
   assert.equal(status.available, true)
@@ -121,8 +121,8 @@ test('ensure: a disabled p2p section reports P2P_DISABLED and does not spawn', a
   assert.equal(status.reason, 'P2P_DISABLED')
 })
 
-test('crash: restarts once after an unexpected exit and comes back running', async () => {
-  const { sidecar, fake } = makeSidecar({ plan: { crashAttempts: [1] } })
+test('crash: restarts once after an unexpected exit and comes back running', async (t) => {
+  const { sidecar, fake } = makeSidecar({ plan: { crashAttempts: [1] } }, t)
   await sidecar.ensure()
   const recovered = await waitFor(async () => {
     const status = await sidecar.status()
@@ -134,9 +134,9 @@ test('crash: restarts once after an unexpected exit and comes back running', asy
   assert.equal(status.restarts, 1)
 })
 
-test('crash: gives up after the restart budget and reports P2P_CRASH', async () => {
+test('crash: gives up after the restart budget and reports P2P_CRASH', async (t) => {
   const attempts = Array.from({ length: P2P_MAX_RESTARTS + 1 }, (_, index) => index + 1)
-  const { sidecar, fake } = makeSidecar({ plan: { crashAttempts: attempts } })
+  const { sidecar, fake } = makeSidecar({ plan: { crashAttempts: attempts } }, t)
   await sidecar.ensure()
   const gaveUp = await waitFor(async () => {
     const status = await sidecar.status()
@@ -151,8 +151,8 @@ test('crash: gives up after the restart budget and reports P2P_CRASH', async () 
   assert.match(status.detail, /restarts exhausted/u)
 })
 
-test('stop: asks /v1/shutdown, then reports stopped', async () => {
-  const { sidecar, fake, http } = makeSidecar()
+test('stop: asks /v1/shutdown, then reports stopped', async (t) => {
+  const { sidecar, fake, http } = makeSidecar({}, t)
   await sidecar.ensure()
   const status = await sidecar.stop()
   assert.equal(http.calls.some(call => call.path === '/v1/shutdown' && call.method === 'POST'), true)
@@ -161,9 +161,10 @@ test('stop: asks /v1/shutdown, then reports stopped', async () => {
   assert.equal(sidecar.state, 'stopped')
 })
 
-test('idleMs from config is passed to the sidecar env', async () => {
-  const { sidecar, fake } = makeSidecar({ config: { power: 'ondemand' } })
+test('idleMs from config is passed to the sidecar env', async (t) => {
+  const { sidecar, fake } = makeSidecar({ config: { power: 'ondemand' } }, t)
   await sidecar.ensure()
   assert.equal(fake.calls[0].env.LW_IDLE_MS, '90000')
   await sidecar.stop()
 })
+

@@ -23,6 +23,7 @@ export const P2P_DEFAULTS = Object.freeze({
   fallbackToGit: true, // 连不上时退 git（§9）
   portmapper: true, // 与 iroh 缺省一致
   binaryPath: '', // 显式指定 sidecar（测试与非常规安装）
+  inbound: true, // 收不收对端拨入（resident 档要收；只拨不收的档可以关）
 })
 
 /** 可调边界；越界在加载期响亮失败。 */
@@ -90,6 +91,7 @@ export function resolveP2pConfig(raw) {
     fallbackToGit: booleanOf('fallbackToGit', input.fallbackToGit ?? P2P_DEFAULTS.fallbackToGit),
     portmapper: booleanOf('portmapper', input.portmapper ?? P2P_DEFAULTS.portmapper),
     binaryPath,
+    inbound: booleanOf('inbound', input.inbound ?? P2P_DEFAULTS.inbound),
   })
 }
 

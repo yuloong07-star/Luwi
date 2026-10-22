@@ -23,6 +23,7 @@ test('resolveP2pConfig: defaults keep p2p off and resident', () => {
   assert.equal(config.fallbackToGit, true)
   assert.equal(config.portmapper, true)
   assert.equal(config.binaryPath, '')
+  assert.equal(config.inbound, true)
   assert.ok(Object.isFrozen(config))
   assert.deepEqual([...P2P_POWER_MODES], ['resident', 'charging', 'ondemand'])
 })
@@ -46,6 +47,7 @@ test('resolveP2pConfig: rejects bad values loudly (BAD_CONFIG)', () => {
     { fallbackToGit: 1 },
     { portmapper: 'on' },
     { binaryPath: 42 },
+    { inbound: 'yes' },
   ]
   for (const value of cases) {
     assert.throws(
