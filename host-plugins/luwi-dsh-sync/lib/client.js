@@ -157,6 +157,25 @@ window.__ModuleLoader__.load({
 			'分钟前': 'min ago',
 			'小时前': 'h ago',
 			'天前': 'd ago',
+			// 2026-10-20: 令牌那一格
+			'令牌': 'Token',
+			'已保存 (不回显; 留空保持)': 'saved (not echoed; leave blank to keep)',
+			'还没存': 'not saved yet',
+			'只存本机与应用私有目录, 二维码里会带上拼好的地址': 'stored only on this machine and in the app\'s private directory; the pairing QR carries the composed address',
+			'GitHub 令牌 permissions 仅需: Contents —— Read and write': 'GitHub token permissions: Contents — Read and write only',
+			// 2026-10-20: 清理仓库会话那一颗
+			'清理仓库会话': 'Clean the repository sessions',
+			'清理仓库会话会删掉仓库里窗口外的会话镜像与合并副本, 然后推一次 (本机会话一个字节都不动)': 'Cleaning removes the mirrored sessions outside the window and the merge copies from the repository, then pushes once (local sessions are untouched)',
+			// 2026-10-20: 配对卡那几行 (原来只有中文)
+			'配对手机': 'Pair a phone',
+			'已配对': 'paired',
+			'未配对': 'not paired',
+			'生成配对码': 'Generate the pairing code',
+			'生成中': 'Generating',
+			'配对码': 'Pairing code',
+			'手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。': 'Phone: Settings → Sync → scan the pairing code. The QR carries repository credentials, so do not share it.',
+			'请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。': 'Make sure root or Shizuku is running for Luwi, otherwise sync fails.',
+			'手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。': 'Phone: Settings → Sync → scan the pairing code. The QR carries repository credentials, so do not share it. Make sure root or Shizuku is running for Luwi, otherwise sync fails.',
 		};
 
 		/** 当前语言 (apply 时按 locale 服务定一次, 变了就重设)。 */
@@ -286,6 +305,21 @@ window.__ModuleLoader__.load({
 			return typeof sha === 'string' && sha.length > 0 ? sha.slice(0, 8) : '—';
 		}
 
+		/**
+		 * 宿主画好的二维码 SVG → `data:` URL (给 <img>, 不拼 HTML)。
+		 * 宿主生成的 SVG 只有 ASCII (path/数字), btoa 够用; 万一不是就退回 URL 编码
+		 * @param {string} svg - SVG 文本。
+		 * @returns {string} data URL。
+		 */
+		function svgToDataUrl(svg) {
+			const text = String(svg ?? '');
+			try {
+				return `data:image/svg+xml;base64,${window.btoa(text)}`;
+			} catch {
+				return `data:image/svg+xml,${encodeURIComponent(text)}`;
+			}
+		}
+
 		/** 结构化错误/结果里那句人话。 */
 		function messageOf(error) {
 			if (error === null || error === undefined) return '';
@@ -362,6 +396,8 @@ window.__ModuleLoader__.load({
 .luwi-sync-pre { white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dsw-alias-label-secondary, #9aa0a6); }
 .luwi-sync-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+.luwi-sync-pair { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 8px; }
+.luwi-sync-pair img { border-radius: 8px; background: #fff; padding: 4px; }
 .luwi-sync-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 6px; }
 .luwi-sync-icon { display: block; }
 `;
@@ -426,11 +462,8 @@ window.__ModuleLoader__.load({
 			const seat = props && props.seat ? props.seat : 'main';
 			const [snap, setSnap] = React.useState(null);
 			const [fault, setFault] = React.useState(null);
-			const [tab, setTab] = React.useState('overview');
 			const [pending, setPending] = React.useState(null);
 			const [answer, setAnswer] = React.useState(null);
-			const [doctor, setDoctor] = React.useState(null);
-			const [peers, setPeers] = React.useState(null);
 			const [auto, setAuto] = React.useState(true);
 			const [busy, setBusy] = React.useState(false);
 			const [copied, setCopied] = React.useState(false);
@@ -440,6 +473,14 @@ window.__ModuleLoader__.load({
 			// Luwi 加 (2026-10-15): 仓库卡片那两个输入框 (空 = 不动; 已配置的地址不回显)
 			const [remoteDraft, setRemoteDraft] = React.useState('');
 			const [branchDraft, setBranchDraft] = React.useState('');
+			// Luwi 加 (2026-10-20): 访问令牌单独一格 (私有仓库的 PAT; 密码框, 不回显)
+			const [tokenDraft, setTokenDraft] = React.useState('');
+			// Luwi 加 (2026-10-20): 配对卡与工作区根 (2026-10-20 主人: 「本机地址」那个框删掉 ——
+			// 它只给对端通道用, 与同步无关; 二维码继续用配置里/profile 里已有的值)
+			const [workspaceRootDraft, setWorkspaceRootDraft] = React.useState('');
+			const [pair, setPair] = React.useState(null);
+			const [pairError, setPairError] = React.useState(null);
+			const [pairing, setPairing] = React.useState(false);
 			const [peerDraft, setPeerDraft] = React.useState('');
 			const [peerSending, setPeerSending] = React.useState(false);
 			const [peerAnswer, setPeerAnswer] = React.useState('');
@@ -494,10 +535,21 @@ window.__ModuleLoader__.load({
 						return;
 					}
 					setAnswer(body);
-					if (op === 'doctor' && body.report) setDoctor(body.report);
-					if (op === 'peers' && Array.isArray(body.cards)) setPeers(body);
+					// Luwi 加 (2026-10-20): 配对码 (载荷只在这一次应答里; 不进快照)
+					if (op === 'pair') {
+						if (body.ok === true) {
+							setPair({ svg: body.svg, payload: body.payload, summary: body.summary });
+							setPairError(null);
+						} else {
+							setPair(null);
+							// 失败原因要摆在按钮旁边 (只落在最下面那块回执里, 人根本看不见 —— 2026-10-20 真机上就是这么"没反应"的)
+							setPairError(String(body.error ?? 'failed'));
+						}
+					}
+					// Luwi 加 (2026-10-20): 保存成功之后把"还要再点一次确认"那句换成写入结果, 免得人以为没生效
+					if (op === 'configure' && body.ok === true) setPairError(null);
 					// Luwi 加 (2026-10-15): 写进去了就把草稿清掉 (写的是哪几个值, 回执那一栏里有)
-					if (op === 'configure' && body.ok === true) { setRemoteDraft(''); setBranchDraft(''); }
+					if (op === 'configure' && body.ok === true) { setRemoteDraft(''); setTokenDraft(''); setBranchDraft(''); setWorkspaceRootDraft(''); }
 					await load();
 				} finally {
 					setBusy(false);
@@ -518,6 +570,12 @@ window.__ModuleLoader__.load({
 			const config = snap.config ?? {};
 			const deviceName = config.deviceName === '' || config.deviceName === undefined ? '—' : config.deviceName;
 
+			// Luwi 加 (2026-10-20): 手机侧（bridge runner）只读 —— 开关与周期在 Luwi 应用的设置里改,
+			// 配对也在那里扫码。面板这边改完还得重启 host, 所以不做第二处开关
+			if (mount.runner === 'luwi-bridge') {
+				return renderPhonePanel(mount, config, deviceName);
+			}
+
 			return h('div', { className: 'luwi-sync-panel', 'data-seat': seat },
 				// 顶部状态条
 				h('div', { className: 'luwi-sync-head' },
@@ -531,15 +589,15 @@ window.__ModuleLoader__.load({
 						h('span', null, `${t('远端')} ${config.remoteState === 'set' ? t('已配置') : t('未配置')}`)),
 					mount.disabledReason === undefined ? null : h('div', { className: 'luwi-sync-bad' }, mount.disabledReason)),
 
-				// 三档页签
-				h('div', { className: 'luwi-sync-tabs' },
-					tabButton('overview', t('总览')),
-					tabButton('actions', t('操作')),
-					tabButton('doctor', t('诊断'))),
-
-				tab === 'overview' ? renderOverview() : null,
-				tab === 'actions' ? renderActions() : null,
-				tab === 'doctor' ? renderDoctor() : null,
+				// 单页 (2026-10-22 主人: 总览与操作合成一页, 诊断页与名片撤掉, 配对放到最上方)
+				// 顺序: 配对 → 仓库 → 镜像读数 → 操作 → 对端 → 运行结果
+				renderPairCard(),
+				renderRepoCard(),
+				renderOverview(),
+				renderOpsCard(),
+				renderPeerCard(),
+				renderP2pCard(),
+				renderAnswer(),
 
 				// 底栏
 				h('div', { className: 'luwi-sync-foot' },
@@ -552,22 +610,6 @@ window.__ModuleLoader__.load({
 						' ',
 						t('自动刷新')),
 					h('span', { className: 'luwi-sync-dim' }, busy ? t('刷新中') : (loadedAt === 0 ? '—' : formatAge(Date.now() - loadedAt)))));
-
-			/**
-			 * 一枚内部页签。
-			 * @param {string} id - 页签 id。
-			 * @param {string} label - 文字。
-			 * @returns {object} React 元素。
-			 */
-			function tabButton(id, label) {
-				return h('button', {
-					key: id,
-					type: 'button',
-					className: 'luwi-sync-tab',
-					'data-active': tab === id ? '1' : '0',
-					onClick: () => setTab(id),
-				}, label);
-			}
 
 			/**
 			 * 一行 kv。
@@ -621,16 +663,68 @@ window.__ModuleLoader__.load({
 				const mirrors = Array.isArray(snap.mirrors) ? snap.mirrors : [];
 				const cards = [];
 				for (const mirror of mirrors) cards.push(renderMirror(mirror));
-				const peerLine = snap.peers === null || snap.peers === undefined
-					? t('镜像里还没有名片 (两边都推过之后才会有)')
-					: `${snap.peers.cards.length} ${t('名片')}${snap.peers.broken ? ` · ${snap.peers.broken} ${t('坏名片')}` : ''}`;
-				cards.push(h('div', { className: 'luwi-sync-card', key: 'peers' },
-					h('div', { className: 'luwi-sync-card-title' }, h('span', { className: 'luwi-sync-strong' }, t('名片'))),
-					h('div', { className: 'luwi-sync-dim' }, peerLine)));
-				// Luwi 加 (G1-2): 跨设备对端那一块 —— 通道开关 / 对端地址与可达性 / 队列与计数
-				// / 影子工作区与投影会话的条数。写操作 (发一句话) 走本机那一条 /luwi-sync/send
-				cards.push(renderPeerCard());
+				// Luwi 加 (2026-10-20): 配对 / 基线 / 多源那几行 —— 一个仓库里现在装着会话与
+				// 每台设备的工作区, 面板要把"配没配、旧会话留了多少、每根源写了多少"说清
+				const pairingInfo = snap.pairing ?? {};
+				const status = (mirrors[0] && mirrors[0].status) || {};
+				const rows = [];
+				rows.push(...kv(t('配对'), pairingInfo.paired
+					? `${t('已配对')}${pairingInfo.from ? ` · ${pairingInfo.from}` : ''}`
+					: t('未配对 (在最上面的配对卡里生成配对码)')));
+				rows.push(...kv(t('仓库主机'), pairingInfo.repoHost || '—'));
+				rows.push(...kv(t('对话窗口'), `${(config.sessions && config.sessions.currentWindowMinutes) ?? 60} min`));
+				if (status.baseline) {
+					rows.push(...kv(t('旧会话'), `${status.baseline.beforeBaseline ?? 0} ${t('个留在本地')} · ${status.baseline.neverSynced ?? 0} ${t('个投影不上传')}`));
+				}
+				const sources = Array.isArray(status.sources) ? status.sources : [];
+				for (const source of sources) {
+					const bits = [`${source.mirrored ?? 0} ${t('已写')}`, `${source.deleted ?? 0} ${t('删')}`];
+					if (source.budget) bits.push(`${source.budget.files ?? 0} ${t('个文件')} · ${formatBytes(source.budget.bytes ?? 0)}`);
+					if (source.skipped) bits.push(`${t('跳过')}: ${source.skipped}`);
+					rows.push(...kv(source.label || t('源'), bits.join(' · ')));
+				}
+				cards.push(h('div', { className: 'luwi-sync-card', key: 'sources' },
+					h('div', { className: 'luwi-sync-card-title' }, h('span', { className: 'luwi-sync-strong' }, t('配对与镜像'))),
+					h('div', { className: 'luwi-sync-kv' }, rows)));
+				// 名片那一块 2026-10-22 撤了 (主人: 删除名片) —— 对端通道的读数留在下面 renderPeerCard
 				return cards;
+			}
+
+			/**
+			 * 手机侧那块只读面板 (bridge runner)。
+			 *
+			 * 开关与周期在 Luwi 应用的「设置 → 同步」里改 (那里还能扫码配对); 这一页只报读数,
+			 * 不做第二处开关 —— 面板里改完还得重启 host, 那是自找的"改了没生效"
+			 * @param {object} mount - 挂载读数。
+			 * @param {object} config - 配置读数。
+			 * @param {string} deviceName - 设备名。
+			 * @returns {object} React 元素。
+			 */
+			function renderPhonePanel(mount, config, deviceName) {
+				const pairingInfo = snap.pairing ?? {};
+				const mirror = Array.isArray(snap.mirrors) ? snap.mirrors[0] : null;
+				const meta = (mirror && mirror.meta) || {};
+				const rows = [];
+				rows.push(...kv(t('同步'), config.remoteState === 'set' ? t('开') : t('关')));
+				rows.push(...kv(t('配对'), pairingInfo.paired ? `${t('已配对')}${pairingInfo.from ? ` · ${pairingInfo.from}` : ''}` : t('未配对')));
+				rows.push(...kv(t('仓库主机'), pairingInfo.repoHost || '—'));
+				rows.push(...kv(t('周期拉取'), `${config.pullIntervalMinutes ?? 0} min`));
+				rows.push(...kv(t('上次拉取'), formatAge(meta.lastPullAgeMs)));
+				if (meta.lastError) rows.push(...kv(t('最近错误'), meta.lastError, 'luwi-sync-bad'));
+				return h('div', { className: 'luwi-sync-panel', 'data-seat': seat },
+					h('div', { className: 'luwi-sync-head' },
+						h('div', { className: 'luwi-sync-head-row' },
+							h('span', { className: 'luwi-sync-dot', 'data-on': mount.mounted ? '1' : '0' }),
+							h('span', { className: 'luwi-sync-strong' }, mount.mounted ? t('已挂载') : t('未挂载')),
+							h('span', { className: 'luwi-sync-badge' }, `v=${snap.version}`)),
+						h('div', { className: 'luwi-sync-head-row luwi-sync-dim' },
+							h('span', null, `${t('设备')} ${deviceName}`))),
+					h('div', { className: 'luwi-sync-card' },
+						h('div', { className: 'luwi-sync-card-title' },
+							h('span', { className: 'luwi-sync-strong' }, t('同步')),
+							h('span', { className: 'luwi-sync-badge' }, config.remoteState === 'set' ? t('开') : t('关'))),
+						h('div', { className: 'luwi-sync-kv' }, rows)),
+					h('div', { className: 'luwi-sync-card luwi-sync-dim' }, t('手机端只读: 开关与周期拉取在 Luwi 应用的「设置 → 同步」里改, 配对也在那里扫码。')));
 			}
 
 			/**
@@ -716,6 +810,50 @@ window.__ModuleLoader__.load({
 				return h('div', { className: 'luwi-sync-card', key: 'peer' }, children);
 			}
 
+			/**
+			 * P2P 传输卡 (2026-10-22, T6): 三档文案照 P2P 方案 §7.4 —— 直连 / 中转 / 对端不在走 git。
+			 *
+			 * 只读: 开关与信任表操作在设置页与后续面板动作里, 这一张卡先如实报"这一趟走的哪条路"。
+			 * @returns {object|null} React 元素 (没有 p2p 读数时整张不画)。
+			 */
+			function renderP2pCard() {
+				const p2p = snap.p2p ?? null;
+				if (p2p === null) return null;
+				const pathLabel = p2p.enabled !== true
+					? t('关')
+					: p2p.path === 'ip'
+						? `${t('直连')} ${p2p.rttMs ?? '?'} ms`
+						: p2p.path === 'relay'
+							? `${t('中转')} ${p2p.rttMs ?? '?'} ms · ${t('本趟走中转可能慢')}`
+							: p2p.path === 'offline'
+								? t('对端不在, 走 git')
+								: t('还没试过');
+				const trustLabel = p2p.trustState === 'new'
+					? t('新对端已加入')
+					: p2p.trustState === 'trusted'
+						? t('已信任')
+						: p2p.trustState === 'changed'
+							? t('换机待确认')
+							: p2p.trustState === 'revoked'
+								? t('已吊销')
+								: '';
+				const rows = [];
+				rows.push(...kv(t('传输'), pathLabel, p2p.enabled === true && p2p.path === 'relay' ? 'luwi-sync-bad' : undefined));
+				if (p2p.peerName || p2p.peerId) {
+					rows.push(...kv(t('对端'), `${p2p.peerName || '?'} · ${String(p2p.peerId || '').slice(0, 8)}…`));
+				}
+				if (trustLabel !== '') rows.push(...kv(t('信任'), trustLabel, p2p.trustState === 'changed' || p2p.trustState === 'revoked' ? 'luwi-sync-bad' : undefined));
+				if (p2p.sas) rows.push(...kv('SAS', String(p2p.sas).replace(/(\d{3})(\d{3})/u, '$1 $2')));
+				if (p2p.enabled === true) rows.push(...kv(t('计数'), `↑ ${p2p.sent ?? 0} · ↓ ${p2p.received ?? 0}`));
+				if (p2p.cooling === true) rows.push(...kv(t('冷却'), t('刚失败过, 这一分钟先走 git')));
+				if (p2p.lastError) rows.push(...kv(t('最近错误'), `${p2p.lastError.code ?? ''} ${p2p.lastError.message ?? ''}`.trim(), 'luwi-sync-bad'));
+				return h('div', { className: 'luwi-sync-card', key: 'p2p' },
+					h('div', { className: 'luwi-sync-card-title' },
+						h('span', { className: 'luwi-sync-strong' }, t('P2P 直连')),
+						h('span', { className: 'luwi-sync-badge' }, p2p.enabled === true ? t('开') : t('关'))),
+					h('div', { className: 'luwi-sync-kv' }, rows));
+			}
+
 			/** 把总览那个输入框里的一句话发出去 (走本机的 /luwi-sync/send) */
 			function sendPeerLine() {
 				const text = peerDraft.trim();
@@ -746,25 +884,25 @@ window.__ModuleLoader__.load({
 					});
 			}
 
-			/** 操作页签。 */
-			function renderActions() {
+			/**
+			 * 仓库卡 + 保存提示 + 两次点击的确认条 (2026-10-22: 原来在「操作」页, 现在并进单页)。
+			 * @returns {object[]} React 元素。
+			 */
+			function renderRepoCard() {
 				const mirrors = Array.isArray(snap.mirrors) ? snap.mirrors : [];
 				const target = pending ? pending.target : actionTarget;
 				const mirror = mirrors.find(m => m.target === target);
 				const writesAllowed = config.panelOps === true && channelOpen;
-				const targetOn = Boolean(mirror && mirror.on);
-				const readDisabled = !channelOpen || busy;
-				// Luwi 加 (2026-10-15): 仓库卡片 —— 主人要的"两端各填一个地址就能连"。
-				// 开关的判据与手机设置页同源: 远端配上了就是开 (关 = 地址挪进 lw.savedRemote 那套
-				// 收尾由宿主半的 lib/luwi-configure.mjs 落笔)。写完要重启 host: 插件挂载时读配置
 				const syncOn = config.remoteState === 'set';
+				const hasRemote = syncOn;
 				const canConfigure = writesAllowed && !busy && !running && pending === null;
+				const workspace = config.workspace ?? {};
 				return [
 					h('div', { className: 'luwi-sync-card', key: 'repo' },
 						h('div', { className: 'luwi-sync-card-title' },
 							h('span', { className: 'luwi-sync-strong' }, t('仓库')),
 							h('span', { className: syncOn ? 'luwi-sync-good' : 'luwi-sync-dim' }, syncOn ? t('已配置') : t('未配置'))),
-						h('div', { className: 'luwi-sync-dim' }, t('两端填同一个地址')),
+						h('div', { className: 'luwi-sync-dim' }, t('只在这台电脑上填一次; 手机用下面的配对码扫入')),
 						h('label', { className: 'luwi-sync-field' },
 							h('input', {
 								type: 'text',
@@ -775,6 +913,20 @@ window.__ModuleLoader__.load({
 								onChange: (e) => setRemoteDraft(e.target.value),
 							})),
 						h('div', { className: 'luwi-sync-dim' }, t('留空 = 保持不动 (已配置的地址不回显)')),
+						// 2026-10-20: 令牌单独一格 —— 手机侧 git 没有 credential helper,
+						// 二维码里带的是拼好的地址 (PC 存干净地址 + 令牌, 手机存拼好的那一份)
+						h('label', { className: 'luwi-sync-field' },
+							h('input', {
+								type: 'password',
+								className: 'luwi-sync-input',
+								placeholder: t('访问令牌 (私有仓库的 PAT; 留空 = 保持不动)'),
+								value: tokenDraft,
+								disabled: !writesAllowed,
+								autoComplete: 'off',
+								onChange: (e) => setTokenDraft(e.target.value),
+							})),
+						h('div', { className: 'luwi-sync-dim' }, `${t('令牌')}: ${config.hasRemoteToken ? t('已保存 (不回显; 留空保持)') : t('还没存')} · ${t('只存本机与应用私有目录, 二维码里会带上拼好的地址')}`),
+						h('div', { className: 'luwi-sync-dim' }, t('GitHub 令牌 permissions 仅需: Contents —— Read and write')),
 						h('label', { className: 'luwi-sync-field' },
 							h('input', {
 								type: 'text',
@@ -784,18 +936,31 @@ window.__ModuleLoader__.load({
 								disabled: !writesAllowed,
 								onChange: (e) => setBranchDraft(e.target.value),
 							})),
+						h('label', { className: 'luwi-sync-field' },
+							h('input', {
+								type: 'text',
+								className: 'luwi-sync-input',
+								placeholder: `${t('工作区根')} (${workspace.root || 'cwd'})`,
+								value: workspaceRootDraft,
+								disabled: !writesAllowed,
+								onChange: (e) => setWorkspaceRootDraft(e.target.value),
+							})),
+						h('div', { className: 'luwi-sync-dim' }, `${t('工作区')}: ${workspace.enabled ? `${workspace.name || ''}${workspace.mirrorDir ? ` · ${workspace.mirrorDir}` : ''}` : t('关')}`),
 						h('div', { className: 'luwi-sync-actions' },
 							h('button', {
 								type: 'button',
 								className: 'luwi-sync-btn',
 								'data-primary': '1',
-								disabled: !canConfigure || (remoteDraft.trim() === '' && branchDraft.trim() === ''),
+								disabled: !canConfigure || (remoteDraft.trim() === '' && tokenDraft.trim() === '' && branchDraft.trim() === '' && workspaceRootDraft.trim() === ''),
 								onClick: () => setPending({
 									op: 'configure',
-									target,
+									target: 'sessions',
 									extra: {
-										...(remoteDraft.trim() === '' ? {} : { remote: remoteDraft.trim() }),
+										...(remoteDraft.trim() === '' ? {} : { remote: remoteDraft.trim(), pairing: true }),
+										// 令牌单独一格; 与地址一起改时也生成新的配对 id (宿主那一侧判)
+										...(tokenDraft.trim() === '' ? {} : { remoteToken: tokenDraft.trim() }),
 										...(branchDraft.trim() === '' ? {} : { branch: branchDraft.trim() }),
+										...(workspaceRootDraft.trim() === '' ? {} : { workspace: { root: workspaceRootDraft.trim() } }),
 									},
 								}),
 							}, t('保存')),
@@ -804,26 +969,28 @@ window.__ModuleLoader__.load({
 								className: 'luwi-sync-btn',
 								disabled: !canConfigure,
 								title: t('改了要重启 host 才生效'),
-								onClick: () => setPending({ op: 'configure', target, extra: { on: !syncOn } }),
-							}, syncOn ? t('同步: 关') : t('同步: 开')))),
-					h('div', { className: 'luwi-sync-card', key: 'target' },
-						h('div', { className: 'luwi-sync-card-title' }, h('span', { className: 'luwi-sync-strong' }, t('目标'))),
-						h('div', { className: 'luwi-sync-actions' },
-							...mirrors.map(m => h('button', {
-								key: m.target,
+								onClick: () => setPending({ op: 'configure', target: 'sessions', extra: { on: !syncOn } }),
+							}, syncOn ? t('同步: 关') : t('同步: 开')),
+							// Luwi 加 (2026-10-20): 清理仓库会话 —— 只删仓库里那些窗口外的镜像与合并副本,
+							// 本机会话一个字节都不动; 走两次点击的确认条
+							h('button', {
 								type: 'button',
 								className: 'luwi-sync-btn',
-								'data-primary': m.target === target ? '1' : '0',
-								onClick: () => setActionTarget(m.target),
-							}, m.label)))),
-
-					// 写动作: 两次点击
+								disabled: !writesAllowed || !hasRemote,
+								title: hasRemote ? undefined : t('先保存仓库地址'),
+								onClick: () => setPending({ op: 'prune', target: 'sessions' }),
+							}, t('清理仓库会话')))),
+					h('div', { className: 'luwi-sync-dim', key: 'save-hint' }, t('保存是两次点击: 点完「保存」还要在下面那块确认条里点「确认」, 成功之后"已配置"才会亮')),
+					// 写动作: 两次点击。2026-10-20 挪到仓库卡正下方 —— 原来它在整页最底下, 点了「保存」
+					// 却看不到确认条, 真机上就是这么"没反应"的
 					pending === null ? null : h('div', { className: 'luwi-sync-confirm', key: 'confirm' },
 						h('div', null, pending.op === 'configure'
 							? t('写下这段配置')
 							: pending.op === 'push'
 								? t('推送会把这台机器的全量镜像推到远端 —— 手机侧走的是移动数据时这笔账很大')
-								: t('拉取会把远端的变化合进本地 (keep-both, 本地被改的文件进不了回收站之外任何地方)')),
+								: pending.op === 'prune'
+									? t('清理仓库会话会删掉仓库里窗口外的会话镜像与合并副本, 然后推一次 (本机会话一个字节都不动)')
+									: t('拉取会把远端的变化合进本地 (keep-both, 本地被改的文件进不了回收站之外任何地方)')),
 						h('div', { className: 'luwi-sync-dim' },
 							pending.op === 'configure'
 								? t('改了要重启 host 才生效')
@@ -837,7 +1004,67 @@ window.__ModuleLoader__.load({
 								onClick: () => void call(pending.op, pending.target, true, pending.extra),
 							}, t('确认')),
 							h('button', { type: 'button', className: 'luwi-sync-btn', onClick: () => setPending(null) }, t('取消')))),
+				];
+			}
 
+			/**
+			 * 配对卡 (2026-10-22 主人: 配对操作放最上方 —— 换手机 / 重装 / 加第三台设备,
+			 * 进来第一个动作都是它)。
+			 * @returns {object} React 元素。
+			 */
+			function renderPairCard() {
+				const writesAllowed = config.panelOps === true && channelOpen;
+				const hasRemote = config.remoteState === 'set';
+				const pairSummary = snap.pairing ?? {};
+				return h('div', { className: 'luwi-sync-card', key: 'pair' },
+					h('div', { className: 'luwi-sync-card-title' },
+						h('span', { className: 'luwi-sync-strong' }, t('配对手机')),
+						h('span', { className: 'luwi-sync-badge' }, pairSummary.paired ? t('已配对') : t('未配对'))),
+					h('div', { className: 'luwi-sync-dim' }, t('手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。')),
+					hasRemote ? null : h('div', { className: 'luwi-sync-bad' }, t('还没有保存仓库地址: 先在下面那一格填好并保存 (两次点击), 再回来生成配对码')),
+					pairError === null ? null : h('div', { className: 'luwi-sync-bad' }, pairError),
+					h('div', { className: 'luwi-sync-actions' },
+						h('button', {
+							type: 'button',
+							className: 'luwi-sync-btn',
+							'data-primary': '1',
+							disabled: !writesAllowed || busy || !hasRemote,
+							title: hasRemote ? undefined : t('先保存仓库地址'),
+							onClick: () => void call('pair', 'sessions'),
+						}, busy ? t('生成中') : t('生成配对码'))),
+					pair === null ? null : h('div', { className: 'luwi-sync-pair' },
+						h('img', { src: svgToDataUrl(pair.svg), width: 240, height: 240, alt: t('配对码') }),
+						h('div', { className: 'luwi-sync-dim' }, `${pair.summary?.repoHost || ''} · ${pair.summary?.branch || ''}${pair.summary?.from ? ` · ${pair.summary.from}` : ''}`),
+						h('button', {
+							type: 'button',
+							className: 'luwi-sync-btn',
+							onClick: () => {
+								try {
+									void navigator.clipboard.writeText(pair.payload);
+									setCopied(true);
+									window.setTimeout(() => setCopied(false), 1500);
+								} catch {
+									// 剪贴板不可用: 不给假回执
+								}
+							},
+						}, copied ? t('已复制') : t('复制配对文本'))));
+			}
+
+			/**
+			 * 操作卡: 拉取 / 推送 / 刷新状态。
+			 *
+			 * 2026-10-22 撤掉两枚按钮: 「读名片」与「自检」—— 主人说诊断板块与名片都不要了,
+			 * 两个 op 在宿主那一侧还留着(工具与 /sync doctor 照旧能用), 只是面板上不再摆出来
+			 * @returns {object[]} React 元素。
+			 */
+			function renderOpsCard() {
+				const mirrors = Array.isArray(snap.mirrors) ? snap.mirrors : [];
+				const target = pending ? pending.target : actionTarget;
+				const mirror = mirrors.find(m => m.target === target);
+				const writesAllowed = config.panelOps === true && channelOpen;
+				const targetOn = Boolean(mirror && mirror.on);
+				const readDisabled = !channelOpen || busy;
+				return [
 					running ? h('div', { className: 'luwi-sync-card', key: 'running' },
 						h('div', { className: 'luwi-sync-head-row' },
 							h('span', { className: 'luwi-sync-strong' }, `${t('正在跑')} ${snap.op.action} · ${snap.op.target}`),
@@ -866,108 +1093,20 @@ window.__ModuleLoader__.load({
 								className: 'luwi-sync-btn',
 								disabled: readDisabled || !targetOn,
 								onClick: () => void call('status', target),
-							}, t('刷新状态')),
-							h('button', {
-								type: 'button',
-								className: 'luwi-sync-btn',
-								disabled: readDisabled,
-								onClick: () => void call('peers', target),
-							}, t('读名片')),
-							h('button', {
-								type: 'button',
-								className: 'luwi-sync-btn',
-								disabled: readDisabled,
-								onClick: () => void call('doctor', target),
-							}, t('自检'))),
+							}, t('刷新状态'))),
 						!targetOn ? h('div', { className: 'luwi-sync-dim' }, t('这条镜像没开')) : null),
-
-					answer === null ? null : h('div', { className: 'luwi-sync-card', key: 'answer' },
-						h('div', { className: 'luwi-sync-card-title' },
-							h('span', { className: 'luwi-sync-strong' }, t('运行结果')),
-							h('span', { className: answer.ok ? 'luwi-sync-good' : 'luwi-sync-bad' }, answer.ok ? 'ok' : (answer.error ?? 'failed'))),
-						h('pre', { className: 'luwi-sync-pre' }, JSON.stringify(answer, null, 2))),
 				];
 			}
 
-			/** 诊断页签。 */
-			function renderDoctor() {
-				if (doctor === null) {
-					return [h('div', { className: 'luwi-sync-card luwi-sync-dim', key: 'empty' }, t('没跑过自检')),
-						h('div', { className: 'luwi-sync-actions', key: 'run' },
-							h('button', {
-								type: 'button',
-								className: 'luwi-sync-btn',
-								'data-primary': '1',
-								disabled: busy,
-								onClick: () => void call('doctor', 'sessions'),
-							}, t('读一次自检')))];
-				}
-				const peersList = Array.isArray(peers) ? peers.cards : null;
-				const peerPlacements = Array.isArray(doctor.peers) ? doctor.peers : [];
-				const problems = Array.isArray(doctor.problems) ? doctor.problems : [];
-				const warnings = Array.isArray(doctor.warnings) ? doctor.warnings : [];
-				const notes = Array.isArray(doctor.notes) ? doctor.notes : [];
-				const selfId = (snap.mirrors.find(m => m.target === 'sessions') ?? {}).meta?.deviceId;
-				return [
-					h('div', { className: 'luwi-sync-card', key: 'verdict' },
-						h('div', { className: 'luwi-sync-card-title' },
-							h('span', { className: 'luwi-sync-strong' }, t('结论')),
-							h('span', { className: doctor.status === 'PASS' ? 'luwi-sync-good' : 'luwi-sync-bad' }, doctor.status)),
-						h('div', { className: 'luwi-sync-kv' },
-							...kv(t('挂载点'), `${doctor.mount?.mounted === true ? t('已挂载') : t('未挂载')} · runner=${doctor.mount?.runner ?? '?'}${doctor.mount?.disabledReason ? ` · ${doctor.mount.disabledReason}` : ''}`),
-							...kv(t('② 层账本'), doctor.layout),
-							...kv(t('git'), doctor.git?.text))),
-
-					h('div', { className: 'luwi-sync-card', key: 'peers' },
-						h('div', { className: 'luwi-sync-card-title' }, h('span', { className: 'luwi-sync-strong' }, t('解析落点'))),
-						peerPlacements.length === 0
-							? h('div', { className: 'luwi-sync-dim' }, '—')
-							: h('ul', { className: 'luwi-sync-list' }, peerPlacements.map(p => h('li', { key: p.name },
-								`${p.name} → ${p.where}${p.resolved ? ` (${p.resolved})` : ''}`)))),
-
-					(peersList === null || peersList.length === 0) ? null : h('div', { className: 'luwi-sync-card', key: 'cards' },
-						h('div', { className: 'luwi-sync-card-title' }, h('span', { className: 'luwi-sync-strong' }, t('名片'))),
-						h('ul', { className: 'luwi-sync-list' }, peersList.map(card => h('li', { key: card.deviceId },
-							`${card.name || '(无名)'} · ${card.deviceId === selfId ? t('这台设备') : card.deviceId.slice(0, 8)}${card.url ? ` · ${card.url}` : ''}`)))),
-
-					problems.length === 0 && warnings.length === 0 && notes.length === 0 ? null
-						: h('div', { className: 'luwi-sync-card', key: 'talk' },
-							problems.length === 0 ? null : h('div', null,
-								h('div', { className: 'luwi-sync-bad luwi-sync-strong' }, t('问题')),
-								h('ul', { className: 'luwi-sync-list' }, problems.map((line, i) => h('li', { key: i }, line)))),
-							warnings.length === 0 ? null : h('div', null,
-								h('div', { className: 'luwi-sync-warn luwi-sync-strong' }, t('警告')),
-								h('ul', { className: 'luwi-sync-list' }, warnings.map((line, i) => h('li', { key: i }, line)))),
-							notes.length === 0 ? null : h('div', null,
-								h('div', { className: 'luwi-sync-dim luwi-sync-strong' }, t('备注')),
-								h('ul', { className: 'luwi-sync-list' }, notes.map((line, i) => h('li', { key: i }, line))))),
-
-					h('div', { className: 'luwi-sync-actions', key: 'copy' },
-						h('button', {
-							type: 'button',
-							className: 'luwi-sync-btn',
-							onClick: () => void copyDoctor(),
-						}, copied ? t('已复制') : t('复制')),
-						h('button', {
-							type: 'button',
-							className: 'luwi-sync-btn',
-							disabled: busy,
-							onClick: () => void call('doctor', 'sessions'),
-						}, t('读一次自检'))),
-				];
+			/** 运行结果 (最近一次动作的原始应答)。 */
+			function renderAnswer() {
+				return answer === null ? null : h('div', { className: 'luwi-sync-card', key: 'answer' },
+					h('div', { className: 'luwi-sync-card-title' },
+						h('span', { className: 'luwi-sync-strong' }, t('运行结果')),
+						h('span', { className: answer.ok ? 'luwi-sync-good' : 'luwi-sync-bad' }, answer.ok ? 'ok' : (answer.error ?? 'failed'))),
+					h('pre', { className: 'luwi-sync-pre' }, JSON.stringify(answer, null, 2)));
 			}
 
-			/** 复制自检报告 (尽力而为: 没有剪贴板就算了)。 */
-			async function copyDoctor() {
-				try {
-					const text = JSON.stringify(doctor, null, 2);
-					if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-						await navigator.clipboard.writeText(text);
-						setCopied(true);
-						window.setTimeout(() => setCopied(false), 1500);
-					}
-				} catch { /* 剪贴板是增强项 */ }
-			}
 		}
 
 		// ── 座位 ───────────────────────────────────────────────────────────────────

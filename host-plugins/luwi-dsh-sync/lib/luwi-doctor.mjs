@@ -257,15 +257,31 @@ export function formatDoctor(report) {
   lines.push(`  layout     : ${report.layout}`)
   if (report.kept !== undefined && report.kept.length > 0) lines.push(`  kept       : ${report.kept.join(', ')}`)
   lines.push(`  git        : ${report.git?.ok === true ? report.git.text : `FAIL — ${report.git?.text ?? '?'}`}`)
-  // P2P (T2): 只报"有没有二进制 / 跑没跑 / 什么原因", 没有二进制不算 doctor 失败 —— p2p 缺省关
+  // P2P (T2/T6): 有没有二进制 / 跑没跑 / 这一趟走的哪条路 / 信任与 SAS / 冷却与最近错误。
+  // 没有二进制或没开都不算 doctor 失败 —— p2p 缺省关, 同步照走 git
   if (report.p2p !== undefined && report.p2p !== null) {
     const p2p = report.p2p
+    const path = p2p.path === 'ip'
+      ? `直连 ${p2p.rttMs ?? '?'} ms`
+      : p2p.path === 'relay'
+        ? `中转 ${p2p.rttMs ?? '?'} ms (本趟可能慢)`
+        : p2p.path === 'offline'
+          ? '对端不在, 走 git'
+          : p2p.path === 'disabled'
+            ? '关'
+            : '还没试过'
     const state = p2p.available !== true
       ? `unavailable — ${p2p.reason ?? '?'}`
       : p2p.running === true
         ? `up — ${typeof p2p.endpointId === 'string' ? `${p2p.endpointId.slice(0, 12)}…` : '?'} via ${p2p.dataPort ?? '?'}`
         : `binary ok, not running${p2p.reason === undefined ? '' : ` — ${p2p.reason}`}`
     lines.push(`  p2p        : ${state}`)
+    lines.push(`  p2p path   : ${path}${p2p.cooling === true ? ' · 冷却中' : ''}`)
+    if (p2p.trustState !== undefined || p2p.sas !== undefined) {
+      const trust = p2p.trustState === 'new' ? '新对端已加入' : p2p.trustState === 'trusted' ? '已信任' : p2p.trustState === 'changed' ? '换机待确认' : p2p.trustState === 'revoked' ? '已吊销' : String(p2p.trustState ?? '—')
+      lines.push(`  p2p trust  : ${trust}${p2p.peerName === undefined ? '' : ` · ${p2p.peerName}`}${p2p.sas === undefined ? '' : ` · SAS ${String(p2p.sas).slice(0, 3)} ${String(p2p.sas).slice(3)}`}`)
+    }
+    if (typeof p2p.lastError?.code === 'string') lines.push(`  p2p error  : ${p2p.lastError.code} — ${p2p.lastError.message ?? ''}`)
     if (typeof p2p.binary === 'string' && p2p.binary !== '') lines.push(`               ${p2p.binary}`)
     if (typeof p2p.detail === 'string' && p2p.detail !== '') lines.push(`               ${p2p.detail}`)
   }

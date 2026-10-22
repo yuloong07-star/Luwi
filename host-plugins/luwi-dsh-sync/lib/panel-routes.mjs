@@ -33,7 +33,8 @@ export const PANEL_HANDSHAKE = 'luwi-dsh-sync/panel'
 
 /** 快照的版本号 (字段增删时动它, 浏览器半按它决定降级渲染)。 */
 // v2 (Luwi, G1-2): 快照多一块 peer (对端通道读数)
-export const PANEL_SCHEMA_VERSION = 2
+// v3 (Luwi, 2026-10-20): 一个仓库多根源 / 扫码配对 / 会话基线 / 手机只读那一档
+export const PANEL_SCHEMA_VERSION = 3
 
 /** 面板能发的动作。 */
 export const PANEL_OPS = Object.freeze({
@@ -45,10 +46,16 @@ export const PANEL_OPS = Object.freeze({
   // Luwi 加 (2026-10-15): 写配置 —— 主人要"在 PC 面板里填仓库地址、拨开关", 写的就是
   // $DSH_HOME/lw/session-sync.json (手机设置页读写的同一份)
   CONFIGURE: 'configure',
+  // Luwi 加 (2026-10-20): 生成手机配对码 —— 回应里是一张画好的 SVG 与可复制的文本,
+  // 不进快照、不落日志 (载荷里有仓库口令)
+  PAIR: 'pair',
+  // Luwi 加 (2026-10-20): 清理仓库会话 —— 把窗口外的镜像会话与合并副本从仓库工作树里删掉并推一次
+  // (本机会话存储一个字节都不动, 见 index.mjs 的 pruneRepoSessions)
+  PRUNE: 'prune',
 })
 
-/** 会改远端/本地工作树/配置的那三个: 要 confirm, 要单飞。 */
-export const WRITE_OPS = Object.freeze([PANEL_OPS.PULL, PANEL_OPS.PUSH, PANEL_OPS.CONFIGURE])
+/** 会改远端/本地工作树/配置的那几个: 要 confirm, 要单飞。 */
+export const WRITE_OPS = Object.freeze([PANEL_OPS.PULL, PANEL_OPS.PUSH, PANEL_OPS.CONFIGURE, PANEL_OPS.PRUNE])
 
 /** POST 体上限: 这条通道只收一个短 JSON, 大一点的都是误用。 */
 export const MAX_BODY_BYTES = 4096
@@ -206,6 +213,7 @@ export async function measureTree(root, maxEntries = COST_MAX_ENTRIES) {
  * @param {(scope: string) => () => Promise<object>} deps.readMetaFor 元数据读取 (会话/工作区各一份)。
  * @param {() => Promise<{cards: object[], broken?: number}>} deps.readPeers 读镜像里的名片。
  * @param {() => Promise<object>} [deps.readPeer] Luwi 加 (G1-2)：对端通道读数（缺省不给 peer 字段）。
+ * @param {() => Promise<object>} [deps.readP2p] Luwi 加 (P2P T6)：P2P 传输读数（缺省不给 p2p 字段）。
  * @param {() => Promise<object>} deps.collectDoctor 只读自检 (runDoctor 的装配)。
  * @param {object} deps.info - 启动面读数 { plugin, version, runner, disabledReason, mounted, config }。
  * @param {object} [deps.logger] - 宿主 logger (可选)。
@@ -328,6 +336,24 @@ export function createPanel(deps) {
         peer = { enabled: false, error: messageOf(thrown) }
       }
     }
+    // Luwi 加 (2026-10-22, P2P T6): P2P 传输读数 (path / rtt / 信任 / SAS / 冷却; 没给这一段就整个字段不给)
+    let p2p = null
+    if (typeof deps.readP2p === 'function') {
+      try {
+        p2p = await deps.readP2p()
+      } catch (thrown) {
+        p2p = { enabled: false, error: messageOf(thrown) }
+      }
+    }
+    // Luwi 加 (2026-10-20): 配对摘要 (paired / from / 仓库主机; **绝不带载荷**)
+    let pairing = null
+    if (typeof deps.readPairing === 'function') {
+      try {
+        pairing = await deps.readPairing()
+      } catch (thrown) {
+        pairing = { paired: false, error: messageOf(thrown) }
+      }
+    }
     return {
       ok: true,
       handshake: PANEL_HANDSHAKE,
@@ -344,6 +370,8 @@ export function createPanel(deps) {
       mirrors,
       peers,
       ...(peer === null ? {} : { peer }),
+      ...(p2p === null ? {} : { p2p }),
+      ...(pairing === null ? {} : { pairing }),
       op: running === null ? lastOp : runningView(ts),
     }
   }
@@ -379,6 +407,24 @@ export function createPanel(deps) {
 
     // configure 是**全局**的 (写那份配置文件, 不针对哪一根镜像), 所以排在 target/mirror 那两道
     // 检查前面 —— 否则远端还没配上 (mirror.engine 为 null) 时, 恰恰是最需要写配置的那一刻被挡住
+    if (op === PANEL_OPS.PAIR) {
+      if (deps.info.config.panelOps !== true) {
+        return { status: 403, body: { ok: false, error: 'panel-initiated writes are disabled (panelOps: false)' } }
+      }
+      if (typeof deps.buildPairing !== 'function') {
+        return { status: 501, body: { ok: false, error: 'this host cannot build a pairing code' } }
+      }
+      try {
+        const built = await deps.buildPairing(request)
+        if (built === null || built?.ok !== true) {
+          return { status: 200, body: { ok: false, action: op, error: built?.error ?? 'the pairing code was not built' } }
+        }
+        return { status: 200, body: { ok: true, action: op, payload: built.payload, svg: built.svg, summary: built.summary } }
+      } catch (thrown) {
+        return { status: 200, body: { ok: false, action: op, error: messageOf(thrown) } }
+      }
+    }
+
     if (op === PANEL_OPS.CONFIGURE) {
       if (deps.info.config.panelOps !== true) {
         return { status: 403, body: { ok: false, error: 'panel-initiated writes are disabled (panelOps: false)' } }
@@ -407,7 +453,9 @@ export function createPanel(deps) {
     } catch (thrown) {
       return { status: 400, body: { ok: false, error: messageOf(thrown) } }
     }
-    const mirror = mirrorOf(target)
+    const mirror = target === PANEL_TARGETS.WORKSPACE
+      ? deps.mirrors[0]
+      : mirrorOf(target)
     if (mirror === undefined || mirror.engine === null) {
       return { status: 409, body: { ok: false, error: `the ${target} mirror is not enabled on this host` } }
     }
@@ -440,7 +488,7 @@ export function createPanel(deps) {
       return { status: 200, body: { ok: true, action: op, target, card } }
     }
 
-    // 到这里只剩 pull / push: 单飞 + 记录
+    // 到这里只剩 pull / push / prune: 单飞 + 记录
     if (running !== null) {
       return {
         status: 409,
@@ -454,7 +502,12 @@ export function createPanel(deps) {
     const id = `panel-${++opSeq}`
     running = { id, target, action: op, startedAt: now() }
     try {
-      const result = await mirror.engine[op]()
+      // Luwi 加 (2026-10-20): 清理仓库会话走宿主自己的口 (它要知道窗口与源文件)
+      const result = op === PANEL_OPS.PRUNE
+        ? await (typeof deps.pruneSessions === 'function'
+          ? deps.pruneSessions()
+          : Promise.reject(new Error('this host has no pruneSessions hook')))
+        : await mirror.engine[op]()
       const finishedAt = now()
       lastOp = {
         id,
