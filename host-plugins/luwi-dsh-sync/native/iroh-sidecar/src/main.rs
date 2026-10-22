@@ -103,11 +103,16 @@ fn env_u16(name: &str, fallback: u16) -> u16 {
 async fn bind_endpoint() -> Result<Endpoint> {
     let preset = env::var("LW_PRESET").unwrap_or_default();
     // Endpoint::builder 对两种 preset 返回同一个 Builder 类型, 分支直接给值
-    let builder = if preset == "minimal" {
+    let mut builder = if preset == "minimal" {
         Endpoint::builder(presets::Minimal)
     } else {
         Endpoint::builder(presets::N0)
     };
+    // 网关探测 (SSDP/UPnP) 缺省关: 真机上空转窗口量出它独占约 1.6% 单核, 而 10-19 的
+    // 家宽↔CGNAT 实测本来就没打通过; v6 直连与 relay 都不依赖它。桌面要 UPnP 就 LW_PORTMAPPER=1
+    if env::var("LW_PORTMAPPER").ok().as_deref() != Some("1") {
+        builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
+    }
     Ok(builder.alpns(vec![ALPN.to_vec()]).bind().await?)
 }
 
@@ -287,8 +292,10 @@ fn describe_path(conn: &Connection) -> (String, u128, String) {
     let paths = conn.paths();
     for path in &paths {
         let peer = path.remote_addr();
+        // 先把地址落成字符串再打: TransportAddr 的 Display 分段写, 直接插进 eprintln 会被拆行
+        let peer_text = peer.to_string();
         eprintln!(
-            "path candidate ip={} relay={} selected={} remote={peer} rtt={}ms",
+            "path candidate ip={} relay={} selected={} remote={peer_text} rtt={}ms",
             path.is_ip(),
             path.is_relay(),
             path.is_selected(),
@@ -298,7 +305,7 @@ fn describe_path(conn: &Connection) -> (String, u128, String) {
             kind = if path.is_ip() { "ip".to_string() } else if path.is_relay() { "relay".to_string() } else { "other".to_string() };
             rtt = path.rtt().as_millis();
             // TransportAddr 的 Display 带 "ip:" / "relay:" 前缀, 读数里只要地址本身
-            remote = peer.to_string();
+            remote = peer_text;
             for prefix in ["ip:", "relay:", "custom:"] {
                 if let Some(stripped) = remote.strip_prefix(prefix) {
                     remote = stripped.to_string();
@@ -369,7 +376,11 @@ async fn data_accept(listener: TcpListener, state: Arc<State>) {
                 let state = state.clone();
                 tokio::spawn(async move {
                     if let Err(error) = handle_data(socket, state.clone()).await {
-                        eprintln!("data connection failed: {error:#}");
+                        // 对端正常收尾 (close code 0) 不算失败, 别把日志刷成一片红
+                        let text = format!("{error:#}");
+                        if !text.contains("closed by peer") {
+                            eprintln!("data connection failed: {text}");
+                        }
                     }
                     state.active.fetch_sub(1, Ordering::SeqCst);
                     state.last_busy_ms.store(now_ms(), Ordering::SeqCst);
@@ -499,7 +510,10 @@ async fn inbound_accept(state: Arc<State>) {
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_inbound(incoming, state.clone()).await {
-                eprintln!("inbound connection failed: {error:#}");
+                let text = format!("{error:#}");
+                if !text.contains("closed by peer") {
+                    eprintln!("inbound connection failed: {text}");
+                }
             }
         });
     }
