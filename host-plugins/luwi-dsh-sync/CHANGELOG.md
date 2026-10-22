@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P wire frames (the start of the plan's T3)** (2026-10-22). `lib/p2p-frame.mjs` implements the
+  8-byte `LW`/version/type/length header, a streaming decoder that survives arbitrary chunk splits, the
+  nine frame types from §5.4/§5.5 (including `MANIFEST_REQ`), and the `BLOB` body shape (self-describing
+  JSON header + raw bytes). Bad magic, version mismatch, unknown types and bodies over 8 MiB all raise
+  `P2P_PROTOCOL`; business semantics stay in the frame layer's callers, not here.
 - **P2P sidecar supervision (the plan's T2)** (2026-10-22). New `lib/p2p-config.mjs` + `lib/p2p-sidecar.mjs`
   turn the optional `p2p` config section into a supervised local process: the binary is looked up next to
   `libnode.so` on Android / under `native/win32-x64/` on the desktop, spawned with a per-process token and
