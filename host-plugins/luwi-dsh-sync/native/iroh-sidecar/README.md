@@ -47,7 +47,7 @@ $env:LW_TOKEN='dev-token'; $env:LW_PORT='7523'; $env:LW_DATA_PORT='7524'; $env:L
 | `LW_TOKEN` | `dev-token` | 控制面 Bearer 与数据面首行口令 (**生产必须随机**) |
 | `LW_IDLE_MS` | 0 | 没有活动连接超过这么久就自己退出, 0 = 不退 (常驻档) |
 | `LW_PRESET` | `n0` | `minimal` = 不碰 relay 与发现 (环回测试) |
-| `LW_PORTMAPPER` | `0` | UPnP/PCP/NAT-PMP 网关探测; **缺省关** —— 真机上空转窗口它独占约 1.6% 单核, 而 10-19 的实测本来就没靠它打通; 桌面要 UPnP 就设 `1` |
+| `LW_PORTMAPPER` | `1` | UPnP/PCP/NAT-PMP 网关探测; 缺省开 (与 iroh 一致)。600 s 真机窗口里它不构成可分辨的差别 (关掉 3.54% / 开着 3.16%), 所以不为省电关它; 某些网络会弹防火墙窗时设 `0` |
 | `LW_ONLINE_MS` | 8000 | 等 `online()` 的上限, 超时就继续 (本地直连仍可用) |
 
 ## 控制面 (HTTP, 只绑 127.0.0.1)
@@ -91,17 +91,21 @@ node smoke.mjs            # 默认 native/win32-x64/lwiroh.exe, 1 MiB 双向
 ## 功耗口径
 
 2026-10-19 真机读数 (旧探针满速进程) 空闲 **7.9% 单核**, RSS 13 MB —— 那是探针在满速跑, 不是常驻档。
-2026-10-22 用 v2 重测 (`measure-idle.ps1` / `measure-idle-android.ps1`):
+2026-10-22 用 v2 重测 (`measure-idle.ps1` / `measure-idle-android.ps1`, 真机 22041216C):
 
 | 窗口 | CPU | 单核 | RSS |
 | :-- | :-- | --: | :-- |
-| Windows x64 600 s (缺省) | 0.094 s | 0.02% | 22 → 24 MiB |
-| Android arm64 600 s (**LW_PORTMAPPER=1**) | 18.96 s | 3.16% | 12 → 13 MiB |
-| Android arm64 120 s (**portmapper 关**) | 1.82 s | 1.52% | 12 → 12.3 MiB |
+| Windows x64 600 s | 0.094 s | 0.02% | 22 → 24 MiB |
+| Android arm64 600 s (缺省, portmapper 开) | 18.96 s | 3.16% | 12.4 → 13.2 MiB |
+| Android arm64 600 s (`LW_PORTMAPPER=0`) | 21.24 s | 3.54% | 11.5 → 12.8 MiB |
+| Android arm64 180 s (缺省) | 2.65 s | 1.47% | 12.2 → 12.5 MiB |
 | Android arm64 120 s (`LW_PRESET=minimal`) | 0.01 s | 0.01% | 8.9 MiB |
 
-结论: 空转 CPU 的 1.6 个百分点来自网关探测 (已缺省关), 剩下的约 1.5% 是 relay 客户端与地址发布
-的定时器。1.5% 离方案 §5.2 的 3% 闸还有一半, 所以 **60 s 心跳不需要为省电放长**。
+读法: **长窗口比短窗口高** (1.5% → 3.3%), 而 portmapper 开关在 600 s 窗口里分不出差别 ——
+这更像是息屏几分钟后 CPU 降频/doze 让同样的唤醒工作花掉更多 CPU 秒, 不是多出了一份活;
+剩下的定时器来自 relay 客户端与地址发布 (`minimal` 档归零可以确认这一点)。
+**最坏 3.5% 单核**按 0.8 W/核折 24 h ≈ 0.67 Wh ≈ 3.4% 电量, 仍低于 J15 的 ≤8%;
+心跳是 JS 的技能 (HEADS 每 60 s), 不是这份 CPU 的来源, **不需要为省电放到 120 s**。
 
 ## 模式 (只用于测量, 不参与产品路径)
 

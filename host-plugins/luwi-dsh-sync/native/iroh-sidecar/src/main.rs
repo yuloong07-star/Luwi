@@ -108,9 +108,9 @@ async fn bind_endpoint() -> Result<Endpoint> {
     } else {
         Endpoint::builder(presets::N0)
     };
-    // 网关探测 (SSDP/UPnP) 缺省关: 真机上空转窗口量出它独占约 1.6% 单核, 而 10-19 的
-    // 家宽↔CGNAT 实测本来就没打通过; v6 直连与 relay 都不依赖它。桌面要 UPnP 就 LW_PORTMAPPER=1
-    if env::var("LW_PORTMAPPER").ok().as_deref() != Some("1") {
+    // 网关探测 (SSDP/UPnP) 缺省开, 与 iroh 默认一致; 实测 600 s 窗口里它不构成可分辨的差别,
+    // 所以不给"省电"背锅 —— 想关 (某些网络会弹防火墙窗) 就 LW_PORTMAPPER=0
+    if env::var("LW_PORTMAPPER").ok().as_deref() == Some("0") {
         builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
     }
     Ok(builder.alpns(vec![ALPN.to_vec()]).bind().await?)
