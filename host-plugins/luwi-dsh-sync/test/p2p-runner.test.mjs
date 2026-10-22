@@ -185,3 +185,37 @@ test('a disabled p2p section never dials', async () => {
   assert.equal(result.status.path, 'disabled')
   assert.equal(sidecar.calls.open, 0)
 })
+
+test('the dial target prefers ticket, then endpoint, then the device id', async () => {
+  const cases = [
+    [{ id: 'p', name: '', endpoint: 'node', ticket: 'endpoint-ticket' }, 'endpoint-ticket'],
+    [{ id: 'p', name: '', endpoint: 'node' }, 'node'],
+    [{ id: 'p', name: '' }, 'p'],
+  ]
+  for (const [peer, expected] of cases) {
+    const sidecar = makeSidecar()
+    const runner = makeRunner({ sidecar, peer: () => peer })
+    await runner.runOutbound()
+    assert.equal(sidecar.calls.to, expected)
+  }
+})
+
+test('the inbound loop keeps accepting until stopped', async () => {
+  const sidecar = makeSidecar({ acceptInbound: async () => { throw new Error('no inbound yet') } })
+  const runner = makeRunner({ sidecar })
+  runner.deps.sleep = () => new Promise(resolve => setTimeout(resolve, 1))
+  let seen = 0
+  let stop = () => {}
+  stop = runner.startInboundLoop({
+    retryMs: 1,
+    onSession: () => {
+      seen += 1
+      if (seen >= 3) stop()
+    },
+  })
+  const deadline = Date.now() + 2000
+  while (seen < 3 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(seen >= 3, true)
+  await runner.stop()
+  assert.equal(sidecar.calls.stopped, 1)
+})

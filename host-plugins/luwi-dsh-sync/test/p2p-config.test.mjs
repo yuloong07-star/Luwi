@@ -10,6 +10,7 @@ import {
   p2pStatusShell,
   resolveP2pConfig,
   selectP2pBinary,
+  selectP2pPeer,
 } from '../lib/p2p-config.mjs'
 import { SyncError } from '../lib/errors.mjs'
 
@@ -96,3 +97,16 @@ test('p2pStatusShell: missing binary is a status, never a throw', () => {
   assert.equal(ready.endpointId, 'id')
   assert.equal(ready.reason, undefined)
 })
+
+test('selectP2pPeer picks the first card with a nodeId, skipping our own', () => {
+  const cards = [
+    { deviceId: 'me', name: 'Me', p2p: { nodeId: 'self-node' } },
+    { deviceId: 'pc', name: 'PC', p2p: { nodeId: 'pc-node', ticket: 'endpoint-ticket' } },
+    { deviceId: 'phone', name: 'Phone', p2p: {} },
+  ]
+  assert.deepEqual(selectP2pPeer(cards, 'me'), { id: 'pc', name: 'PC', endpoint: 'pc-node', ticket: 'endpoint-ticket' })
+  assert.equal(selectP2pPeer([{ deviceId: 'phone', p2p: {} }], 'me'), null)
+  assert.equal(selectP2pPeer([], 'me'), null)
+  assert.equal(selectP2pPeer(undefined, 'me'), null)
+})
+

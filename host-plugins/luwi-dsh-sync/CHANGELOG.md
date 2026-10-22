@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P service and engine hooks (the plan's T4, continued)** (2026-10-22). `lib/p2p-service.mjs` resolves
+  the peer from the `p2p.nodeId` line in `peers/*.json` (skipping our own card and refusing to dial before
+  the engine's device id exists), runs the two-segment session once per `push`/`pull` via
+  `beforeSync()`, and owns the resident lifecycle (inbound loop for every enabled profile, 60 s heartbeat
+  for `resident`). `P2pRunner` gained the inbound loop and dial-target precedence
+  (ticket → nodeId → device id). In `index.mjs` a P2P attempt now precedes `pushSync`/`runPullSync`
+  (failures fall through to the existing transport and warn once), `sync_doctor` reports the runner's
+  status, and a mount-scoped effect starts/stops the resident half. Everything stays inert while
+  `p2p.enabled` is false, which is still the default.
 - **P2P runner: budget, breaker and readings (the start of the plan's T4)** (2026-10-22).
   `lib/p2p-runner.mjs` wraps the sidecar and the session state machine into a schedulable action:
   outbound (`ensure` → dial → session) and inbound (accept → peer-id check → same machine), a 20 s

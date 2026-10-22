@@ -49,6 +49,7 @@ export class P2pRunner {
       now: () => Date.now(),
       setInterval: (fn, ms) => setInterval(fn, ms),
       clearInterval: handle => clearInterval(handle),
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
       ...(options.deps ?? {}),
     }
     this.failures = 0
@@ -64,6 +65,7 @@ export class P2pRunner {
     this.sentBytes = 0
     this.receivedBytes = 0
     this.heartbeat = null
+    this.inboundLoop = null
     this.stopped = false
   }
 
@@ -90,7 +92,7 @@ export class P2pRunner {
       if (status?.running !== true) {
         return this.#failure(new SyncError(ERROR_CODES.P2P_UNAVAILABLE, `sidecar is not running (${status?.reason ?? 'unknown'})`), 'P2P_UNAVAILABLE')
       }
-      const connection = await this.sidecar.openFrameStream({ to: peer.ticket ?? peer.id, timeoutMs: this.config.connectTimeoutMs })
+      const connection = await this.sidecar.openFrameStream({ to: peer.ticket ?? peer.endpoint ?? peer.id, timeoutMs: this.config.connectTimeoutMs })
       return await this.#run(connection, peer, options.timeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
     } catch (error) {
       return this.#failure(error, errorCodeOf(error, 'P2P_IO'))
@@ -267,10 +269,47 @@ export class P2pRunner {
     }
   }
 
+  /**
+   * 常驻入站：一直等对端拨入并跑会话，直到 `stop()` 或返回的停止函数。
+   *
+   * 每轮都走 `runInbound` 的同一套核对与预算；被拒（P2P_UNTRUSTED）时歇一下再等，
+   * 避免有人拿错误设备号刷回调。
+   * @param {{onSession?: Function, retryMs?: number}} [options] - 回调与重试间隔。
+   * @returns {() => void} 停止函数。
+   */
+  startInboundLoop(options = {}) {
+    this.stopped = false
+    const retryMs = options.retryMs ?? 1000
+    const loop = async () => {
+      while (!this.stopped) {
+        const result = await this.runInbound().catch(() => ({ ok: false, reason: 'P2P_IO' }))
+        if (typeof options.onSession === 'function') {
+          try {
+            options.onSession(result)
+          } catch {
+            // 回调自己的错不该终止入站循环
+          }
+        }
+        if (this.stopped) return
+        if (result.reason === 'P2P_DISABLED') return
+        if (result.ok !== true && result.reason !== 'P2P_TIMEOUT') {
+          // sidecar 还没起来时不要空转: 歇久一点再试 (心跳那条会负责把它拉起来)
+          await this.deps.sleep(result.reason === 'P2P_UNAVAILABLE' ? retryMs * 5 : retryMs)
+        }
+      }
+    }
+    const pending = loop()
+    this.inboundLoop = pending
+    return () => {
+      this.stopped = true
+    }
+  }
+
   /** 停掉心跳与 sidecar。 */
   async stop() {
     this.stopped = true
     this.stopHeartbeat()
+    if (this.inboundLoop !== null && typeof this.inboundLoop.then === 'function') await Promise.race([this.inboundLoop, this.deps.sleep(2000)])
     if (this.sidecar !== null && typeof this.sidecar.stop === 'function') await this.sidecar.stop()
   }
 }

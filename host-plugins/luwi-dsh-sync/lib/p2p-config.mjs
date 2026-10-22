@@ -96,6 +96,32 @@ export function resolveP2pConfig(raw) {
 }
 
 /**
+ * 从名片里挑"这次要连的对端"。
+ *
+ * 名片 `peers/<设备id>.json` 里的 `p2p` 段（§8.2）: `{nodeId, ticket?, relay?, updatedAt?}`。
+ * 只认带 `nodeId` 且不是本机的那一张；ticket 只用于"发现不到时手拨"。
+ * @param {Array<{deviceId?: string, name?: string, p2p?: {nodeId?: string, ticket?: string}}>} cards - 名片。
+ * @param {string} myDeviceId - 本机设备 id（跳过自己那一张）。
+ * @returns {{id: string, name: string, endpoint: string, ticket?: string}|null} 对端描述。
+ */
+export function selectP2pPeer(cards, myDeviceId) {
+  for (const card of Array.isArray(cards) ? cards : []) {
+    if (typeof card?.deviceId !== 'string' || card.deviceId === '' || card.deviceId === myDeviceId) continue
+    const p2p = card.p2p !== null && typeof card.p2p === 'object' ? card.p2p : {}
+    const endpoint = typeof p2p.nodeId === 'string' && p2p.nodeId !== '' ? p2p.nodeId : ''
+    if (endpoint === '') continue
+    const peer = {
+      id: card.deviceId,
+      name: typeof card.name === 'string' ? card.name : '',
+      endpoint,
+    }
+    if (typeof p2p.ticket === 'string' && p2p.ticket !== '') peer.ticket = p2p.ticket
+    return peer
+  }
+  return null
+}
+
+/**
  * sidecar 二进制候选路径（按顺序找）。
  *
  * 安卓侧与 `libnode.so` 同目录（真机上 `process.execPath` 就是 `<nativeLibraryDir>/libnode.so`，
