@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P identity, trust table and SAS (the plan's T5)** (2026-10-22). The sidecar now keeps a stable
+  ed25519 identity when given `LW_KEY_FILE` (32 raw bytes, mode 0600, generated once and reused —
+  proven on device and across restarts). `lib/p2p-trust.mjs` stores per-device `nodeId` trust in
+  `<repoDir>/.p2p/trust.json` (git-ignored, atomic, unknown keys kept): first sight is trusted, a changed
+  `nodeId` is `P2P_NODE_CHANGED` and blocks the dial, a revoked peer is never dialled, and `SAS` derives
+  the same six digits on both ends from the sorted node ids. Peer cards now carry a `p2p` section
+  (`nodeId`/`ticket`) that the card reader/writer round-trips and preserves across rewrites; the service
+  consults the trust table before every dial, writes new peers, reports `trustState`/`blockedPeer`/`sas`,
+  and the own card is written with our `p2p.nodeId` once the sidecar is up. Inbound checks compare the
+  sidecar's node id (not the repo device id).
 - **P2P service and engine hooks (the plan's T4, continued)** (2026-10-22). `lib/p2p-service.mjs` resolves
   the peer from the `p2p.nodeId` line in `peers/*.json` (skipping our own card and refusing to dial before
   the engine's device id exists), runs the two-segment session once per `push`/`pull` via

@@ -392,3 +392,45 @@ test('without a card config /sync peers still answers, with a nameless self card
     rmSync(harness.root, { recursive: true, force: true })
   }
 })
+
+test('a card can carry the P2P identity, and only identity changes rewrite it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lw-peers-p2p-'))
+  try {
+    const at = new Date('2026-10-22T00:00:00.000Z')
+    assert.equal(await writePeerCard({ repoDir: root, deviceId: 'pc', name: '', url: '', p2p: { nodeId: 'node-x', ticket: 'endpoint-t' }, now: at }), true)
+    const file = join(root, 'peers', 'pc.json')
+    const first = JSON.parse(readFileSync(file, 'utf8'))
+    assert.equal(first.p2p.nodeId, 'node-x')
+    assert.equal(first.p2p.ticket, 'endpoint-t')
+    assert.equal(first.updatedAt, at.toISOString())
+
+    assert.equal(await writePeerCard({ repoDir: root, deviceId: 'pc', name: '', url: '', p2p: { nodeId: 'node-x', ticket: 'endpoint-t' }, now: new Date('2026-10-23T00:00:00.000Z') }), false)
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).updatedAt, at.toISOString(), 'unchanged identity leaves updatedAt alone')
+
+    assert.equal(await writePeerCard({ repoDir: root, deviceId: 'pc', name: '', url: '', p2p: { nodeId: 'node-x', ticket: 'endpoint-new' } }), true)
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).p2p.ticket, 'endpoint-new')
+
+    const { cards } = await readPeerCards(root)
+    assert.equal(cards[0].p2p.nodeId, 'node-x')
+    assert.equal(cards[0].p2p.ticket, 'endpoint-new')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('unknown card keys survive a rewrite and a bad p2p section is dropped', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lw-peers-p2p-'))
+  try {
+    mkdirSync(join(root, 'peers'), { recursive: true })
+    writeFileSync(join(root, 'peers', 'pc.json'), JSON.stringify({ deviceId: 'pc', name: 'old', url: '', updatedAt: 'x', future: { a: 1 }, p2p: { nodeId: '' } }))
+    await writePeerCard({ repoDir: root, deviceId: 'pc', name: 'PC', url: '' })
+    const parsed = JSON.parse(readFileSync(join(root, 'peers', 'pc.json'), 'utf8'))
+    assert.deepEqual(parsed.future, { a: 1 })
+    assert.equal(parsed.name, 'PC')
+    assert.equal(parsed.p2p, undefined, 'an empty nodeId is not a P2P identity')
+    const { cards } = await readPeerCards(root)
+    assert.equal(cards[0].p2p, undefined)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

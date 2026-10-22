@@ -4,7 +4,8 @@
 // 真回环端口；CI / 纯单测环境不该被它拖住。开门：LW_P2P_E2E=1。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
+import os from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { P2pSidecar } from '../lib/p2p-sidecar.mjs'
@@ -33,5 +34,29 @@ test('real sidecar: ensure reports /v1/id, stop shuts it down', { skip: enabled 
     assert.equal(sidecar.state, 'stopped')
   } finally {
     await sidecar.stop().catch(() => {})
+  }
+})
+
+test('the key file keeps the endpoint id stable across restarts (and a new key makes a new id)', { skip: enabled ? false : 'set LW_P2P_E2E=1 with a built lwiroh.exe', timeout: 120000 }, async () => {
+  const dir = await fs.mkdtemp(join(os.tmpdir(), 'lw-p2p-key-'))
+  try {
+    const make = (keyFile) => new P2pSidecar({ config: { enabled: true, startTimeoutMs: 30000 }, pluginDir, platform: process.platform, arch: process.arch, execPath: process.execPath, keyFile })
+    const first = make(join(dir, 'node.key'))
+    const firstStatus = await first.ensure()
+    const firstId = firstStatus.endpointId
+    await first.stop()
+    assert.equal((await fs.stat(join(dir, 'node.key'))).size, 32)
+
+    const second = make(join(dir, 'node.key'))
+    const secondStatus = await second.ensure()
+    await second.stop()
+    assert.equal(secondStatus.endpointId, firstId)
+
+    const third = make(join(dir, 'other.key'))
+    const thirdStatus = await third.ensure()
+    await third.stop()
+    assert.notEqual(thirdStatus.endpointId, firstId)
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
   }
 })

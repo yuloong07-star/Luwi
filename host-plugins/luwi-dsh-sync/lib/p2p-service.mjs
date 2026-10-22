@@ -5,6 +5,7 @@
 
 import { P2pRunner } from './p2p-runner.mjs'
 import { selectP2pPeer } from './p2p-config.mjs'
+import { evaluatePeer, readTrust, rememberPeer, sasDigits, writeTrust } from './p2p-trust.mjs'
 
 /**
  * P2P 服务：对端解析 + 调度器 + 生命周期。
@@ -28,7 +29,13 @@ export class P2pService {
     this.readCards = options.readCards
     this.sidecar = options.sidecar
     this.onSession = options.onSession
+    this.trustStore = options.trustStore ?? {
+      read: repoDir => readTrust(repoDir),
+      write: (repoDir, trust) => writeTrust(repoDir, trust),
+    }
     this.peer = null
+    this.trustState = undefined
+    this.blockedPeer = undefined
     this.stopInbound = null
     this.runner = options.runner ?? new P2pRunner({
       sidecar: options.sidecar,
@@ -61,12 +68,49 @@ export class P2pService {
         return null
       }
       const cards = await this.readCards()
-      this.peer = selectP2pPeer(Array.isArray(cards) ? cards : [], myDeviceId)
+      const candidate = selectP2pPeer(Array.isArray(cards) ? cards : [], myDeviceId)
+      if (candidate === null) {
+        this.peer = null
+        this.trustState = 'no-peer'
+        return null
+      }
+      // 信任表: 首次见到即信任; 换 nodeId 或吊销过都拒绝 (方案 §8.3)
+      const trust = await this.trustStore.read(this.repoDir)
+      const decision = evaluatePeer(trust, { deviceId: candidate.id, nodeId: candidate.endpoint })
+      if (decision.ok !== true) {
+        this.peer = null
+        this.trustState = decision.state
+        this.blockedPeer = { id: candidate.id, nodeId: candidate.endpoint, state: decision.state, previousNodeId: decision.previousNodeId }
+        return null
+      }
+      const remembered = rememberPeer(trust, { deviceId: candidate.id, nodeId: candidate.endpoint, name: candidate.name })
+      await this.trustStore.write(this.repoDir, remembered.trust)
+      this.trustState = remembered.decision.state
+      this.blockedPeer = undefined
+      this.peer = candidate
+      return this.peer
     } catch {
-      // 名片读不动 = 这一趟没有可连的对端；下一次再试
+      // 名片/信任表读不动 = 这一趟没有可连的对端；下一次再试
       this.peer = null
     }
-    return this.peer
+    return null
+  }
+
+  /**
+   * 本机 P2P 身份（给名片写入用）：sidecar 就绪后才有 nodeId。
+   * @returns {Promise<{nodeId: string, ticket?: string}|null>} 身份。
+   */
+  async identity() {
+    if (this.config.enabled !== true) return null
+    try {
+      const status = await this.runner.status()
+      if (typeof status.endpointId !== 'string' || status.endpointId === '') return null
+      const identity = { nodeId: status.endpointId }
+      if (typeof status.ticket === 'string' && status.ticket !== '') identity.ticket = status.ticket
+      return identity
+    } catch {
+      return null
+    }
   }
 
   /**
@@ -92,9 +136,19 @@ export class P2pService {
     if (this.config.power === 'resident') this.runner.startHeartbeat()
   }
 
-  /** 读数（§7.4 形状，走 runner）。 */
+  /** 读数（§7.4 形状 + 信任状态与 SAS）。 */
   async status() {
-    return this.runner.status()
+    const base = await this.runner.status()
+    const status = {
+      ...base,
+      peerEndpoint: this.peer?.endpoint,
+      trustState: this.trustState,
+      blockedPeer: this.blockedPeer,
+    }
+    if (typeof base.endpointId === 'string' && base.endpointId !== '' && typeof this.peer?.endpoint === 'string') {
+      status.sas = sasDigits(base.endpointId, this.peer.endpoint)
+    }
+    return status
   }
 
   /** 停掉入站、心跳与 sidecar（幂等）。 */

@@ -134,7 +134,7 @@ test('inbound sessions are refused when the peer id is not the trusted one', asy
   const runner = makeRunner({ sidecar, sessionFactory: () => { sessionCreated += 1; return { run: async () => ({}) } } })
   const result = await runner.runInbound()
   assert.equal(result.ok, false)
-  assert.equal(result.reason, 'P2P_UNTRUSTED')
+  assert.equal(result.reason, 'P2P_NODE_CHANGED')
   assert.equal(sidecar.calls.closed, 1)
   assert.equal(sessionCreated, 0)
 })
@@ -219,3 +219,4 @@ test('the inbound loop keeps accepting until stopped', async () => {
   await runner.stop()
   assert.equal(sidecar.calls.stopped, 1)
 })
+

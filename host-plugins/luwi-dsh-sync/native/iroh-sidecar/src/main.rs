@@ -108,12 +108,44 @@ async fn bind_endpoint() -> Result<Endpoint> {
     } else {
         Endpoint::builder(presets::N0)
     };
+    if let Some(key) = load_secret_key()? {
+        builder = builder.secret_key(key);
+    }
     // 网关探测 (SSDP/UPnP) 缺省开, 与 iroh 默认一致; 实测 600 s 窗口里它不构成可分辨的差别,
     // 所以不给"省电"背锅 —— 想关 (某些网络会弹防火墙窗) 就 LW_PORTMAPPER=0
     if env::var("LW_PORTMAPPER").ok().as_deref() == Some("0") {
         builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
     }
     Ok(builder.alpns(vec![ALPN.to_vec()]).bind().await?)
+}
+
+// 稳定身份: LW_KEY_FILE 指向 32 字节的 ed25519 私钥 (0600)。没有就生成一份并落盘 ——
+// 换机 = 换 id, 旧 id 由信任表那边吊销; 不打印私钥, 只在新建时打一行路径
+fn load_secret_key() -> Result<Option<iroh::SecretKey>> {
+    let path = match env::var("LW_KEY_FILE") {
+        Ok(value) if !value.is_empty() => std::path::PathBuf::from(value),
+        _ => return Ok(None),
+    };
+    if let Ok(data) = std::fs::read(&path) {
+        if data.len() == 32 {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&data);
+            return Ok(Some(iroh::SecretKey::from_bytes(&bytes)));
+        }
+        eprintln!("key file {} is not 32 bytes; a new identity will replace it", path.display());
+    }
+    let key = iroh::SecretKey::generate();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, key.to_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    println!("identity: wrote a new secret key to {}", path.display());
+    Ok(Some(key))
 }
 
 async fn daemon() -> Result<()> {

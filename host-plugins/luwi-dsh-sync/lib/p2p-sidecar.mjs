@@ -196,6 +196,7 @@ export class P2pSidecar {
     this.platform = options.platform ?? process.platform
     this.arch = options.arch ?? process.arch
     this.execPath = options.execPath ?? process.execPath
+    this.keyFile = typeof options.keyFile === 'string' ? options.keyFile : ''
     this.deps = { ...defaultDeps(), ...(options.deps ?? {}) }
 
     /** @type {'idle'|'starting'|'running'|'restarting'|'stopping'|'stopped'|'crashed'} */
@@ -521,6 +522,7 @@ export class P2pSidecar {
       LW_ONLINE_MS: String(Math.max(1000, this.config.startTimeoutMs - 5000)),
       LW_PORTMAPPER: this.config.portmapper ? '1' : '0',
     }
+    if (this.keyFile !== '') env.LW_KEY_FILE = this.keyFile
     let child
     try {
       child = this.deps.spawn(binary, ['daemon'], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })

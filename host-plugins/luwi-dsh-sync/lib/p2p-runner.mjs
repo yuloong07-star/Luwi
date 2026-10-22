@@ -108,15 +108,16 @@ export class P2pRunner {
     if (this.config.enabled !== true || this.config.inbound === false) return this.#result(false, 'P2P_DISABLED')
     if (this.sidecar.state !== 'running') return this.#result(false, 'P2P_UNAVAILABLE')
     const peer = this.peerProvider()
+    const expectedNode = peer?.endpoint ?? peer?.id
     let inbound
     try {
       inbound = await this.sidecar.acceptInbound({ timeoutMs: options.acceptTimeoutMs ?? P2P_RUN_DEFAULTS.inboundTimeoutMs })
     } catch (error) {
       return this.#failure(error, 'P2P_TIMEOUT', { silent: true })
     }
-    if (peer === null || inbound.peer !== peer.id) {
+    if (peer === null || inbound.peer !== expectedNode) {
       inbound.stream.close()
-      return this.#failure(new SyncError(ERROR_CODES.P2P_UNTRUSTED, `inbound peer ${inbound.peer} is not the trusted peer ${String(peer?.id)}`), 'P2P_UNTRUSTED')
+      return this.#failure(new SyncError(ERROR_CODES.P2P_NODE_CHANGED, `inbound node ${inbound.peer} is not the expected ${String(expectedNode)}`), 'P2P_NODE_CHANGED')
     }
     return this.#run({ path: 'ip', rttMs: 0, peer: inbound.peer, stream: inbound.stream }, peer, options.timeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
   }
@@ -209,6 +210,7 @@ export class P2pRunner {
       peerId: peer?.id,
       peerName: peer?.name,
       endpointId: sidecar.endpointId,
+      ticket: sidecar.ticket,
       lastSessionAt: this.lastSession?.at,
       lastSessionMs: this.lastSession?.ms,
       sent: this.sent,

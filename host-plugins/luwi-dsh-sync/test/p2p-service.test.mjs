@@ -32,15 +32,24 @@ function makeRunner(overrides = {}) {
   return runner
 }
 
-function makeService({ cards = [], runner = makeRunner(), config = { enabled: true, power: 'resident' }, deviceId = 'me', readCards = undefined } = {}) {
-  return new P2pService({
+function makeService({ cards = [], runner = makeRunner(), config = { enabled: true, power: 'resident' }, deviceId = 'me', readCards = undefined, trustStore = undefined } = {}) {
+  const writes = []
+  const store = trustStore ?? {
+    read: async () => ({ v: 1, peers: {} }),
+    write: async (_repoDir, trust) => { writes.push(trust) },
+  }
+  const service = new P2pService({
     config,
     repoDir: 'C:/repo',
     deviceId,
     readCards: readCards ?? (async () => cards),
     sidecar: {},
     runner,
+    trustStore: store,
   })
+  service._writes = writes
+  service._store = store
+  return service
 }
 
 const PC = { deviceId: 'pc', name: 'PC', p2p: { nodeId: 'pc-node' } }
@@ -115,4 +124,57 @@ test('stop stops the inbound loop before the runner', async () => {
   await service.stop()
   assert.equal(runner.calls.stopInbound, 1)
   assert.equal(runner.calls.stopped, 1)
+})
+
+test('the first sight of a peer is written to the trust table and then dialled', async () => {
+  const runner = makeRunner()
+  const service = makeService({ cards: [PC], runner })
+  const result = await service.beforeSync()
+  assert.equal(result.ok, true)
+  assert.equal(service.trustState, 'new')
+  assert.equal(service._writes.length, 1)
+  assert.equal(service._writes[0].peers.pc.nodeId, 'pc-node')
+  assert.equal(service._writes[0].peers.pc.trustedAt > 0, true)
+})
+
+test('a changed node id blocks the dial and is reported instead of trusted', async () => {
+  const runner = makeRunner()
+  const trustStore = {
+    read: async () => ({ v: 1, peers: { pc: { nodeId: 'old-node', trustedAt: 1, revokedAt: 0 } } }),
+    write: async () => { throw new Error('must not write on a changed node') },
+  }
+  const service = makeService({ cards: [PC], runner, trustStore })
+  const result = await service.beforeSync()
+  assert.equal(result.ok, false)
+  assert.equal(runner.calls.outbound, 0)
+  assert.equal(service.trustState, 'changed')
+  const status = await service.status()
+  assert.equal(status.blockedPeer.state, 'changed')
+  assert.equal(status.blockedPeer.previousNodeId, 'old-node')
+})
+
+test('a revoked peer is never dialled and the table is left alone', async () => {
+  const runner = makeRunner()
+  const trustStore = {
+    read: async () => ({ v: 1, peers: { pc: { nodeId: 'pc-node', trustedAt: 1, revokedAt: 5 } } }),
+    write: async () => { throw new Error('must not write for a revoked peer') },
+  }
+  const service = makeService({ cards: [PC], runner, trustStore })
+  const result = await service.beforeSync()
+  assert.equal(result.ok, false)
+  assert.equal(runner.calls.outbound, 0)
+  assert.equal(service.trustState, 'revoked')
+})
+
+test('status carries the peer endpoint, trust state and the six-digit SAS', async () => {
+  const runner = makeRunner({
+    async status() { return { enabled: true, endpointId: 'a'.repeat(64) } },
+  })
+  const service = makeService({ cards: [PC], runner })
+  await service.beforeSync()
+  await runner.status()
+  const status = await service.status()
+  assert.equal(status.peerEndpoint, 'pc-node')
+  assert.equal(status.trustState, 'new')
+  assert.match(status.sas, /^\d{6}$/u)
 })
