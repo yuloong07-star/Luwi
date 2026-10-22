@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The API push uploaded the P2P private key** (2026-10-22, caught during the first cross-device run).
+  The `noGit` path (Android) builds the Git tree by walking `repoDir` itself and only skipped `.git`;
+  the new `.p2p/` directory (ed25519 key, trust table, tmp/trash) was therefore pushed to the remote,
+  and the PC pulled it into its worktree. `readLocalTreeFromFs` now skips `.p2p` at the root, a regression
+  test asserts a `.p2p/node.key` never becomes a blob, and the exposed keys were deleted on both hosts
+  (the sidecar generates a fresh identity on its next start, and the trust tables rebuild on first sight).
 - **A folded answer left the projection session unloadable** (2026-10-22). The synthetic
   `assistant/message` had no `message.source`, and the store's V4 format refuses any durable message
   without a producer-owned `source.kind` — the whole log was then reported as `stored log is
