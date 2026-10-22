@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P runner: budget, breaker and readings (the start of the plan's T4)** (2026-10-22).
+  `lib/p2p-runner.mjs` wraps the sidecar and the session state machine into a schedulable action:
+  outbound (`ensure` → dial → session) and inbound (accept → peer-id check → same machine), a 20 s
+  session budget that closes the stream on timeout, a 3-failure → 60 s breaker (`P2P_BUSY` while cooling,
+  one success resets it), a 60 s heartbeat hook, and the §7.4 status shape (`path`/`rttMs`/counters/
+  `cooling`/`lastError`/`gc`). Failures return `{ok:false}` instead of throwing so the engine can fall
+  back to git without a delay.
 - **P2P garbage collection (the plan's T3 tail)** (2026-10-22). `lib/p2p-gc.mjs` handles the three
   reclaimable leftovers from §6.3 and leaves the mailbox alone: `.p2p/tmp` is cleared at startup or
   after 24 h; a revoked or 90-day-unseen peer loses only its `base/<peerId>/` manifest cache; and a path
