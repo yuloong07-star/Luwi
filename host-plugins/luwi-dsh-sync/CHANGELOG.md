@@ -13,8 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot gained an optional `p2p` block (`readP2p`), and the sidebar card renders the three-tier copy
   from §7.4: `直连 43 ms` / `中转 812 ms · 本趟走中转可能慢` / `对端不在, 走 git`, plus the trust state
   (`新对端已加入` / `已信任` / `换机待确认` / `已吊销`), the six-digit SAS, sent/received counters, the
-  cooling flag and the last error. `sync_doctor` prints the same three tiers plus trust/SAS/cooling and
-  the last P2P error code. Trust-table actions (confirm a changed node, revoke) are not on the panel yet.
+  cooling flag and the last error. The card also carries the two trust actions: `确认换机` appears for a
+  blocked `changed` peer and `吊销这个对端` for the current one; both go through `POST /op`
+  (`p2p-confirm` / `p2p-revoke`, confirm + `deviceId`, panelOps-gated) and rewrite `.p2p/trust.json`.
+  `sync_doctor` prints the same three tiers plus trust/SAS/cooling and the last P2P error code.
 - **P2P identity, trust table and SAS (the plan's T5)** (2026-10-22). The sidecar now keeps a stable
   ed25519 identity when given `LW_KEY_FILE` (32 raw bytes, mode 0600, generated once and reused —
   proven on device and across restarts). `lib/p2p-trust.mjs` stores per-device `nodeId` trust in

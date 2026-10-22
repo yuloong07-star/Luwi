@@ -78,6 +78,9 @@ function makePanel(opts = {}) {
       lastError: opts.lastError,
     }),
     readPeers: opts.readPeers ?? (async () => ({ cards: [{ deviceId: 'p1', name: 'PC', url: '', updatedAt: '' }], broken: 0 })),
+    readP2p: opts.readP2p,
+    p2pConfirm: opts.p2pConfirm,
+    p2pRevoke: opts.p2pRevoke,
     collectDoctor: opts.collectDoctor ?? (async () => ({ status: 'PASS', mount: { mounted: true, runner: 'subprocess' }, peers: [], problems: [], warnings: [], notes: [] })),
     info: {
       plugin: 'luwi-dsh-sync',
@@ -242,9 +245,10 @@ test('runOp: 不认识的 op / 不认识的 target 一律 400', async () => {
   assert.deepEqual(engine.calls, [], '拒绝路径不许碰引擎')
 })
 
-test('runOp: 镜像没开 = 409; 面板写面关掉 = 403', async () => {
-  const off = makePanel()
-  assert.equal((await off.panel.runOp({ op: 'status', target: 'workspace' })).status, 409)
+test('runOp: 面板写面关掉 = 403; target=workspace 兼容到同一个仓库', async () => {
+  const { panel } = makePanel()
+  // 2026-10-20: 一个仓库之后 target=workspace 不再是"没开", 它落到同一根镜像上
+  assert.equal((await panel.runOp({ op: 'status', target: 'workspace' })).status, 200)
   const readOnly = makePanel({ panelOps: false })
   assert.equal((await readOnly.panel.runOp({ op: 'pull', target: 'sessions', confirm: true })).status, 403)
   assert.deepEqual(readOnly.engine.calls, [], '403 之后不许真的拉')
@@ -405,4 +409,42 @@ test('routes: dispose 清掉成本缓存 (下一次快照重新量)', async () =
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('p2p trust ops: confirm + deviceId + panelOps gate, then the hook runs', async () => {
+  const calls = []
+  const { panel } = makePanel({
+    p2pConfirm: async (deviceId) => { calls.push(`confirm:${deviceId}`); return { ok: true, nodeId: 'n1' } },
+    p2pRevoke: async (deviceId) => { calls.push(`revoke:${deviceId}`); return { ok: true } },
+  })
+  assert.equal((await panel.runOp({ op: 'p2p-confirm', deviceId: 'p1' })).status, 400, 'confirm is required')
+  assert.equal((await panel.runOp({ op: 'p2p-confirm', confirm: true })).status, 400, 'deviceId is required')
+
+  const confirmed = await panel.runOp({ op: 'p2p-confirm', confirm: true, deviceId: 'p1' })
+  assert.equal(confirmed.status, 200)
+  assert.equal(confirmed.body.ok, true)
+  assert.equal(confirmed.body.nodeId, 'n1')
+  assert.deepEqual(calls, ['confirm:p1'])
+
+  const revoked = await panel.runOp({ op: 'p2p-revoke', confirm: true, deviceId: 'p1' })
+  assert.equal(revoked.body.ok, true)
+  assert.deepEqual(calls, ['confirm:p1', 'revoke:p1'])
+})
+
+test('p2p trust ops respect panelOps:false and a host without hooks', async () => {
+  const off = makePanel({ panelOps: false, p2pConfirm: async () => ({ ok: true }) })
+  assert.equal((await off.panel.runOp({ op: 'p2p-confirm', confirm: true, deviceId: 'p1' })).status, 403)
+
+  const bare = makePanel()
+  assert.equal((await bare.panel.runOp({ op: 'p2p-confirm', confirm: true, deviceId: 'p1' })).status, 501)
+})
+
+test('the snapshot carries the p2p readings when the host provides them', async () => {
+  const { panel } = makePanel({ readP2p: async () => ({ enabled: true, path: 'relay', rttMs: 812, trustState: 'trusted', sas: '042317' }) })
+  const snapshot = await panel.snapshot()
+  assert.equal(snapshot.p2p.path, 'relay')
+  assert.equal(snapshot.p2p.sas, '042317')
+
+  const without = await makePanel().panel.snapshot()
+  assert.equal('p2p' in without, false)
 })

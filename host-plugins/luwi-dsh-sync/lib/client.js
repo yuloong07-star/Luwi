@@ -847,11 +847,30 @@ window.__ModuleLoader__.load({
 				if (p2p.enabled === true) rows.push(...kv(t('计数'), `↑ ${p2p.sent ?? 0} · ↓ ${p2p.received ?? 0}`));
 				if (p2p.cooling === true) rows.push(...kv(t('冷却'), t('刚失败过, 这一分钟先走 git')));
 				if (p2p.lastError) rows.push(...kv(t('最近错误'), `${p2p.lastError.code ?? ''} ${p2p.lastError.message ?? ''}`.trim(), 'luwi-sync-bad'));
-				return h('div', { className: 'luwi-sync-card', key: 'p2p' },
+				const children = [
 					h('div', { className: 'luwi-sync-card-title' },
 						h('span', { className: 'luwi-sync-strong' }, t('P2P 直连')),
 						h('span', { className: 'luwi-sync-badge' }, p2p.enabled === true ? t('开') : t('关'))),
-					h('div', { className: 'luwi-sync-kv' }, rows));
+					h('div', { className: 'luwi-sync-kv' }, rows),
+				];
+				const writesAllowed = snap?.config?.panelOps === true && channelOpen;
+				const blocked = p2p.blockedPeer ?? null;
+				if (writesAllowed && blocked && blocked.state === 'changed' && typeof blocked.id === 'string') {
+					// 换机/重装: nodeId 变了, 第一下只是放下一个动作, 第二下才带 confirm (panel-routes 的规矩)
+					children.push(h('div', { className: 'luwi-sync-send', key: 'confirm' },
+						h('button', {
+							className: 'luwi-sync-tab',
+							onClick: () => void call('p2p-confirm', 'sessions', true, { deviceId: blocked.id }),
+						}, t('确认换机'))));
+				}
+				if (writesAllowed && typeof p2p.peerId === 'string' && p2p.peerId !== '' && p2p.trustState !== 'revoked') {
+					children.push(h('div', { className: 'luwi-sync-send', key: 'revoke' },
+						h('button', {
+							className: 'luwi-sync-tab',
+							onClick: () => void call('p2p-revoke', 'sessions', true, { deviceId: p2p.peerId }),
+						}, t('吊销这个对端'))));
+				}
+				return h('div', { className: 'luwi-sync-card', key: 'p2p' }, children);
 			}
 
 			/** 把总览那个输入框里的一句话发出去 (走本机的 /luwi-sync/send) */

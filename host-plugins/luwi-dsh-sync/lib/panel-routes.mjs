@@ -52,10 +52,13 @@ export const PANEL_OPS = Object.freeze({
   // Luwi 加 (2026-10-20): 清理仓库会话 —— 把窗口外的镜像会话与合并副本从仓库工作树里删掉并推一次
   // (本机会话存储一个字节都不动, 见 index.mjs 的 pruneRepoSessions)
   PRUNE: 'prune',
+  // Luwi 加 (P2P T6): 信任表的两个写动作 —— 确认换机 (换过 nodeId 的对端重新放行) 与吊销
+  P2P_CONFIRM: 'p2p-confirm',
+  P2P_REVOKE: 'p2p-revoke',
 })
 
 /** 会改远端/本地工作树/配置的那几个: 要 confirm, 要单飞。 */
-export const WRITE_OPS = Object.freeze([PANEL_OPS.PULL, PANEL_OPS.PUSH, PANEL_OPS.CONFIGURE, PANEL_OPS.PRUNE])
+export const WRITE_OPS = Object.freeze([PANEL_OPS.PULL, PANEL_OPS.PUSH, PANEL_OPS.CONFIGURE, PANEL_OPS.PRUNE, PANEL_OPS.P2P_CONFIRM, PANEL_OPS.P2P_REVOKE])
 
 /** POST 体上限: 这条通道只收一个短 JSON, 大一点的都是误用。 */
 export const MAX_BODY_BYTES = 4096
@@ -215,6 +218,8 @@ export async function measureTree(root, maxEntries = COST_MAX_ENTRIES) {
  * @param {() => Promise<object>} [deps.readPeer] Luwi 加 (G1-2)：对端通道读数（缺省不给 peer 字段）。
  * @param {() => Promise<object>} [deps.readP2p] Luwi 加 (P2P T6)：P2P 传输读数（缺省不给 p2p 字段）。
  * @param {() => Promise<object>} deps.collectDoctor 只读自检 (runDoctor 的装配)。
+ * @param {(deviceId: string) => Promise<{ok: boolean}>} [deps.p2pConfirm] Luwi 加 (P2P T6)：确认换机。
+ * @param {(deviceId: string) => Promise<{ok: boolean}>} [deps.p2pRevoke] Luwi 加 (P2P T6)：吊销对端。
  * @param {object} deps.info - 启动面读数 { plugin, version, runner, disabledReason, mounted, config }。
  * @param {object} [deps.logger] - 宿主 logger (可选)。
  * @param {number} [deps.now] - 取当前时间的钩子 (测试用)。
@@ -444,6 +449,28 @@ export function createPanel(deps) {
         return { status: 200, body: { ok: true, action: op, changed: result.changed ?? [], restartRequired: true } }
       } catch (thrown) {
         return { status: 200, body: { ok: false, action: op, error: messageOf(thrown) } }
+      }
+    }
+
+    // Luwi 加 (P2P T6): 信任表动作不碰镜像, 在 target 归一之前处理
+    if (op === PANEL_OPS.P2P_CONFIRM || op === PANEL_OPS.P2P_REVOKE) {
+      if (deps.info.config.panelOps !== true) {
+        return { status: 403, body: { ok: false, error: 'panel-initiated writes are disabled (panelOps: false)' } }
+      }
+      if (request.confirm !== true) {
+        return { status: 400, body: { ok: false, error: `op ${op} requires confirm: true (the panel asks twice on purpose)` } }
+      }
+      const deviceId = typeof request.deviceId === 'string' ? request.deviceId.trim() : ''
+      if (deviceId === '') return { status: 400, body: { ok: false, error: 'op p2p-* requires deviceId' } }
+      const hook = op === PANEL_OPS.P2P_CONFIRM ? deps.p2pConfirm : deps.p2pRevoke
+      if (typeof hook !== 'function') {
+        return { status: 501, body: { ok: false, error: 'this host has no p2p trust hook' } }
+      }
+      try {
+        const result = await hook(deviceId)
+        return { status: 200, body: { ok: result?.ok === true, action: op, deviceId, ...(result ?? {}) } }
+      } catch (thrown) {
+        return { status: 200, body: { ok: false, action: op, deviceId, error: messageOf(thrown) } }
       }
     }
 
