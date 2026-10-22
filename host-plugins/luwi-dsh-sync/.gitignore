@@ -5,6 +5,11 @@
 node_modules/
 *.tgz
 
+# sidecar 二进制是构建产物: native/iroh-sidecar/rebuild-*.sh 现编现用, 不进 git
+# (安卓那半边本来就在 app/src/main/jniLibs/ 的 ignore 里)
+native/target/
+native/win32-x64/*.exe
+
 # 编辑器与系统杂物
 .idea/
 .vscode/

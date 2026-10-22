@@ -659,7 +659,11 @@ execFileSync(process.execPath, [
 const sessionSync = fileURLToPath(new URL('../host-plugins/luwi-dsh-sync', import.meta.url))
 const sessionSyncInstalled = join(out, 'node_modules', 'luwi-dsh-sync')
 cpSync(sessionSync, sessionSyncInstalled, { recursive: true })
-for (const name of ['test', 'scripts', 'tsconfig.check.json', 'tsconfig.check.ci.json', 'README-es.md', 'README-pt.md', 'README-hi.md']) {
+// node_modules 也裁掉 (2026-10-20): 本机做单测时会在源目录里挂两个 junction (@deepseek-ai / zod),
+// 它们不该跟包进 APK —— 手机侧的依赖由宿主那棵树供给, 不是插件自己的
+// native/ 是 sidecar 的 Rust 源码与 PC 二进制 (2026-10-22 起), 安卓那半边走 jniLibs 随 APK,
+// 这份源码与 lwiroh.exe 都不该进手机那棵树
+for (const name of ['test', 'scripts', 'tsconfig.check.json', 'tsconfig.check.ci.json', 'node_modules', 'native', 'README-es.md', 'README-pt.md', 'README-hi.md']) {
   rmSync(join(sessionSyncInstalled, name), { recursive: true, force: true })
 }
 console.log(`pack-host: installed luwi-dsh-sync from ${sessionSync}`)
