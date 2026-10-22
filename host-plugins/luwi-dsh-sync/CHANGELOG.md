@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2P apply and manifests (the plan's T3, continued)** (2026-10-22). `lib/p2p-apply.mjs` encodes the
+  author rules (`maySend`/`mayReceive`, with the mailbox exception), rejects absolute/`..`/NUL paths,
+  writes single files atomically with sha256 verification, finalises a `conv/<device>/<session>/` set only
+  after the whole set verifies (old copy goes to `.p2p/trash/<date>/`), and applies tombstones — own
+  paths only, never the mailbox, 200 paths / 32 MiB per round, deletions recorded in `.p2p/deleted.json`
+  so a later git push does not turn them into remote deletions. `lib/p2p-manifest.mjs` builds per-root
+  manifests (one row per `conv` session, 5000-row pages), cross-device stable digests, and the
+  missing/changed diff that becomes `NEED`.
 - **P2P wire frames (the start of the plan's T3)** (2026-10-22). `lib/p2p-frame.mjs` implements the
   8-byte `LW`/version/type/length header, a streaming decoder that survives arbitrary chunk splits, the
   nine frame types from §5.4/§5.5 (including `MANIFEST_REQ`), and the `BLOB` body shape (self-describing
