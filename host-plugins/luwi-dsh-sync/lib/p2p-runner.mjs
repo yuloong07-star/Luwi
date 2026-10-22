@@ -116,11 +116,9 @@ export class P2pRunner {
       return this.#failure(error, 'P2P_TIMEOUT', { silent: true })
     }
     if (peer === null || inbound.peer !== expectedNode) {
-      console.log(`p2p inbound rejected: peer=${inbound.peer} expected=${String(expectedNode)} card=${peer === null ? 'none' : 'set'}`)
       inbound.stream.close()
       return this.#failure(new SyncError(ERROR_CODES.P2P_NODE_CHANGED, `inbound node ${inbound.peer} is not the expected ${String(expectedNode)}`), 'P2P_NODE_CHANGED')
     }
-    console.log(`p2p inbound accepted: peer=${inbound.peer}`)
     return this.#run({ path: 'ip', rttMs: 0, peer: inbound.peer, stream: inbound.stream }, peer, options.timeoutMs ?? P2P_RUN_DEFAULTS.sessionTimeoutMs)
   }
 

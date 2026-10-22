@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The first real device↔PC P2P session** (2026-10-22, T7 core). With the new APK installed, the phone
+  host spawned `liblwiroh.so` from `nativeLibraryDir`, published a card carrying its `p2p.nodeId`/ticket,
+  and a PC sidecar dialled it over the public relay (1448 ms). One session then served the PC's
+  `live/` file (39 bytes) and pulled the phone's peer card plus its `conv/<device>/<session>/` set —
+  byte content verified by sha on arrival; the phone received the PC's live file. Mailbox entries for
+  other device ids were skipped as author mismatches, exactly as the rules require. Two bugs surfaced
+  and were fixed along the way (the `.p2p` leak into the API push, and a getter leaking into `HELLO`).
 - **P2P readings on the panel and in the doctor (the plan's T6, readings half)** (2026-10-22). The panel
   snapshot gained an optional `p2p` block (`readP2p`), and the sidebar card renders the three-tier copy
   from §7.4: `直连 43 ms` / `中转 812 ms · 本趟走中转可能慢` / `对端不在, 走 git`, plus the trust state
