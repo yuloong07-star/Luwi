@@ -148,6 +148,7 @@ export async function runDoctor(input) {
     resolvePeer,
     gitVersion,
     mount = {},
+    p2p = undefined,
     keep = ['@deepseek-ai/dsh-terminal'],
   } = input
   const problems = []
@@ -218,6 +219,7 @@ export async function runDoctor(input) {
     extraneous,
     kept,
     git,
+    p2p,
     problems,
     warnings,
     notes,
@@ -255,6 +257,18 @@ export function formatDoctor(report) {
   lines.push(`  layout     : ${report.layout}`)
   if (report.kept !== undefined && report.kept.length > 0) lines.push(`  kept       : ${report.kept.join(', ')}`)
   lines.push(`  git        : ${report.git?.ok === true ? report.git.text : `FAIL — ${report.git?.text ?? '?'}`}`)
+  // P2P (T2): 只报"有没有二进制 / 跑没跑 / 什么原因", 没有二进制不算 doctor 失败 —— p2p 缺省关
+  if (report.p2p !== undefined && report.p2p !== null) {
+    const p2p = report.p2p
+    const state = p2p.available !== true
+      ? `unavailable — ${p2p.reason ?? '?'}`
+      : p2p.running === true
+        ? `up — ${typeof p2p.endpointId === 'string' ? `${p2p.endpointId.slice(0, 12)}…` : '?'} via ${p2p.dataPort ?? '?'}`
+        : `binary ok, not running${p2p.reason === undefined ? '' : ` — ${p2p.reason}`}`
+    lines.push(`  p2p        : ${state}`)
+    if (typeof p2p.binary === 'string' && p2p.binary !== '') lines.push(`               ${p2p.binary}`)
+    if (typeof p2p.detail === 'string' && p2p.detail !== '') lines.push(`               ${p2p.detail}`)
+  }
   for (const placement of report.peers ?? []) {
     const why = HOST_PEER_WHY[placement.name]
     const tag = placement.where === 'host' ? 'host ' : placement.where === 'profile' ? 'PROFILE!' : 'MISSING'

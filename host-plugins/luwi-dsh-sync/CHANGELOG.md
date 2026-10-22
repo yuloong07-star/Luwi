@@ -5,6 +5,116 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **P2P sidecar supervision (the plan's T2)** (2026-10-22). New `lib/p2p-config.mjs` + `lib/p2p-sidecar.mjs`
+  turn the optional `p2p` config section into a supervised local process: the binary is looked up next to
+  `libnode.so` on Android / under `native/win32-x64/` on the desktop, spawned with a per-process token and
+  ephemeral ports, `READY` is parsed for the control/data ports, and `/v1/id` supplies the endpoint id and
+  ticket. Without a binary `status()` reports `available:false` + `P2P_UNAVAILABLE` (it never throws), an
+  unexpected exit is restarted twice (2 s / 10 s backoff) and then reported as `P2P_CRASH`, and `stop()`
+  asks `/v1/shutdown` before falling back to a kill. `sync_doctor` prints a `p2p` line, and nothing in this
+  layer implements the sync protocol — it only moves bytes for the frame layer that follows (T3+).
+- **The dialogue has its own append-only ledger (`conv/`)** (2026-10-22, the plan's P1). The `live/`
+  snapshot is a rolling window (40 entries / 16 000 chars), so a projection whose cursor fell behind
+  that window lost the stretch in between for good. Every device now appends its settled
+  user/assistant entries to `conv/<device>/<session>/chunks/…` — 16 entries per chunk, one JSON
+  object per line, each carrying the host event `seq`. Sealed chunks never change, so a push only
+  carries the tail chunk (a few KB) and a turn no longer leans on the multi-MB archive to keep the
+  dialogue; the ledger is written from the same `condense` pass as the live snapshot, so the two
+  cannot disagree. `meta.json` carries `chunkEntries` / `entries` / `chunks` / `bytes` / `sha256`,
+  the append is idempotent by `seq`, and `conv/` is single-writer: only the owning device writes its
+  own folder (`ownershipOfPath` keeps a pull from forking it).
+- **Folding a peer's answers fills from that ledger when the window moved** (2026-10-22). If the
+  peer's snapshot is truncated and the local cursor sits before its first entry, the missing stretch
+  is read from `conv/<peer>/<session>/` and merged by `seq` before `proxyEventsFrom`, so rounds the
+  peer ran while this device was offline no longer punch a hole in the projection.
+
+### Fixed
+
+- **A folded answer left the projection session unloadable** (2026-10-22). The synthetic
+  `assistant/message` had no `message.source`, and the store's V4 format refuses any durable message
+  without a producer-owned `source.kind` — the whole log was then reported as `stored log is
+  corrupt` and the conversation pane came up empty. The log itself had the exchange, which is why
+  the live view looked fine until a page reload or a host restart. Folded answers now carry
+  `source: { kind: 'model', provider: 'luwi-peer', model: 'luwi-peer' }`, the shape the host writes
+  for its own answers; existing projection logs were repaired in place (the attribution was added
+  to every durable message that lacked one).
+
+### Changed
+
+- **A parts set is one unit on both sides: pulled whole, pushed whole** (2026-10-22). Parts are
+  updated one by one, so a pull that decided per path could keep the remote's `0004.bin` next to
+  the local `0005.bin`, and a push that unioned per path could put two lineages into one set — the
+  `sha256` in `parts/index.json` only stopped the damage at the adopt step (the set stayed broken
+  in the mirror). The pull now decides per set: it reads the remote index first, takes the set only
+  when its `bytes` beats the local one (index bytes, or the flat session file when the local side
+  has not been cut yet), then writes the parts and the index last. The push applies the same rule
+  in reverse: a local set that wins overwrites the same names and lists the remote's extra parts as
+  deletions; a remote set that wins leaves the local parts out of the push entirely. A set that
+  loses keeps its bytes in git history (the pull checkpoint or the remote commit); it is not copied
+  into a fork file, because fork files never travel and a forked set would only add noise on both
+  sides.
+- **A mirror round no longer deletes the extra parts of a longer set** (2026-10-22). When the mirror
+  already holds a set that is longer than what the local session store has (a peer just appended, or
+  a fresh pull has not been adopted yet), the mirror skipped the write — but the delete phase still
+  reconciled against the *local* cut, so the parts beyond it were removed and had to be downloaded
+  again. Every existing part file now counts as a target for that round: neither overwritten nor
+  deleted.
+- **The first pull of a big session is bounded per trip** (2026-10-22). A fresh device used to
+  fetch every part of every set in one call (the mirror here is 8 sets / 14 MB, the largest 5.7 MB
+  in 22 parts), which pushed the queued `inbox/` lines behind it and could run into the 240 s pull
+  deadline. A trip now takes whole sets only — smallest first, up to 32 parts and 4 MiB, always at
+  least one — and leaves the rest for the next minute. A trip that defers a set does not stamp the
+  six-hour head cache, so the next pull keeps going; the parts already fetched are skipped by sha,
+  so finishing a set needs no extra bookkeeping.
+- **An incomplete parts set is `deferred`, not a failure, and a part file is never adopted alone**
+  (2026-10-22). Adopting used to list a missing or half-written set under `failed`, which read as
+  a real error every time a pull landed mid-set; it now lands in `deferred` and is retried.
+  A `parts/*.bin` with no `index.json` next to it is skipped entirely (it used to be adopted as a
+  plain file into the session store, leaving a `parts/` directory there).
+- **The pull and push readings now show what the parts path cost** (2026-10-22): the pull result
+  carries `partSetsTaken` / `partSetsDeferred` / `partsFetched` / `bytesFetched` (and `deferred`
+  for the sets still landing), the push result carries `uploadedParts`. Without them "did it save
+  anything" was a guess.
+
+- **The panel is one page: pairing first, diagnostics and device cards gone** (2026-10-22). The
+  three internal tabs (Overview / Actions / Diagnostics) are merged into a single scroll: the
+  pairing card sits at the top (the first thing you do on a new phone is scan a code, so it leads),
+  then the repository card, the mirror readings, the pull/push actions, and the peer channel. The
+  diagnostics tab, its "self-check" / "copy report" buttons, and the peer-card block are removed —
+  `doctor` and `peers` still exist on the host side (`/sync doctor`, the tools), the panel just does
+  not show them any more.
+- **Session logs travel as zstd frames, so a push no longer re-uploads the whole file** (2026-10-22).
+  On this desktop the sync can only reach GitHub through the REST transport (`github.com:443` is
+  blocked here), and that transport has no delta: any changed blob is uploaded whole. A session
+  log grows by 60~80 KB per turn, and every turn was re-uploading the full 3~5 MB file. The host
+  writes those logs as append-only multi-frame zstd (a 5.5 MB session is 4077 frames of ~1.4 KB),
+  so the mirror now cuts them at frame boundaries into `parts/0000.bin`, `parts/0001.bin`, … plus a
+  small `parts/index.json` (`file` / `bytes` / `parts`). Sealed parts never change, so blob-sha
+  dedupe skips them and a push only carries the growing tail, bounded by the part size (256 KiB).
+  Reassembly is a plain concatenation: byte-for-byte identical to the source file, verified against
+  the live session store. Sessions under 256 KiB and non-zstd files keep the old single-file
+  layout, and a session that switches layouts has its old flat copy deleted in the same round.
+- **The per-session size cap goes from 4 MB to 16 MB** (2026-10-22, the owner's call). The 4 MB
+  cap existed because a whole-file upload made a multi-MB session too expensive to re-send every
+  turn; with parts a push only carries the tail, so the cap is now about what the other device has
+  to download on first sight, and 16 MB covers even long sessions.
+- **`parts/index.json` carries `sha256` of the assembled bytes.** Parts are updated one by one,
+  which leaves a window where the remote part and the local part at the same index come from two
+  different lineages (both sides typed into the same session). Reassembly now refuses a set whose
+  digest does not match: that pull keeps the local session and the next mirror round re-cuts it
+  from the local source, instead of writing a blend of two sessions into the session store.
+- **A pull no longer re-reads the whole mirror every tick** (2026-10-22). Two costs stacked up
+  under a one-minute pull interval: `finishExternalPull` ran even when the remote head had not
+  moved (so every tick re-assembled every parts session — 16 MB of sessions is 16 MB of reads per
+  minute), and each assembly rebuilt the full file just to compare its length. The adopt step now
+  runs only when the API pull actually brought something, and it skips a parts directory whose
+  `bytes:parts:sha256` fingerprint and local file size are unchanged. A quiet minute is now one
+  metadata request; a busy one only reassembles the sessions that changed.
+
 ## [0.0.2] - 2026-10-15
 
 ### Added

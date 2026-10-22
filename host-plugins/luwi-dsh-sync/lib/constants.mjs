@@ -17,7 +17,7 @@ export const TOOL_PEER = 'sync_peer'
 
 // 版本号（启动行与 /sync doctor 报出来; 与 package.json 的 version 手工保持一致 ——
 // 读 package.json 要走 JSON import, 而载入期"少一个 loader 特性"就是一种启动风险）
-export const PLUGIN_VERSION = '0.2.24'
+export const PLUGIN_VERSION = '0.3.3'
 
 // ctx.storageDomain 领域名（同步元数据：设备 id、最近推/拉时间与错误）。
 // 下划线命名：storage-domain 的域名正则不允许连字符。
@@ -31,14 +31,55 @@ export const MIRROR_DIR = 'sessions'
 // 会话那根的名字一个字节不动（fork 文件名与 sessionIdOfForkPath 都钉着 'sessions'）。
 export const WORKSPACE_MIRROR_DIR = 'workspace'
 
+// Luwi 加 (2026-10-20 同步改造)：一个仓库里放全部东西之后的目录词汇。
+// workspaces/<设备名>/<工作区名>/ —— 两台设备的同名工作区**不合并** (主人 2026-10-20 定:
+// 手机侧现在就是 dsh（PC）这种带设备名的分组, 合进一个目录来源就分不清了)
+export const WORKSPACES_DIR = 'workspaces'
+
+// 每台设备只写自己那份的"工作区名片" (在镜像目录之外, 镜像的删除阶段碰不到它)
+// 形状 {v, deviceId, name, at, workspaces:[{slug, title}]}
+export const WORKSPACE_PEERS_DIR = 'workspace-peers'
+
+// 拉取之后物化对端工作区文件的影子根 (在 $DSH_HOME/lw 底下, 与对端影子 peer-workspaces 分开)
+export const SYNC_SHADOW_DIR = 'sync-workspaces'
+
+// 配对载荷的 scheme 与版本 (App 的 PairPayload.kt 与 lib/luwi-pairing.mjs 逐字对齐)
+export const PAIR_SCHEME = 'luwi-sync'
+export const PAIR_VERSION = 1
+export const PAIR_MAX_BYTES = 1200
+
+// Luwi 加 (2026-10-20): git 网络失败之后, 这段时间内直接走 api.github.com, 不再先等 git 超时。
+// 手机那条桥一次 fetch 要在沙盒里等满 120 s 才报错, 而周期拉取是 1 分钟 —— 不冷却就会一直在
+// "等 git 超时"与"排队"之间打转, API 退路反而轮不到
+export const API_FALLBACK_COOLDOWN_MS = 10 * 60 * 1000
+
+// 会话基线 (旧对话不同步) 的缺省值
+export const BASELINE_DEFAULTS = Object.freeze({
+  CURRENT_WINDOW_MINUTES: 60,
+  MAX_ENTRIES: 50000,
+})
+
 // Luwi 加：工作区镜面的缺省值（$DSH_HOME/lw/session-sync.json 的 workspace 段）。
 export const WORKSPACE_DEFAULTS = Object.freeze({
-  // 空 remote 时缺省关（没有远端就没有可推可拉的东西，开着只会每轮报一次失败）
+  // 空 remote 时缺省关（没有远端就没有可推可拉的东西，开着只会每轮报一次失败）——
+  // 2026-10-20 起这一条只给老的单根形态留个说明, 新形制由 workspace.enabled 管
   BRANCH: 'main',
   // `.lw-sync` 是同步自己的窝（工作树、运行文件、回收站都在里面，不排它就是递归镜像），
-  // `.git` 是别人的仓库（把一整棵树当字节同步没有意义） —— 这两条从配置里删不掉
-  EXCLUDE: ['.lw-sync', '.git'],
+  // `.git` 是别人的仓库（把一整棵树当字节同步没有意义） —— 这两条从配置里删不掉。
+  // 2026-10-20 又补了几个"一开同步就会把工作区撑爆"的构建产物目录: 用户自己的源码目录
+  // 万一正好叫这些名字, 就写 workspace.exclude 去掉它们 (排除表是"撤回", 不是"冻结")
+  EXCLUDE: [
+    '.lw-sync', '.git', 'node_modules', 'build', '.gradle', '.kotlin',
+    '.idea', '.cxx', '.cache', 'dist', 'out',
+  ],
   MAX_FILE_BYTES: 8 * 1024 * 1024,
+})
+
+// Luwi 加 (2026-10-20)：工作区源的预算 —— 超过就整根跳过 (不清远端、不假装同步),
+// 面板与状态里说清为什么。逐台设备的源码树大小差别很大, 缺省给一个"不会把手机流量打爆"的数
+export const WORKSPACE_BUDGET = Object.freeze({
+  MAX_FILES: 20000,
+  MAX_BYTES: 1024 * 1024 * 1024,
 })
 
 // Luwi 加：工作区镜面的配置边界（加载期校验，越界响亮失败）。
@@ -47,6 +88,11 @@ export const WORKSPACE_LIMITS = Object.freeze({
   MAX_MAX_FILE_BYTES: 2 * 1024 * 1024 * 1024,
   MAX_EXCLUDE_ENTRIES: 64,
   MAX_EXCLUDE_LENGTH: 256,
+  // 2026-10-20：整根工作区的预算 (文件数 / 字节数)
+  MIN_MAX_FILES: 1,
+  MAX_MAX_FILES: 200_000,
+  MIN_MAX_BYTES: 1024 * 1024,
+  MAX_MAX_BYTES: 16 * 1024 * 1024 * 1024,
 })
 
 // Luwi 加：回收站落点（工作区内、`.lw-sync` 底下 —— 天然被排除表挡住，不进镜像）。
@@ -183,6 +229,16 @@ export const ERROR_CODES = Object.freeze({
   SYNC_DENIED: 'SYNC_DENIED',
   PATH_UNSAFE: 'PATH_UNSAFE',
   AGE_FAILED: 'AGE_FAILED',
+  // P2P 传输层（方案 §9）: 起停与协议各自的稳定码
+  P2P_UNAVAILABLE: 'P2P_UNAVAILABLE',
+  P2P_CRASH: 'P2P_CRASH',
+  P2P_PROTOCOL: 'P2P_PROTOCOL',
+  P2P_TIMEOUT: 'P2P_TIMEOUT',
+  P2P_INTEGRITY: 'P2P_INTEGRITY',
+  P2P_IO: 'P2P_IO',
+  P2P_UNTRUSTED: 'P2P_UNTRUSTED',
+  P2P_NODE_CHANGED: 'P2P_NODE_CHANGED',
+  P2P_BUSY: 'P2P_BUSY',
 })
 
 // fork 文件名模式：<basename>.remote-fork-<UTC 时间戳>-<设备短 id>；镜像与
