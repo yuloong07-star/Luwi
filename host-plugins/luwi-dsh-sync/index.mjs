@@ -109,7 +109,7 @@ import { applyConfigure, readSyncTree, syncConfigPath } from './lib/luwi-configu
 // Luwi 加 (2026-10-20): 地址 + 令牌 → 真正给 git 用的地址 (令牌在面板上单独一格)
 import { composeRemoteWithToken } from './lib/luwi-remote.mjs'
 import { adoptMergedSessions } from './lib/luwi-adopt.mjs'
-import { resolveWorkspaceSources } from './lib/luwi-workspace.mjs'
+import { resolveWorkspaceSources, slugSegment } from './lib/luwi-workspace.mjs'
 import { readPeerCards, writePeerCard } from './lib/luwi-peers.mjs'
 // Luwi 加 (2026-10-20 同步改造): 扫码配对 / 会话基线 / 对端工作区影子
 import { captureSessionBaseline, describeBaseline, localStillOld, oldMirrorPaths, scanSessionFiles } from './lib/luwi-baseline.mjs'
@@ -1448,7 +1448,7 @@ function applyInner(ctx, config = {}) {
         repoDir,
         deviceId: peerIdentity.deviceId,
         name: resolved.deviceName,
-        workspaces: workspaceSources.map(source => ({ slug: source.slug, title: source.title })),
+        workspaces: workspaceCardEntries(),
       })
     } catch (error) {
       warn(`luwi-dsh-sync: writing the workspace card failed: ${messageOf(error)}`)
@@ -2761,6 +2761,68 @@ function applyInner(ctx, config = {}) {
     return { folded, appended }
   }
 
+  // 这一趟起，只把**此刻之后有更新**的 live 快照补成投影 (主人 2026-10-23: 不补旧对话,
+  // 只从现在这个对话开始)。宿主重启后这个线也跟着重置，所以不会把历史快照一次性倒进来。
+  const liveProjectSince = nowMs()
+
+  /**
+   * queue 模式下的"从 live 快照补投影"：对端每一轮都会把活跃会话写进仓库
+   * `live/<它的 id>/<会话>.json`，这里给**还没有投影**的那些现开一场，开在对应的影子工作区里，
+   * 于是 `apk（PC）` 这类分组不再只有主动发过消息的那几场 (2026-10-23 实测: 该分组 0 场)。
+   * 只收 liveProjectSince 之后更新过的快照；上限沿用 peer.maxProxies。
+   * @returns {Promise<number>} 新开了几场。
+   */
+  async function projectLiveSessionsFromRepo() {
+    if (shadowDevice.id === '') return 0
+    const dir = join(repoDir, 'live', safeSegment(shadowDevice.id))
+    let names = []
+    try {
+      names = await readdir(dir)
+    } catch {
+      return 0
+    }
+    // 对端工作区分组按"名字"对：名片里的 title，或它的 basename (D:\Study -> Study)
+    const byName = new Map()
+    for (const [key, entry] of shadowRegistry) {
+      const prefix = `${shadowDevice.id}|`
+      if (!key.startsWith(prefix)) continue
+      const name = key.slice(prefix.length)
+      byName.set(name.toLowerCase(), entry)
+      byName.set(basename(name).toLowerCase(), entry)
+    }
+    let created = 0
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      if (proxyRegistry.size >= peerSpec.maxProxies) break
+      const peerSessionId = name.replace(/\.json$/u, '')
+      const key = `${shadowDevice.id}|${peerSessionId}`
+      if (proxyRegistry.has(key)) continue
+      let snapshot
+      try {
+        snapshot = JSON.parse(await readFile(join(dir, name), 'utf8'))
+      } catch {
+        continue
+      }
+      if (!(Number(snapshot?.updatedAt ?? 0) >= liveProjectSince)) continue
+      const shadow = byName.get(basename(String(snapshot?.cwd ?? '')).toLowerCase())
+      if (shadow === undefined) continue
+      const record = await ensureProxySession(peerSessionId, { title: String(snapshot?.title ?? '') }, shadow)
+      if (record === null) continue
+      proxyRegistry.set(key, record)
+      created += 1
+      try {
+        await applyTranscript(record, peerSessionId, shadow)
+      } catch (error) {
+        warn(`peer: folding the live snapshot of ${peerSessionId} failed: ${messageOf(error)}`)
+      }
+    }
+    if (created > 0) {
+      await persistProxyState()
+      logger.info(`peer: projected ${created} live session(s) from the repository`)
+    }
+    return created
+  }
+
   /**
    * queue 模式下的对端刷新: 只读仓库里的东西, 一个 HTTP 请求都不发。
    *
@@ -2828,8 +2890,29 @@ function applyInner(ctx, config = {}) {
       }
     }
     await persistProxyState()
+    const projected = await projectLiveSessionsFromRepo()
     const folded = await foldFromRepo()
-    return { ok: true, queueOnly: true, shadows: created, ...folded }
+    return { ok: true, queueOnly: true, shadows: created, projected, ...folded }
+  }
+
+  // 名片里报哪些工作区: 开文件同步时就是那一份源; 档 A (workspace.enabled=false) 下也不能空着 ——
+  // 对端要靠它建 `apk（PC）` 这类影子分组, 空表会让对端那边所有工作区分组都是 0 场 (2026-10-23 实测)。
+  // 只报名字 (slug + title), 一个文件都不进去, 与"不共享工作区文件"并不冲突。
+  function workspaceCardEntries() {
+    if (workspaceSources.length > 0) {
+      return workspaceSources.map(source => ({ slug: source.slug, title: source.title }))
+    }
+    const entries = []
+    const seen = new Set()
+    for (const workspace of ownWorkspaces()) {
+      const title = String(workspace.title !== '' ? workspace.title : workspace.path).trim()
+      if (title === '') continue
+      let slug = slugSegment(title, 60, 'workspace')
+      while (seen.has(slug)) slug = `${slug}-${seen.size}`
+      seen.add(slug)
+      entries.push({ slug, title })
+    }
+    return entries
   }
 
   /** 把账写回 storage (投影游标 + 影子工作区 id + 退下来的投影 + 相连那一条线) */
