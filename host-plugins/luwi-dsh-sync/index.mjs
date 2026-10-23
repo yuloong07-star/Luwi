@@ -2781,14 +2781,20 @@ function applyInner(ctx, config = {}) {
     } catch {
       return 0
     }
-    // 对端工作区分组按"名字"对：名片里的 title，或它的 basename (D:\Study -> Study)
+    // 对端工作区分组按"名字"对：名片里的 title，或它的 basename (D:\Study -> Study)。
+    // 注意 basename 必须两种分隔符都认：手机跑在 Android 上，node:path 的 basename 不认反斜杠，
+    // `D:\apk` 会整个当成一个名字 (2026-10-23 实测就是这个把 apk（PC）一直留成 0 场)
+    const baseName = (value) => {
+      const parts = String(value ?? '').split(/[\\/]/u).filter(Boolean)
+      return (parts.pop() ?? '').toLowerCase()
+    }
     const byName = new Map()
     for (const [key, entry] of shadowRegistry) {
       const prefix = `${shadowDevice.id}|`
       if (!key.startsWith(prefix)) continue
       const name = key.slice(prefix.length)
       byName.set(name.toLowerCase(), entry)
-      byName.set(basename(name).toLowerCase(), entry)
+      byName.set(baseName(name), entry)
     }
     let created = 0
     for (const name of names) {
@@ -2803,8 +2809,12 @@ function applyInner(ctx, config = {}) {
       } catch {
         continue
       }
-      if (!(Number(snapshot?.updatedAt ?? 0) >= liveProjectSince)) continue
-      const shadow = byName.get(basename(String(snapshot?.cwd ?? '')).toLowerCase())
+      // "只从现在开始": 正在跑的、或最近半小时内还有更新的快照才算当下 —— 主人 2026-10-23
+      // 明确不补旧对话，而当前这场这一轮的快照可能恰好落在本机启动之前
+      const updatedAt = Number(snapshot?.updatedAt ?? 0)
+      const current = snapshot?.running === true || (updatedAt > 0 && Date.now() - updatedAt <= 30 * 60_000)
+      if (!current) continue
+      const shadow = byName.get(baseName(snapshot?.cwd))
       if (shadow === undefined) continue
       const record = await ensureProxySession(peerSessionId, { title: String(snapshot?.title ?? '') }, shadow)
       if (record === null) continue
