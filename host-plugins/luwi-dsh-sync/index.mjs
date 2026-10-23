@@ -2900,7 +2900,9 @@ function applyInner(ctx, config = {}) {
       }
     }
     await persistProxyState()
-    const projected = await projectLiveSessionsFromRepo()
+    // 2026-10-23 暂时停用: 从 live 快照折出来的投影在"这一轮还没结束"时写出的 turn 边界
+    // 不合法 (load 时报 "turn/start does not open the expected turn")，先把这几场清掉再重做。
+    const projected = 0
     const folded = await foldFromRepo()
     return { ok: true, queueOnly: true, shadows: created, projected, ...folded }
   }
