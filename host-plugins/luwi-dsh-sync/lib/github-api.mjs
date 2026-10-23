@@ -795,9 +795,14 @@ export function makeGithubApi(deps) {
       // 对话账 (conv/) 是**单写者**: 对端那一本只由它的主人推。本机工作树里那份是上一趟拉下来的
       // 快照, 对端随后再追加就比它新 —— 拿旧的覆盖新的等于把对端的账往回倒 (2026-10-22)
       const ownConvSegment = safeSegment(ownDeviceId() ?? '')
+      const ownRawId = String(ownDeviceId() ?? '')
       const isForeignTranscript = rel => rel.startsWith('conv/')
         && safeSegment(rel.split('/')[1] ?? '') !== ownConvSegment
-      const localBlobs = new Map([...view.blobs].filter(([rel]) => !isForkPath(rel) && !isForeignTranscript(rel)))
+      // 派生文件的单写者: live/<别人的 id>/ 与 workspace-peers/<别人的 id>.json 是**别人的**，
+      // 本机工作树里那份只是上一趟拉下来的旧快照。以前只挡了 conv/，于是手机拿它那份旧 PC 名片
+      // 把 PC 刚推上去的新名片盖回去了 (2026-10-23: 手机 apk（PC）分组因此一直是 0 场)
+      const isForeignOwned = rel => ownershipOfPath(rel, ownRawId) === 'remote'
+      const localBlobs = new Map([...view.blobs].filter(([rel]) => !isForkPath(rel) && !isForeignTranscript(rel) && !isForeignOwned(rel)))
       /**
        * 段集合整组推送计划 (2026-10-22): 哪一侧的组出去, 远端多出来的段要删。
        *
