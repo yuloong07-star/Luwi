@@ -17,7 +17,7 @@ export const TOOL_PEER = 'sync_peer'
 
 // 版本号（启动行与 /sync doctor 报出来; 与 package.json 的 version 手工保持一致 ——
 // 读 package.json 要走 JSON import, 而载入期"少一个 loader 特性"就是一种启动风险）
-export const PLUGIN_VERSION = '0.3.3'
+export const PLUGIN_VERSION = '0.3.4'
 
 // ctx.storageDomain 领域名（同步元数据：设备 id、最近推/拉时间与错误）。
 // 下划线命名：storage-domain 的域名正则不允许连字符。

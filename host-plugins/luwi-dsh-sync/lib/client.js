@@ -176,6 +176,27 @@ window.__ModuleLoader__.load({
 			'手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。': 'Phone: Settings → Sync → scan the pairing code. The QR carries repository credentials, so do not share it.',
 			'请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。': 'Make sure root or Shizuku is running for Luwi, otherwise sync fails.',
 			'手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。': 'Phone: Settings → Sync → scan the pairing code. The QR carries repository credentials, so do not share it. Make sure root or Shizuku is running for Luwi, otherwise sync fails.',
+			// Luwi 加 (2026-10-23): 账号登录 (生成配对码的前提)
+			'账号': 'Account',
+			'登录 Luwi 账号': 'Sign in to Luwi',
+			'已登录': 'Signed in',
+			'未登录': 'Not signed in',
+			'正在登录…': 'Signing in…',
+			'等待浏览器登录…': 'Waiting for the browser…',
+			'登录完这个面板会自己变, 不用回来点': 'This panel updates on its own once the browser finishes; no need to come back and click',
+			'刷新权益': 'Refresh plan',
+			'退出登录': 'Sign out',
+			'取消': 'Cancel',
+			'到期': 'expires',
+			'还没有到期时间': 'no expiry yet',
+			'已到期, git 同步照旧可用': 'Expired; git sync still works',
+			'宽限中, 记得续费': 'In the 7-day grace window; remember to renew',
+			'登录信息已失效, 请重新登录': 'The stored sign-in is no longer valid; sign in again',
+			'生成配对码前要先登录': 'Sign in before you can generate a pairing code',
+			'在浏览器里完成 GitHub 登录, 然后回来': 'Finish the GitHub sign-in in the browser, then come back',
+			'登录没有完成': 'Sign-in did not finish',
+			'续费或签到之后点一下刷新': 'After renewing or checking in, press refresh',
+			'账号只用来生成配对码与判定异地同步是否到期; git 同步不需要登录': 'The account only gates the pairing code and the P2P plan; git sync needs no sign-in',
 		};
 
 		/** 当前语言 (apply 时按 locale 服务定一次, 变了就重设)。 */
@@ -481,6 +502,9 @@ window.__ModuleLoader__.load({
 			const [pair, setPair] = React.useState(null);
 			const [pairError, setPairError] = React.useState(null);
 			const [pairing, setPairing] = React.useState(false);
+			// Luwi 加 (2026-10-23): 账号 —— 登录中 / 上一次登录的错误 (登录完的快照里带 license 块)
+			const [loginPending, setLoginPending] = React.useState(false);
+			const [loginError, setLoginError] = React.useState(null);
 			const [peerDraft, setPeerDraft] = React.useState('');
 			const [peerSending, setPeerSending] = React.useState(false);
 			const [peerAnswer, setPeerAnswer] = React.useState('');
@@ -504,6 +528,61 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			React.useEffect(() => { void load(); }, [load]);
+
+			/**
+			 * 点「登录 Luwi 账号」: 让宿主生成一次性 state, 然后把浏览器送到官网登录页
+			 *
+			 * 打开方式是 location.assign —— 手机 WebView 的 shouldOverrideUrlLoading 会把它交给系统浏览器
+			 * 且页面不动 (window.open 会被 onCreateWindow 拒掉); 桌面上会离开面板, 按返回即可, 轮询照常接上
+			 * @returns {Promise<void>} 无。
+			 */
+			const startLogin = async () => {
+				setLoginError(null);
+				const { status, body, error } = await api('/op', {
+					method: 'POST',
+					body: JSON.stringify({ op: 'login-start', target: 'sessions', confirm: false }),
+				});
+				if (body === null || body.ok !== true || typeof body.url !== 'string') {
+					setLoginError(`${t('登录没有完成')}: ${body?.error ?? error ?? `HTTP ${status}`}`);
+					return;
+				}
+				setLoginPending(true);
+				try {
+					window.location.assign(body.url);
+				} catch {
+					// 打不开浏览器就把错误留给下面那块: 人还能自己复制地址去开
+					setLoginError(String(body.url));
+				}
+			};
+
+			// 登录中: 每 2 秒问一次官网 (404 = 还没好, 410 = 这枚 state 作废)
+			React.useEffect(() => {
+				if (!loginPending) return undefined;
+				let alive = true;
+				let timer = 0;
+				const tick = async () => {
+					const { body } = await api('/op', {
+						method: 'POST',
+						body: JSON.stringify({ op: 'login-poll', target: 'sessions', confirm: false }),
+					});
+					if (!alive) return;
+					if (body !== null && body.signedIn === true) {
+						setLoginPending(false);
+						setLoginError(null);
+						await load();
+						return;
+					}
+					if (body !== null && body.ok === false && body.waiting !== true) {
+						setLoginPending(false);
+						setLoginError(`${t('登录没有完成')}: ${String(body.error ?? 'failed')}`);
+						await load();
+						return;
+					}
+					timer = window.setTimeout(tick, 2000);
+				};
+				timer = window.setTimeout(tick, 1500);
+				return () => { alive = false; if (timer) window.clearTimeout(timer); };
+			}, [loginPending, load]);
 
 			React.useEffect(() => {
 				if (!auto) return undefined;
@@ -1035,10 +1114,54 @@ window.__ModuleLoader__.load({
 				const writesAllowed = config.panelOps === true && channelOpen;
 				const hasRemote = config.remoteState === 'set';
 				const pairSummary = snap.pairing ?? {};
+				// Luwi 加 (2026-10-23): 账号那一行 —— 生成配对码的前提是登录过 (过期仍放行, 好让人去续费)
+				const license = snap.license ?? { state: 'unset' };
+				const signedIn = license.state === 'active' || license.state === 'grace' || license.state === 'expired';
+				const expiry = Number.isFinite(license.expiresAt) ? new Date(license.expiresAt).toLocaleDateString() : '';
+				const planLine = license.state === 'active'
+					? `${t('到期')} ${expiry}`
+					: license.state === 'grace'
+						? t('宽限中, 记得续费')
+						: license.state === 'expired'
+							? t('已到期, git 同步照旧可用')
+							: license.state === 'invalid'
+								? t('登录信息已失效, 请重新登录')
+								: t('未登录');
 				return h('div', { className: 'luwi-sync-card', key: 'pair' },
 					h('div', { className: 'luwi-sync-card-title' },
 						h('span', { className: 'luwi-sync-strong' }, t('配对手机')),
 						h('span', { className: 'luwi-sync-badge' }, pairSummary.paired ? t('已配对') : t('未配对'))),
+					h('div', { className: 'luwi-sync-head-row' },
+						h('span', { className: 'luwi-sync-strong' }, t('账号')),
+						h('span', { className: signedIn ? 'luwi-sync-good' : 'luwi-sync-dim' },
+							signedIn ? `${license.login ? `@${license.login}` : t('已登录')} · ${planLine}` : planLine)),
+					loginError === null ? null : h('div', { className: 'luwi-sync-bad' }, loginError),
+					loginPending
+						? h('div', { className: 'luwi-sync-dim' }, `${t('等待浏览器登录…')} · ${t('在浏览器里完成 GitHub 登录, 然后回来')}`)
+						: (signedIn
+							? h('div', { className: 'luwi-sync-actions' },
+								h('button', {
+									type: 'button',
+									className: 'luwi-sync-btn',
+									disabled: !writesAllowed || busy,
+									title: t('续费或签到之后点一下刷新'),
+									onClick: () => void call('license-refresh', 'sessions'),
+								}, t('刷新权益')),
+								h('button', {
+									type: 'button',
+									className: 'luwi-sync-btn',
+									disabled: !writesAllowed || busy,
+									onClick: () => void call('logout', 'sessions'),
+								}, t('退出登录')))
+							: h('div', { className: 'luwi-sync-actions' },
+								h('button', {
+									type: 'button',
+									className: 'luwi-sync-btn',
+									'data-primary': '1',
+									disabled: !writesAllowed || loginPending,
+									title: t('账号只用来生成配对码与判定异地同步是否到期; git 同步不需要登录'),
+									onClick: () => void startLogin(),
+								}, t('登录 Luwi 账号')))),
 					h('div', { className: 'luwi-sync-dim' }, t('手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。')),
 					hasRemote ? null : h('div', { className: 'luwi-sync-bad' }, t('还没有保存仓库地址: 先在下面那一格填好并保存 (两次点击), 再回来生成配对码')),
 					pairError === null ? null : h('div', { className: 'luwi-sync-bad' }, pairError),
@@ -1047,8 +1170,8 @@ window.__ModuleLoader__.load({
 							type: 'button',
 							className: 'luwi-sync-btn',
 							'data-primary': '1',
-							disabled: !writesAllowed || busy || !hasRemote,
-							title: hasRemote ? undefined : t('先保存仓库地址'),
+							disabled: !writesAllowed || busy || !hasRemote || !signedIn,
+							title: !signedIn ? t('生成配对码前要先登录') : (hasRemote ? undefined : t('先保存仓库地址')),
 							onClick: () => void call('pair', 'sessions'),
 						}, busy ? t('生成中') : t('生成配对码'))),
 					pair === null ? null : h('div', { className: 'luwi-sync-pair' },

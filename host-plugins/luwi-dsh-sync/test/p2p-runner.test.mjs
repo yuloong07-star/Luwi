@@ -249,3 +249,58 @@ test('an inbound accept timeout is idle noise, not the last outbound error', asy
   await runner.runInbound()
   assert.equal((await runner.status()).lastError, undefined, 'a quiet inbound timeout must not set lastError')
 })
+
+// ── 收费闸 (2026-10-23): 订阅过期后 P2P 不可用, 一个字节都不发 ──────────────────
+
+test('the plan gate blocks both directions before any frame is opened', async () => {
+  const sidecar = makeSidecar()
+  const runner = new P2pRunner({
+    sidecar,
+    config: { enabled: true, power: 'resident' },
+    repoDir: os.tmpdir(),
+    deviceId: 'me-device',
+    deviceName: 'Me',
+    peerProvider: () => PEER,
+    sessionFactory: () => { throw new Error('a gated run must not build a session') },
+    planGate: async () => ({ ok: false, reason: 'P2P_PLAN_REQUIRED' }),
+  })
+  const outbound = await runner.runOutbound()
+  assert.equal(outbound.ok, false)
+  assert.equal(outbound.reason, 'P2P_PLAN_REQUIRED')
+  assert.equal(sidecar.calls.open, 0)
+  const inbound = await runner.runInbound()
+  assert.equal(inbound.ok, false)
+  assert.equal(inbound.reason, 'P2P_PLAN_REQUIRED')
+  assert.equal(sidecar.calls.accept, 0)
+})
+
+test('a plan gate that throws fails closed, and no gate leaves the run unchanged', async () => {
+  const sessionFactory = () => ({
+    run: async () => ({ ok: true, role: 'pull-first', pulled: { files: 0, bytes: 0 }, served: { files: 0, bytes: 0 }, warnings: [] }),
+  })
+  const thrower = new P2pRunner({
+    sidecar: makeSidecar(),
+    config: { enabled: true, power: 'resident' },
+    repoDir: os.tmpdir(),
+    deviceId: 'me-device',
+    deviceName: 'Me',
+    peerProvider: () => PEER,
+    sessionFactory,
+    planGate: async () => { throw new Error('license disk unreadable') },
+  })
+  const blocked = await thrower.runOutbound()
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.reason, 'P2P_PLAN_REQUIRED')
+
+  const allowed = new P2pRunner({
+    sidecar: makeSidecar(),
+    config: { enabled: true, power: 'resident' },
+    repoDir: os.tmpdir(),
+    deviceId: 'me-device',
+    deviceName: 'Me',
+    peerProvider: () => PEER,
+    sessionFactory,
+    planGate: async () => ({ ok: true }),
+  })
+  assert.equal((await allowed.runOutbound()).ok, true)
+})

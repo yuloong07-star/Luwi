@@ -34,7 +34,8 @@ export const PANEL_HANDSHAKE = 'luwi-dsh-sync/panel'
 /** 快照的版本号 (字段增删时动它, 浏览器半按它决定降级渲染)。 */
 // v2 (Luwi, G1-2): 快照多一块 peer (对端通道读数)
 // v3 (Luwi, 2026-10-20): 一个仓库多根源 / 扫码配对 / 会话基线 / 手机只读那一档
-export const PANEL_SCHEMA_VERSION = 3
+// v4 (Luwi, 2026-10-23): 账号权益 (license 块) —— 生成配对码的前提
+export const PANEL_SCHEMA_VERSION = 4
 
 /** 面板能发的动作。 */
 export const PANEL_OPS = Object.freeze({
@@ -55,6 +56,11 @@ export const PANEL_OPS = Object.freeze({
   // Luwi 加 (P2P T6): 信任表的两个写动作 —— 确认换机 (换过 nodeId 的对端重新放行) 与吊销
   P2P_CONFIRM: 'p2p-confirm',
   P2P_REVOKE: 'p2p-revoke',
+  // Luwi 加 (2026-10-23): 账号 —— 生成配对码的前提; 登录走"浏览器打开官网 + 面板轮询"
+  LOGIN_START: 'login-start',
+  LOGIN_POLL: 'login-poll',
+  LOGOUT: 'logout',
+  LICENSE_REFRESH: 'license-refresh',
 })
 
 /** 会改远端/本地工作树/配置的那几个: 要 confirm, 要单飞。 */
@@ -359,6 +365,15 @@ export function createPanel(deps) {
         pairing = { paired: false, error: messageOf(thrown) }
       }
     }
+    // Luwi 加 (2026-10-23): 账号权益 (state / login / 到期 / 有没有 token; **token 本身永不外发**)
+    let license = null
+    if (typeof deps.readLicense === 'function') {
+      try {
+        license = await deps.readLicense()
+      } catch (thrown) {
+        license = { state: 'invalid', reason: messageOf(thrown) }
+      }
+    }
     return {
       ok: true,
       handshake: PANEL_HANDSHAKE,
@@ -377,6 +392,7 @@ export function createPanel(deps) {
       ...(peer === null ? {} : { peer }),
       ...(p2p === null ? {} : { p2p }),
       ...(pairing === null ? {} : { pairing }),
+      ...(license === null ? {} : { license }),
       op: running === null ? lastOp : runningView(ts),
     }
   }
@@ -452,9 +468,37 @@ export function createPanel(deps) {
       }
     }
 
-    // Luwi 加 (P2P T6): 信任表动作不碰镜像, 在 target 归一之前处理
-    if (op === PANEL_OPS.P2P_CONFIRM || op === PANEL_OPS.P2P_REVOKE) {
+    // Luwi 加 (2026-10-23): 账号相关的四个动作 —— 都是"本机这一份", 不针对哪根镜像,
+    // 所以排在 target 归一前面。登录本身是明确的点击, 不要第二次确认 (与 pair 同一口径)
+    if (
+      op === PANEL_OPS.LOGIN_START ||
+      op === PANEL_OPS.LOGIN_POLL ||
+      op === PANEL_OPS.LOGOUT ||
+      op === PANEL_OPS.LICENSE_REFRESH
+    ) {
       if (deps.info.config.panelOps !== true) {
+        return { status: 403, body: { ok: false, error: 'panel-initiated writes are disabled (panelOps: false)' } }
+      }
+      const hook = op === PANEL_OPS.LOGIN_START
+        ? deps.loginStart
+        : op === PANEL_OPS.LOGIN_POLL
+          ? deps.loginPoll
+          : op === PANEL_OPS.LOGOUT
+            ? deps.logout
+            : deps.refreshLicense
+      if (typeof hook !== 'function') {
+        return { status: 501, body: { ok: false, error: 'this host has no account hook' } }
+      }
+      try {
+        const result = await hook()
+        return { status: 200, body: { ok: result?.ok === true, action: op, ...(result ?? {}) } }
+      } catch (thrown) {
+        return { status: 200, body: { ok: false, action: op, error: messageOf(thrown) } }
+      }
+    }
+
+    // Luwi 加 (P2P T6): 信任表动作不碰镜像, 在 target 归一之前处理
+    if (op === PANEL_OPS.P2P_CONFIRM || op === PANEL_OPS.P2P_REVOKE) {      if (deps.info.config.panelOps !== true) {
         return { status: 403, body: { ok: false, error: 'panel-initiated writes are disabled (panelOps: false)' } }
       }
       if (request.confirm !== true) {

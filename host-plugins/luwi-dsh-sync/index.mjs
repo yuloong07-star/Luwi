@@ -2536,10 +2536,8 @@ function applyInner(ctx, config = {}) {
     let inbox = null
     if (peerSpec !== null) {
       try {
-        inbox = await peerRuntime.consumeInbox()
-        if (inbox.delivered > 0 || inbox.failed > 0) {
-          logger.info(`peer: consumed ${inbox.delivered} queued line(s)${inbox.failed > 0 ? `, ${inbox.failed} failed` : ''}`)
-        }
+        // 与每 15 s 的收件箱轮询共用同一条单飞, 避免 pull 与轮询同时投递同一条
+        inbox = await consumeInboxSoon()
       } catch (error) {
         warn(`peer: consuming the queue after the pull failed: ${messageOf(error)}`)
       }
@@ -2559,6 +2557,35 @@ function applyInner(ctx, config = {}) {
     }
     return { inbox, shadows }
   }
+
+  // 队列消费不该只挂在 pull 的尾巴上: pull 慢、卡住或那一条是 P2P 会话搬进来的 (还没到下一趟
+  // pull) 时, 对端发来的话就一直躺在工作树里 —— 2026-10-23 的一条 "你好" 从 12:46 躺到 13:39,
+  // 手机那边看到的就是"发送后没回复". 这里每 15 s 主动看一眼, 与 pull 里的那一趟共用单飞.
+  let inboxInFlight = null
+  function consumeInboxSoon() {
+    if (peerSpec === null) return Promise.resolve(null)
+    if (inboxInFlight !== null) return inboxInFlight
+    inboxInFlight = (async () => {
+      try {
+        const inbox = await peerRuntime.consumeInbox()
+        if (inbox.delivered > 0 || inbox.failed > 0) {
+          logger.info(`peer: consumed ${inbox.delivered} queued line(s)${inbox.failed > 0 ? `, ${inbox.failed} failed` : ''} (inbox poll)`)
+        }
+        return inbox
+      } catch (error) {
+        warn(`peer: consuming the queue failed: ${messageOf(error)}`)
+        return null
+      } finally {
+        inboxInFlight = null
+      }
+    })()
+    return inboxInFlight
+  }
+  ctx.effect(() => {
+    const timer = setInterval(() => { void consumeInboxSoon() }, 15_000)
+    if (typeof timer.unref === 'function') timer.unref()
+    return () => clearInterval(timer)
+  }, `${PLUGIN_NAME}.peer-inbox-poll`)
 
   // --- Luwi 加 (G1-2): 对端工作区的**影子目录与投影会话**, 以及「指令只能由归属方执行」那条闸。
   //

@@ -191,3 +191,45 @@ test('only the lexicographically smaller device dials (the session itself is bid
   assert.equal((await dialing.beforeSync()).ok, true)
   assert.equal(dialer.calls.outbound, 1)
 })
+
+// ── 收费闸 (2026-10-23) ─────────────────────────────────────────────────────
+
+test('the plan gate blocks beforeSync before it resolves a peer, and status carries the plan', async () => {
+  const runner = makeRunner()
+  const service = new P2pService({
+    config: { enabled: true, power: 'resident' },
+    repoDir: 'C:/repo',
+    deviceId: 'me',
+    readCards: async () => [PC],
+    sidecar: {},
+    runner,
+    requirePlan: async () => ({ ok: false, reason: 'P2P_PLAN_REQUIRED', plan: { state: 'expired', login: 'octo', expiresAt: 1, graceUntil: 2 } }),
+  })
+  const result = await service.beforeSync()
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'P2P_PLAN_REQUIRED')
+  assert.equal(runner.calls.outbound, 0)
+  assert.equal(service.peer, null, 'it does not even resolve a peer when the plan is gone')
+  const status = await service.status()
+  assert.equal(status.plan.state, 'expired')
+  assert.equal(status.plan.login, 'octo')
+})
+
+test('a plan gate that throws fails closed; a missing gate stays permissive', async () => {
+  const runner = makeRunner()
+  const thrower = new P2pService({
+    config: { enabled: true, power: 'resident' },
+    repoDir: 'C:/repo',
+    deviceId: 'me',
+    readCards: async () => [PC],
+    sidecar: {},
+    runner,
+    requirePlan: async () => { throw new Error('boom') },
+  })
+  assert.equal((await thrower.beforeSync()).reason, 'P2P_PLAN_REQUIRED')
+  assert.equal((await thrower.status()).plan, null)
+
+  const permissive = makeService({ cards: [PC], runner: makeRunner() })
+  assert.equal((await permissive.beforeSync()).ok, true)
+  assert.equal((await permissive.status()).plan, null)
+})

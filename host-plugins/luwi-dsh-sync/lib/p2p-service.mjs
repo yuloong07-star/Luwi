@@ -29,6 +29,9 @@ export class P2pService {
     this.readCards = options.readCards
     this.sidecar = options.sidecar
     this.onSession = options.onSession
+    // Luwi 加 (2026-10-23): 收费闸的判据由宿主注入 (它读 license 文件), lib 层只问"能不能用"
+    // 缺省恒放行 —— 老调用方 (测试 / 没有账号模块的宿主) 行为一个字都不变
+    this.requirePlan = typeof options.requirePlan === 'function' ? options.requirePlan : () => ({ ok: true })
     this.trustStore = options.trustStore ?? {
       read: repoDir => readTrust(repoDir),
       write: (repoDir, trust) => writeTrust(repoDir, trust),
@@ -44,6 +47,8 @@ export class P2pService {
       deviceId: undefined,
       deviceName: '',
       peerProvider: () => this.peer,
+      // 入站循环与出站也要过同一道闸 (只挡 beforeSync 的话, 对端仍能拨进来)
+      planGate: () => this.requirePlan(),
       deps: options.deps,
     })
     // runner 的 deviceId 要跟着 getter 走（engine 的 meta 可能到挂载之后才读出来）
@@ -138,6 +143,8 @@ export class P2pService {
    */
   async beforeSync(options = {}) {
     if (this.config.enabled !== true) return { ok: false, reason: 'P2P_DISABLED' }
+    const gate = await this.#askPlan()
+    if (gate.ok !== true) return { ok: false, reason: gate.reason }
     await this.refreshPeer()
     if (this.peer === null) return { ok: false, reason: 'P2P_UNAVAILABLE' }
     // 只让 deviceId 小的一方拨号: 一场会话本身是双向的 (先拉再服), 两端同时拨会撞成两条
@@ -166,11 +173,41 @@ export class P2pService {
       peerEndpoint: this.peer?.endpoint,
       trustState: this.trustState,
       blockedPeer: this.blockedPeer,
+      // Luwi 加 (2026-10-23): 订阅读数 —— 面板与 /sync status 都要一行"到期没到期"
+      plan: await this.#planView(),
     }
     if (typeof base.endpointId === 'string' && base.endpointId !== '' && typeof this.peer?.endpoint === 'string') {
       status.sas = sasDigits(base.endpointId, this.peer.endpoint)
     }
     return status
+  }
+
+  /**
+   * 问一次闸: 只有明确 ok 才放行; 判不出来按不放行 (失败关闭)
+   * @returns {Promise<{ok: boolean, reason?: string}>}
+   */
+  async #askPlan() {
+    try {
+      const answer = await this.requirePlan()
+      if (answer && answer.ok === true) return { ok: true }
+      return { ok: false, reason: (answer && answer.reason) || 'P2P_PLAN_REQUIRED' }
+    } catch {
+      return { ok: false, reason: 'P2P_PLAN_REQUIRED' }
+    }
+  }
+
+  /**
+   * 读数里那一小段 (不含 token; 闸判不出来就给 null)
+   * @returns {Promise<object|null>}
+   */
+  async #planView() {
+    try {
+      const answer = await this.requirePlan()
+      if (!answer || typeof answer !== 'object') return null
+      return answer.plan ?? null
+    } catch {
+      return null
+    }
   }
 
   /** 停掉入站、心跳与 sidecar（幂等）。 */

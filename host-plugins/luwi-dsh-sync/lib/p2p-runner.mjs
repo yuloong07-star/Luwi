@@ -45,6 +45,9 @@ export class P2pRunner {
     this.deviceName = options.deviceName ?? ''
     this.peerProvider = options.peerProvider ?? (() => null)
     this.sessionFactory = options.sessionFactory ?? (input => new P2pPeerSession(input))
+    // Luwi 加 (2026-10-23): 收费闸 —— 由服务层注入, 返回 {ok, reason?}; 不给就是"不过闸"
+    // (lib 层不认账号, 判据在 index.mjs 那一边; 单测直接注入一个恒假的函数就能钉住 P2P_PLAN_REQUIRED)
+    this.planGate = typeof options.planGate === 'function' ? options.planGate : null
     this.deps = {
       now: () => Date.now(),
       setInterval: (fn, ms) => setInterval(fn, ms),
@@ -81,6 +84,8 @@ export class P2pRunner {
    */
   async runOutbound(options = {}) {
     if (this.config.enabled !== true) return this.#result(false, 'P2P_DISABLED')
+    const gate = await this.#askPlan()
+    if (gate.ok !== true) return this.#result(false, gate.reason)
     if (!this.canAttempt()) {
       this.skipped += 1
       return this.#result(false, 'P2P_BUSY')
@@ -106,6 +111,8 @@ export class P2pRunner {
    */
   async runInbound(options = {}) {
     if (this.config.enabled !== true || this.config.inbound === false) return this.#result(false, 'P2P_DISABLED')
+    const gate = await this.#askPlan()
+    if (gate.ok !== true) return this.#result(false, gate.reason)
     if (this.sidecar.state !== 'running') return this.#result(false, 'P2P_UNAVAILABLE')
     const peer = this.peerProvider()
     const expectedNode = peer?.endpoint ?? peer?.id
@@ -125,6 +132,22 @@ export class P2pRunner {
   /** 本机设备 id: 允许迟到 (engine 的 meta 在挂载之后才读出来), 所以可能是 getter。 */
   #deviceId() {
     return typeof this.deviceId === 'function' ? String(this.deviceId() ?? '') : String(this.deviceId ?? '')
+  }
+
+  /**
+   * 问一次收费闸: 只有明确 `{ok:true}` 才放行
+   * 判不出来 (抛) 一律按不放行 —— 闸是收费边界, 失败关闭
+   * @returns {Promise<{ok: boolean, reason?: string}>}
+   */
+  async #askPlan() {
+    if (this.planGate === null) return { ok: true }
+    try {
+      const answer = await this.planGate()
+      if (answer && answer.ok === true) return { ok: true }
+      return { ok: false, reason: (answer && answer.reason) || 'P2P_PLAN_REQUIRED' }
+    } catch {
+      return { ok: false, reason: 'P2P_PLAN_REQUIRED' }
+    }
   }
 
   /** 跑一场会话（带总预算；超时先关流再记账）。 */
