@@ -2900,9 +2900,8 @@ function applyInner(ctx, config = {}) {
       }
     }
     await persistProxyState()
-    // 2026-10-23 暂时停用: 从 live 快照折出来的投影在"这一轮还没结束"时写出的 turn 边界
-    // 不合法 (load 时报 "turn/start does not open the expected turn")，先把这几场清掉再重做。
-    const projected = 0
+    // 2026-10-23: 轮号已改成从 1 起（见 ensureProxySession），这里恢复"从现在开始"的自动补投影
+    const projected = await projectLiveSessionsFromRepo()
     const folded = await foldFromRepo()
     return { ok: true, queueOnly: true, shadows: created, projected, ...folded }
   }
@@ -3201,8 +3200,9 @@ function applyInner(ctx, config = {}) {
         localId,
         lastSeq: 0,
         openTurn: null,
-        // 轮号从宿主自己的 seq 起算: 我们伪造的轮号就不会与真实轮次撞号
-        turnCounter: Number.isFinite(live?.seq) ? Number(live.seq) : 0,
+        // 轮号必须从 1 起: 宿主读盘时校验 `turn/start` 的 turn === nextTurn（1,2,3…），
+        // 拿 live.seq 起算会写出 5,6,7…，整场日志直接判 corrupt（2026-10-23 实测）
+        turnCounter: 0,
         pendingTexts: [],
         revision: -1,
         running: false,
