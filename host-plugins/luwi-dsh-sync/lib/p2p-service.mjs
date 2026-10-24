@@ -24,6 +24,12 @@ export class P2pService {
    */
   constructor(options) {
     this.config = options.config
+    // Luwi 加 (2026-10-23): 有周期拉取时不再起独立心跳 —— P2P 本来就是每次 pullSync 的前置传输
+    // (index.mjs 的 runP2pBeforeSync), 设置页那个 pullIntervalMinutes 已经把节奏定死了, 再叠一条
+    // 60 s 心跳等于同一拍拨两条会话 (主人 2026-10-23: "间隔能用设置里周期拉取的间隔")
+    this.periodicPull = typeof options.periodicPull === 'function' ? options.periodicPull : () => false
+    this.heartbeatArmed = false
+    this.started = false
     this.repoDir = options.repoDir
     this.deviceId = typeof options.deviceId === 'function' ? options.deviceId : () => String(options.deviceId ?? '')
     this.readCards = options.readCards
@@ -155,14 +161,41 @@ export class P2pService {
   }
 
   /**
-   * 常驻：入站循环（enabled 时才起）+ resident 档的心跳。
+   * 常驻：入站循环（enabled 时才起）+ 心跳（resident 档且**没有**周期拉取时给）。
    * @returns {void}
    */
   start() {
     if (this.config.enabled !== true) return
     if (this.stopInbound !== null) return
+    this.started = true
     this.stopInbound = this.runner.startInboundLoop({ onSession: this.onSession })
-    if (this.config.power === 'resident') this.runner.startHeartbeat()
+    this.#armHeartbeat()
+  }
+
+  /**
+   * 按"现在有没有周期拉取"起停心跳（幂等；设置页改了间隔由 index.mjs 那个 3 s 的 watch 叫它）
+   *
+   * 判据: `power === 'resident'` 且 `periodicPull()` 不为真 —— 有周期拉取时那一趟已经先试过
+   * P2P, 再拨一条心跳就是同一拍两场会话 (2026-10-23)
+   * @returns {boolean} 现在心跳开着吗。
+   */
+  syncHeartbeat() {
+    this.#armHeartbeat()
+    return this.heartbeatArmed
+  }
+
+  /** 起停的唯一一处（调用前先问过 started）。 */
+  #armHeartbeat() {
+    if (this.started !== true) return
+    const wants = this.config.power === 'resident' && this.periodicPull() !== true
+    if (wants === this.heartbeatArmed) return
+    if (wants) {
+      this.runner.startHeartbeat()
+      this.heartbeatArmed = true
+      return
+    }
+    if (typeof this.runner.stopHeartbeat === 'function') this.runner.stopHeartbeat()
+    this.heartbeatArmed = false
   }
 
   /** 读数（§7.4 形状 + 信任状态与 SAS）。 */
@@ -212,6 +245,8 @@ export class P2pService {
 
   /** 停掉入站、心跳与 sidecar（幂等）。 */
   async stop() {
+    this.started = false
+    this.heartbeatArmed = false
     if (this.stopInbound !== null) {
       this.stopInbound()
       this.stopInbound = null

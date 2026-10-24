@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-24
+
 ### Added
+
+- **Check-in straight from the panel (2026-10-24).** The account row gained a `签到` button to the left
+  of `刷新权益`: the host posts to `POST /api/checkin` with the local device token (the site now accepts
+  `Authorization: Bearer` next to the browser cookie), then refreshes the entitlement so the expiry on
+  the panel moves right away. `panel-routes` gained the `checkin` op; a signed-out host answers with
+  `not signed in on this machine`.
+- **Panel cleanup (2026-10-24).** The sync master switch moved to the right end of the `已挂载` row and
+  turns green while sync is on; configured fields (repository, token) show eight dots and clear on the
+  first click; the workspace-root row is gone (the workspace mirror itself is still a hand-written
+  config option); the duplicate `配对` line, the `刷新状态` button and the always-hidden branch input
+  are gone (branch lives under `高级`); the run-result card is a one-line summary with the raw JSON
+  folded into `全部字段`; the `runner=` badge reads `本机进程` / `手机桥接`.
 
 - **The first real device↔PC P2P session** (2026-10-22, T7 core). With the new APK installed, the phone
   host spawned `liblwiroh.so` from `nativeLibraryDir`, published a card carrying its `p2p.nodeId`/ticket,
@@ -200,6 +214,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs only when the API pull actually brought something, and it skips a parts directory whose
   `bytes:parts:sha256` fingerprint and local file size are unchanged. A quiet minute is now one
   metadata request; a busy one only reassembles the sessions that changed.
+
+### Changed
+
+- **One knob for the P2P cadence: the periodic pull interval** (2026-10-23). A resident profile used
+  to run a 60 s `p2p.heartbeatMs` timer *and* get a P2P attempt before every `pullSync`, so a
+  one-minute pull interval dialled the peer twice in the same minute. The heartbeat is now armed only
+  when there is no periodic pull (`pullIntervalMinutes === 0`), where it stays the 60 s fallback; with
+  a periodic pull the sync cycle is the only pace, exactly the interval the settings page shows. The
+  switch is hot: `index.mjs` re-arms or stops the timer from the same 3 s watch that re-arms the pull
+  timer, so changing the slider needs no host restart. Readings grew `heartbeatMs` / `heartbeatOn`
+  (`p2p.status` → `lw_sync op=status` / the panel), and `P2pService.syncHeartbeat()` is the single
+  place that decides. Note `power: charging|ondemand` still never starts the heartbeat — only
+  `resident` does, and `periodicPull` always suppresses it.
 
 ## [0.0.2] - 2026-10-15
 

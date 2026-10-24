@@ -28,8 +28,8 @@
     <string name="settings_menu_feedback">反馈</string>
     <string name="settings_menu_feedback_summary">报一个问题, 或者私密说一句</string>
     <string name="settings_menu_update">检测更新</string>
-    <string name="settings_menu_sync">sync 签到</string>
-    <string name="settings_menu_sync_summary">在浏览器里打开官网的签到页</string>
+    <string name="settings_menu_sync">签到</string>
+    <string name="settings_menu_sync_summary">在浏览器里打开官网, 登录之后签到</string>
     <string name="settings_menu_about">关于</string>
     <string name="settings_close">关闭</string>
 
@@ -629,7 +629,9 @@
 
     <string name="settings_section_sync">同步</string>
     <string name="settings_section_sync_summary">默认关着。用电脑面板上的二维码配对一次 (仓库 / 分支 / 对端地址与口令一次带过来), 会话就在两台机器之间走; 让电脑替你干活那条「跨设备通道」也住这一段, 它与同步无关, 随时可用</string>
-    <string name="settings_sync_note">这一段写的是 files/dsh-home/lw/session-sync.json (右上「看当前配置」可以看一眼原文, 口令在那里也是打码的)。改完点右上角 ⋮ → 重启 DSH host 才生效。仓库地址只在电脑面板上填: 用它的二维码配对一次, 这台手机就配好了</string>
+<string name="settings_sync_note">同步首次拉取耗时较长, 需在电脑上安装同步插件, 扫码即可配对</string>
+<string name="settings_sync_plugin">电脑上的同步插件</string>
+<string name="settings_sync_plugin_summary">在电脑的 dsh 里装上它, 再扫码配对: %1$s</string>
     <string name="settings_sync_master">同步</string>
     <string name="settings_sync_master_on">开着: 会话按 git 在两台机器之间走</string>
     <string name="settings_sync_master_off">关着: 不拉不推, 后台一趟都不跑 (默认)</string>
@@ -771,4 +773,5 @@
     <string name="preview_open_refused">这个文件不在工作区里</string>
     <string name="preview_open_missing">这台设备上没有能打开它的应用</string>
 </resources>
+
 

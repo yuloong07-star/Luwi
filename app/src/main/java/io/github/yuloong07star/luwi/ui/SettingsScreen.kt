@@ -230,12 +230,22 @@ private val CollapsedSections = listSaver<Set<String>, String>(
 )
 
 /**
- * 官网那个签到页 (2.7.9 第 4 条, 2026-10-19 主人: "签到页不进包, 那个按钮跳转官网的签到页就行")
+ * 官网的登录页 (2026-10-24 主人: ⋮ 里的「sync 签到」改成「签到」, 跳到登录界面)
  *
- * **只有一个入口**: ⋮ 里那一行; 「关于」里不再放第二个 (主人当天明确 "关于里面的这个按钮也删掉,
- * 只保留一个")。签到页与账号状态都在 `luwi.dpdns.org` 上, 应用不随包、也不带任何账号数据面
+ * 2026-10-19 定的是"签到页不进包, 那个按钮跳转官网的签到页", 现在跳的是 `login`:
+ * 没有会话的浏览器进 login 会被它自己送去账号页, 已登录的则直接落在账号页, 从那里再进同步页签到。
+ * **只有一个入口**: ⋮ 里那一行; 「关于」里不放第二个。账号与签到都在 `luwi.dpdns.org` 上,
+ * 应用不随包、也不带任何账号数据面
  */
-private const val CHECK_IN_URL = "https://luwi.dpdns.org/checkin"
+private const val SIGN_IN_URL = "https://luwi.dpdns.org/login"
+
+/**
+ * 电脑上装的那份同步插件 (2026-10-24 主人: 同步板块后加上 dsh 的同步插件地址)
+ *
+ * 手机这一端只负责扫码配对, 真正跑镜像与面板的是电脑 dsh 里这个插件; 这里只给一个可点开的地址,
+ * 不做"一键安装" —— 装插件要在电脑上走 dsh 自己的插件安装
+ */
+private const val SYNC_PLUGIN_URL = "https://github.com/yuloong07-star/luwi-dsh-sync"
 
 /**
  * 缺省展开的白名单 (D1, 2026-10-17 主人拍板): 省电那一段 + 「常用」一级分组下那六段
@@ -378,7 +388,7 @@ fun SettingsScreen() {
                         )
                     }
                 },
-                // 这一页里"不用常驻"的事全收在这里: 反馈 / 检测更新 / sync 签到 / 关于 / 要重启 host 才
+                // 这一页里"不用常驻"的事全收在这里: 反馈 / 检测更新 / 签到 / 关于 / 要重启 host 才
                 // 生效的改动
                 // 页面上就不必每个面板各放一个按钮 (2026-10-08 加了前三条, 见开发计划 2.4 与 2.14)
                 // **G1-D 那几行「打开 <对端名>」2026-10-17 撤掉了** (主人: "没用就删掉"): 它载入的
@@ -419,10 +429,10 @@ fun SettingsScreen() {
                                 DropdownItem(
                                     text = stringResource(R.string.settings_menu_sync),
                                     summary = stringResource(R.string.settings_menu_sync_summary),
-                                    // 2.7.9 第 4 条 (2026-10-19 主人: "签到页不进包"): 签到页在官网上,
-                                    // 这一行直接用系统浏览器打开它; 应用里不做那一页, 也**不要**留第二处入口
+                                    // 2026-10-24: 文案改成「签到」, 打开的是官网登录页 —— 未登录先登录,
+                                    // 已登录会被那一页送去账号页, 再进同步页签到
                                     onClick = {
-                                        openPage(context, CHECK_IN_URL)?.let { problem ->
+                                        openPage(context, SIGN_IN_URL)?.let { problem ->
                                             Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
                                         }
                                     },
@@ -1529,6 +1539,17 @@ private fun SyncItems() {
         title = stringResource(R.string.settings_sync_show),
         summary = stringResource(R.string.settings_sync_show_summary),
         onClick = { showRaw = true },
+    )
+
+    // ---- 电脑上的那个插件 (2026-10-24): 地址就是仓库, 点开用系统浏览器看 ----
+    ArrowPreference(
+        title = stringResource(R.string.settings_sync_plugin),
+        summary = stringResource(R.string.settings_sync_plugin_summary, SYNC_PLUGIN_URL),
+        onClick = {
+            openPage(context, SYNC_PLUGIN_URL)?.let { problem ->
+                Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
+            }
+        },
     )
 
     // ---- 一句状态: 关着 / 已配对 / 没配对 ----
@@ -5209,17 +5230,10 @@ private fun BallItems() {
             BallSpot.setAutoPeek(context, wanted)
         },
     )
-    // 桌面对话组件那一行 (2.7.8 批次 6, 主人第 3 条): 它是**宿主槽里的第三个**, 但不挂插件 ——
-    // 立绘取当前浮标外观, 气泡取 $DSH_HOME/lw/desktop-chat.json, 所以这一行只有"放上桌面"这一半;
-    // "拿下"没有编程接口 (谁都不许替桌面移除一格), 那一半只能如实说: 长按桌面那一格
-    ArrowPreference(
-        title = stringResource(R.string.settings_widget_chat_row),
-        summary = stringResource(R.string.settings_widget_chat_summary),
-        onClick = {
-            haptic.contextClick()
-            Toast.makeText(context, WidgetPin.request(context, WidgetSlot.CHAT), Toast.LENGTH_LONG).show()
-        },
-    )
+    // 2026-10-24 主人: 「桌面对话组件」那一行从 ball 段去掉 —— 桌面组件本身还在 (已经放到桌面上的
+    // 那一格照旧能说、能看气泡), 只是设置里不再有"再放一个上去"的入口。要恢复就把它加回来:
+    //   ArrowPreference(title = settings_widget_chat_row, summary = settings_widget_chat_summary,
+    //     onClick = { WidgetPin.request(context, WidgetSlot.CHAT) })
     // 拖球那条经验 (主人 2026-10-06 让写在这儿): 球贴在屏幕最左/最右时, 直接往中间拖会先经过系统的
     // **返回手势区** (屏幕左右边缘那一条竖带) —— 那一下被系统吃掉, 表现是"球没挪动, 反而退出了当前
     // 应用"。先往上拖一点, 离开那条竖带再横着挪, 就不会撞上它
@@ -5939,5 +5953,6 @@ private fun OcrRows() {
         }
     }
 }
+
 
 

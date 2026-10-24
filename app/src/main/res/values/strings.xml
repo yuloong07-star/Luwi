@@ -28,8 +28,8 @@
     <string name="settings_menu_feedback">Feedback</string>
     <string name="settings_menu_feedback_summary">Report a problem, or say something privately</string>
     <string name="settings_menu_update">Check for updates</string>
-    <string name="settings_menu_sync">Sync check-in</string>
-    <string name="settings_menu_sync_summary">Opens the check-in page on the website</string>
+    <string name="settings_menu_sync">Check in</string>
+    <string name="settings_menu_sync_summary">Opens the website sign-in page, then check in</string>
     <string name="settings_menu_about">About</string>
     <string name="settings_close">Close</string>
 
@@ -630,7 +630,9 @@
 
     <string name="settings_section_sync">Sync</string>
     <string name="settings_section_sync_summary">Off by default. Pair once with the QR code from the computer panel (repository, branch, peer address and token all arrive together), and sessions travel between the machines. The cross-device channel that lets the computer do the work lives here too - it is unrelated to sync and always available</string>
-    <string name="settings_sync_note">This section writes files/dsh-home/lw/session-sync.json (Show the config file gives a read-only look; the token is masked there too). After changing anything, tap ⋮ and restart the DSH host. The repository address is filled in on the computer panel only: pair once with its QR code and this phone is set</string>
+<string name="settings_sync_note">The first sync pull takes a while; install the sync plugin on the computer and pair with its QR code</string>
+<string name="settings_sync_plugin">Sync plugin for the computer</string>
+<string name="settings_sync_plugin_summary">Install it in dsh on the computer, then pair with the QR code: %1$s</string>
     <string name="settings_sync_master">Sync</string>
     <string name="settings_sync_master_on">On: sessions travel between the machines over git</string>
     <string name="settings_sync_master_off">Off: nothing is pulled or pushed, no background pass at all (the default)</string>
@@ -772,4 +774,6 @@
     <string name="preview_open_refused">That file is outside the workspace</string>
     <string name="preview_open_missing">No app on this device can open that file</string>
 </resources>
+
+
 

@@ -132,6 +132,21 @@ import { confirmPeer, readTrust, revokePeer, writeTrust } from './lib/p2p-trust.
 import { resolveP2pConfig } from './lib/p2p-config.mjs'
 // Luwi 加 (G1 面板): 官方侧边栏那块操作面板的宿主半 (同源 HTTP 数据通道)
 import { createPanel, describeRemote, PANEL_PREFIX, PANEL_TARGETS } from './lib/panel-routes.mjs'
+// Luwi 加 (2026-10-23): 账号登录与权益 (本地验签 + 7 天宽限 + 到期闸)
+import {
+  accountBaseOf,
+  accountRequest,
+  clearLicenseFile,
+  licensePathOf,
+  loginRequiredForPairing,
+  loginUrlOf,
+  newLoginState,
+  planAllowsP2p,
+  readLicenseFile,
+  statusOf,
+  storedFromPoll,
+  writeLicenseFile,
+} from './lib/luwi-license.mjs'
 
 export const name = PLUGIN_NAME
 
@@ -1215,6 +1230,165 @@ function applyInner(ctx, config = {}) {
   const syncConfigFile = syncConfigPath(dirname(sessionRoot))
   /** 影子根: `<DSH_HOME>/lw/peer-workspaces` —— 对端会话影子与同步来的工作区文件都住这儿 */
   const shadowRoot = join(dirname(sessionRoot), 'lw', 'peer-workspaces')
+  // Luwi 加 (2026-10-23): 账号权益落在 `<DSH_HOME>/lw/sync-license.json` (与 session-sync.json 同层)
+  // 这个文件里只有账号、到期与 device_token —— 没有密码, 也不进仓库/镜像 (lw/ 不在两根镜像的根里)
+  const licenseFile = licensePathOf(dirname(sessionRoot))
+  /** 登录中的那一次 (state + 起始时刻); 只在内存里, 宿主重启就作废 */
+  let loginPending = null
+  /** 1 秒内的状态缓存: P2P 每次同步前都问一次, 没必要每次读盘 */
+  let licenseCache = { at: 0, status: null }
+
+  /**
+   * 读一次权益状态 (文件 → 验签 → 六档)
+   * @param {boolean} [force] - 跳过 1 秒缓存 (刚写完文件时用)
+   * @returns {Promise<object>} statusOf 的产物
+   */
+  async function readLicenseStatus(force = false) {
+    const now = Date.now()
+    if (!force && licenseCache.status !== null && now - licenseCache.at < 1000) return licenseCache.status
+    const stored = await readLicenseFile(licenseFile)
+    const status = statusOf({ stored, now })
+    licenseCache = { at: now, status }
+    return status
+  }
+
+  /**
+   * P2P 收费闸的判据: active / grace 放行, 其余一律 P2P_PLAN_REQUIRED
+   * @returns {Promise<{ok: boolean, reason?: string, plan: object|null}>} 闸的答案。
+   */
+  async function licensePlanGate() {
+    const status = await readLicenseStatus()
+    const allowed = planAllowsP2p(status)
+    return {
+      ok: allowed,
+      reason: allowed ? undefined : 'P2P_PLAN_REQUIRED',
+      plan: {
+        state: status.state,
+        login: status.login,
+        expiresAt: status.expiresAt,
+        graceUntil: status.graceUntil,
+      },
+    }
+  }
+
+  /**
+   * 面板点「登录」: 只生成一次性 state 与官网地址, 浏览器由面板那一侧打开
+   * @returns {Promise<{ok: boolean, url: string, state: string, expiresAt: number}>} 结果。
+   */
+  async function licenseLoginStart() {
+    const state = newLoginState()
+    const base = accountBaseOf()
+    const startedAt = Date.now()
+    loginPending = { state, url: loginUrlOf(base, state), startedAt }
+    return { ok: true, url: loginPending.url, state, expiresAt: startedAt + 5 * 60_000 }
+  }
+
+  /**
+   * 面板轮询: 官网那边登录完了没有
+   * 404 = 还没好 (稍后再问), 410 = 这枚 state 已经作废 (要重新点登录)
+   * @returns {Promise<object>} {ok, waiting?, signedIn?, license?, error?}
+   */
+  async function licenseLoginPoll() {
+    if (loginPending === null) {
+      return { ok: false, error: 'no sign-in is in progress: click "sign in" on this panel first' }
+    }
+    if (Date.now() - loginPending.startedAt > 5 * 60_000) {
+      loginPending = null
+      return { ok: false, error: 'the sign-in window expired: click "sign in" again' }
+    }
+    const base = accountBaseOf()
+    const answer = await accountRequest(base, `/api/account/poll?state=${encodeURIComponent(loginPending.state)}`)
+    if (answer.status === 404) return { ok: true, waiting: true }
+    if (answer.status === 410) {
+      loginPending = null
+      return { ok: false, error: 'the sign-in code was used or expired before this panel picked it up: sign in again' }
+    }
+    if (answer.status !== 200 || !answer.body || answer.body.ok !== true) {
+      const reason = answer.error ?? (answer.body && answer.body.error) ?? `HTTP ${answer.status}`
+      return { ok: false, error: `sign-in did not complete: ${reason}` }
+    }
+    const stored = storedFromPoll(answer.body, { base })
+    if (stored === null) {
+      loginPending = null
+      return { ok: false, error: 'the server answered without an entitlement: sign in again' }
+    }
+    await writeLicenseFile(licenseFile, stored)
+    licenseCache = { at: 0, status: null }
+    loginPending = null
+    logger.info(`luwi account: signed in as ${stored.login || '(no login)'} (expires ${new Date(Number(stored.expiresAt) || 0).toISOString()})`)
+    return { ok: true, signedIn: true, license: await readLicenseStatus(true) }
+  }
+
+  /**
+   * 退出登录: 只删本机这一份 (服务端那条会话 90 天后自然过期)
+   * @returns {Promise<{ok: boolean}>} 结果。
+   */
+  async function licenseLogout() {
+    loginPending = null
+    await clearLicenseFile(licenseFile)
+    licenseCache = { at: 0, status: null }
+    logger.info('luwi account: signed out on this machine')
+    return { ok: true }
+  }
+
+  /**
+   * 刷新权益: 续费 / 签到之后由面板点一下, 拿一份新签的凭证 (token 不变)
+   * @returns {Promise<object>} {ok, license?, error?}
+   */
+  async function licenseRefresh() {
+    const stored = await readLicenseFile(licenseFile)
+    const token = stored && typeof stored.token === 'string' ? stored.token : ''
+    if (token === '') return { ok: false, error: 'not signed in on this machine' }
+    const base = typeof stored.base === 'string' && stored.base !== '' ? stored.base : accountBaseOf()
+    const answer = await accountRequest(base, `/api/account/entitlement?token=${encodeURIComponent(token)}`)
+    if (answer.status !== 200 || !answer.body || answer.body.ok !== true) {
+      const reason = answer.error ?? (answer.body && answer.body.error) ?? `HTTP ${answer.status}`
+      return { ok: false, error: `could not refresh: ${reason}` }
+    }
+    const next = {
+      ...stored,
+      entitlement: String(answer.body.entitlement || ''),
+      login: String((answer.body.account && answer.body.account.login) || stored.login || ''),
+      email: String((answer.body.account && answer.body.account.email) || stored.email || ''),
+      expiresAt: Number.isFinite(Number(answer.body.expiresAt)) ? Number(answer.body.expiresAt) : stored.expiresAt,
+      paidUntil: answer.body.paidUntil === null || answer.body.paidUntil === undefined ? null : Number(answer.body.paidUntil),
+      fetchedAt: Date.now(),
+    }
+    await writeLicenseFile(licenseFile, next)
+    licenseCache = { at: 0, status: null }
+    return { ok: true, license: await readLicenseStatus(true) }
+  }
+
+  /**
+   * 签到: 用本机这份 device_token 打官网 POST /api/checkin (2026-10-24)
+   *
+   * 官网那一条认两种门: 浏览器 cookie 与 Authorization: Bearer —— 面板没有 cookie,
+   * 走后者 (与刷新权益同一个 token, 不新增任何凭据)。签到之后顺手刷一次凭证,
+   * 面板上那一行「到期」当场变; 刷新失败不算签到失败 (签到本身已经记在服务端了)
+   * @returns {Promise<object>} {ok, already?, capped?, days?, expiresAt?, error?}
+   */
+  async function licenseCheckin() {
+    const stored = await readLicenseFile(licenseFile)
+    const token = stored && typeof stored.token === 'string' ? stored.token : ''
+    if (token === '') return { ok: false, error: 'not signed in on this machine' }
+    const base = typeof stored.base === 'string' && stored.base !== '' ? stored.base : accountBaseOf()
+    const answer = await accountRequest(base, '/api/checkin', { method: 'POST', token })
+    if (answer.status !== 200 || !answer.body || answer.body.ok !== true) {
+      const reason = answer.error ?? (answer.body && answer.body.error) ?? `HTTP ${answer.status}`
+      return { ok: false, error: `could not check in: ${reason}` }
+    }
+    const already = answer.body.already === true
+    const capped = answer.body.capped === true
+    const refreshed = await licenseRefresh()
+    return {
+      ok: true,
+      already,
+      capped,
+      days: already ? 0 : 1,
+      expiresAt: Number.isFinite(Number(answer.body.expiresAt)) ? Number(answer.body.expiresAt) : undefined,
+      ...(refreshed.ok === true ? {} : { refreshError: refreshed.error }),
+    }
+  }
   // Luwi 加 (2026-10-20): 扫码配对段 (插件只读)。配对 id 决定"这是不是一次新的同步开始":
   // 没有它 = 旧模式 (全量镜像); 有它 = 只同步窗口内/之后有写入的会话, 首次同步清旧
   const pairing = normalizePairing(merged.pairing)
@@ -1462,11 +1636,18 @@ function applyInner(ctx, config = {}) {
   const p2pDir = join(repoDir, '.p2p')
   mkdirSync(p2pDir, { recursive: true })
   if (!existsSync(join(p2pDir, '.gitignore'))) writeFileSync(join(p2pDir, '.gitignore'), '*\n')
+  // Luwi 加 (2026-10-23): 周期拉取这个数现在也管 P2P 的心跳 —— 有周期拉取时那一趟本来就会先
+  // 试一趟 P2P, 再起一条独立心跳等于同一拍拨两次。定时器在下面 (periodic-pull 那个 effect) 会改它,
+  // 所以这里用一个可变的值给服务读 getter
+  let periodicPullMinutes = resolved.pullIntervalMinutes
   const p2pService = new P2pService({
     config: resolved.p2p,
     repoDir,
     deviceId: () => peerIdentity.deviceId,
     readCards: async () => (await readPeerCards(repoDir)).cards,
+    periodicPull: () => periodicPullMinutes > 0,
+    // Luwi 加 (2026-10-23): 到期闸 —— 订阅过期 (超过 7 天宽限) 后 P2P 不可用, git 链路一个字不改
+    requirePlan: licensePlanGate,
     sidecar: new P2pSidecar({
       config: resolved.p2p,
       pluginDir: fileURLToPath(new URL('.', import.meta.url)),
@@ -1485,6 +1666,12 @@ function applyInner(ctx, config = {}) {
     const result = await p2pService.beforeSync()
     if (result.ok === true) return
     if (p2pWarned) return
+    // Luwi 加 (2026-10-23): 订阅到期不是"坏了", 是"这一趟走 git" —— 单独一句话, 别混进故障里
+    if (result.reason === 'P2P_PLAN_REQUIRED') {
+      p2pWarned = true
+      warn('sync: the subscription has expired, this round goes over git (see the pairing card on the panel)')
+      return
+    }
     if (['P2P_TIMEOUT', 'P2P_CRASH', 'P2P_IO', 'P2P_PROTOCOL'].includes(result.reason)) {
       p2pWarned = true
       warn(`sync: p2p ${result.reason}; the existing transport keeps the sync going`)
@@ -4098,6 +4285,12 @@ function applyInner(ctx, config = {}) {
    * @returns {Promise<{ok: boolean, payload?: string, svg?: string, summary?: object, error?: string}>} 结果。
    */
   async function buildPairing() {
+    // Luwi 加 (2026-10-23): 生成配对码的前提是"登录过" —— 过期不收这个闸
+    // (过期的人要能重新配对去续费; 收费的闸在 P2P 那一边, 见 licensePlanGate)
+    const licenseStatus = await readLicenseStatus()
+    if (loginRequiredForPairing(licenseStatus)) {
+      return { ok: false, error: 'sign in with a Luwi account first: the pairing card on this panel has the sign-in button' }
+    }
     const tree = await readSyncTree(syncConfigFile)
     const cleanRemote = typeof tree.remote === 'string' ? tree.remote.trim() : resolved.remote.trim()
     if (cleanRemote === '') {
@@ -4241,6 +4434,13 @@ function applyInner(ctx, config = {}) {
     // Luwi 加 (2026-10-20): 配对摘要与"生成配对码"那一条口
     readPairing,
     buildPairing,
+    // Luwi 加 (2026-10-23): 账号登录 (生成配对码的前提) 与权益刷新/退出
+    readLicense: () => readLicenseStatus(),
+    loginStart: licenseLoginStart,
+    loginPoll: licenseLoginPoll,
+    logout: licenseLogout,
+    refreshLicense: licenseRefresh,
+    checkin: licenseCheckin,
     // Luwi 加 (2026-10-15): 面板的写配置口 (宿主半见 lib/panel-routes.mjs 的 CONFIGURE)
     configure: configureFromPanel,
     // Luwi 加 (2026-10-20): 清理仓库会话 (面板那颗按钮 / 手机的同一块面板都走这一口)
@@ -4423,6 +4623,10 @@ function applyInner(ctx, config = {}) {
         clearInterval(timer)
         timer = null
       }
+      // Luwi 加 (2026-10-23): 这个数同时是 P2P 心跳的闸 —— 有周期拉取就不另起心跳
+      // (pullSync 之前本来就要先试一趟 P2P), 归零时再让心跳回来兜底
+      periodicPullMinutes = minutes
+      p2pService.syncHeartbeat()
       if (!(minutes > 0)) return
       timer = setInterval(() => {
         void pullSync().then(result => {

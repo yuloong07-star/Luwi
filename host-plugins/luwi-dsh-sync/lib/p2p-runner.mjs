@@ -236,6 +236,9 @@ export class P2pRunner {
       available: sidecar.available === true,
       running: sidecar.running === true,
       mode: this.config.power ?? 'resident',
+      // 心跳现在开着吗、给的是多少 (2026-10-23: 有周期拉取时心跳不起, 读数里要看得出来)
+      heartbeatMs: this.config.heartbeatMs ?? P2P_RUN_DEFAULTS.heartbeatMs,
+      heartbeatOn: this.heartbeat !== null,
       path,
       rttMs: this.lastRttMs,
       peerId: peer?.id,

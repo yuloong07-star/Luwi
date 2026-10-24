@@ -61,6 +61,9 @@ export const PANEL_OPS = Object.freeze({
   LOGIN_POLL: 'login-poll',
   LOGOUT: 'logout',
   LICENSE_REFRESH: 'license-refresh',
+  // Luwi 加 (2026-10-24): 每天签到送 1 天 —— 用本机那份 device_token 直接打官网
+  // (POST /api/checkin 认 Authorization: Bearer), 不必开浏览器去 /sync 页
+  CHECKIN: 'checkin',
 })
 
 /** 会改远端/本地工作树/配置的那几个: 要 confirm, 要单飞。 */
@@ -474,6 +477,7 @@ export function createPanel(deps) {
       op === PANEL_OPS.LOGIN_START ||
       op === PANEL_OPS.LOGIN_POLL ||
       op === PANEL_OPS.LOGOUT ||
+      op === PANEL_OPS.CHECKIN ||
       op === PANEL_OPS.LICENSE_REFRESH
     ) {
       if (deps.info.config.panelOps !== true) {
@@ -485,7 +489,9 @@ export function createPanel(deps) {
           ? deps.loginPoll
           : op === PANEL_OPS.LOGOUT
             ? deps.logout
-            : deps.refreshLicense
+            : op === PANEL_OPS.CHECKIN
+              ? deps.checkin
+              : deps.refreshLicense
       if (typeof hook !== 'function') {
         return { status: 501, body: { ok: false, error: 'this host has no account hook' } }
       }

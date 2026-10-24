@@ -185,6 +185,19 @@ window.__ModuleLoader__.load({
 			'等待浏览器登录…': 'Waiting for the browser…',
 			'登录完这个面板会自己变, 不用回来点': 'This panel updates on its own once the browser finishes; no need to come back and click',
 			'刷新权益': 'Refresh plan',
+			'签到': 'Check in',
+			'每天签到送 1 天': 'Check in once a day for 1 extra day',
+			// 2026-10-24: 面板收口的那几句 (运行方式徽标 / 折叠 / 运行结果摘要 / 已配置的小点)
+			'本机进程': 'Local process',
+			'手机桥接': 'Phone bridge',
+			'本机进程 / 手机桥接': 'Local process / phone bridge',
+			'高级': 'Advanced',
+			'全部字段': 'All fields',
+			'成功': 'OK',
+			'失败': 'failed',
+			'已保存': 'saved',
+			'留空 = 保持不动': 'Leave empty to keep the current value',
+			'已配置: 小点只是占位, 点一下清空后填新的, 保存才生效': 'Configured: the dots are a placeholder; click to clear, type the new value, then save',
 			'退出登录': 'Sign out',
 			'取消': 'Cancel',
 			'到期': 'expires',
@@ -410,6 +423,11 @@ window.__ModuleLoader__.load({
 }
 .luwi-sync-btn[data-danger="1"] { border-color: var(--dsw-alias-state-warn-primary, #d8a300);
   color: var(--dsw-alias-state-warn-primary, #d8a300); }
+/* Luwi 加 (2026-10-24): 同步总开关挪到「已挂载」那一行的最右, 开着时描边与字都是绿的
+   —— 主人要的是"一眼看出它在跑", 关着保持普通按钮的样子 */
+.luwi-sync-toggle { margin-inline-start: auto; }
+.luwi-sync-toggle[data-on="1"] { border-color: var(--dsw-alias-state-success-primary, #2fbf71);
+  color: var(--dsw-alias-state-success-primary, #2fbf71); }
 .luwi-sync-confirm { border: 1px solid var(--dsw-alias-state-warn-primary, #d8a300); border-radius: 10px;
   padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
 .luwi-sync-badge { font-size: 11px; padding: 1px 6px; border-radius: 999px;
@@ -417,6 +435,10 @@ window.__ModuleLoader__.load({
 .luwi-sync-pre { white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dsw-alias-label-secondary, #9aa0a6); }
 .luwi-sync-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+/* 2026-10-24: 「高级」与「全部字段」两处折叠 (分支框 / 完整应答) —— 用原生 details, 零 JS */
+.luwi-sync-adv { margin-top: 6px; }
+.luwi-sync-adv > summary { cursor: pointer; }
+.luwi-sync-adv[open] > summary { margin-bottom: 4px; }
 .luwi-sync-pair { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 8px; }
 .luwi-sync-pair img { border-radius: 8px; background: #fff; padding: 4px; }
 .luwi-sync-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 6px; }
@@ -494,11 +516,17 @@ window.__ModuleLoader__.load({
 			// Luwi 加 (2026-10-15): 仓库卡片那两个输入框 (空 = 不动; 已配置的地址不回显)
 			const [remoteDraft, setRemoteDraft] = React.useState('');
 			const [branchDraft, setBranchDraft] = React.useState('');
+			// Luwi 加 (2026-10-24): 已配置的输入框显示加密小点 (主人: 一眼看出"填过了"),
+			// 点一下就把小点清掉、可以填新的; 仍然要点「保存」才生效。armed = 已经点开这一格
+			const MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+			const [remoteArmed, setRemoteArmed] = React.useState(false);
+			const [tokenArmed, setTokenArmed] = React.useState(false);
 			// Luwi 加 (2026-10-20): 访问令牌单独一格 (私有仓库的 PAT; 密码框, 不回显)
 			const [tokenDraft, setTokenDraft] = React.useState('');
-			// Luwi 加 (2026-10-20): 配对卡与工作区根 (2026-10-20 主人: 「本机地址」那个框删掉 ——
+			// Luwi 加 (2026-10-20): 配对卡 (2026-10-20 主人: 「本机地址」那个框删掉 ——
 			// 它只给对端通道用, 与同步无关; 二维码继续用配置里/profile 里已有的值)
-			const [workspaceRootDraft, setWorkspaceRootDraft] = React.useState('');
+			// 2026-10-24: 「工作区根」那个框删掉 —— 那功能是把某个文件夹的**文件**抄进仓库,
+			// 与"同步会话"无关, 一直关着; 面板不再有入口 (配置里手写 workspace 仍生效)
 			const [pair, setPair] = React.useState(null);
 			const [pairError, setPairError] = React.useState(null);
 			const [pairing, setPairing] = React.useState(false);
@@ -628,7 +656,7 @@ window.__ModuleLoader__.load({
 					// Luwi 加 (2026-10-20): 保存成功之后把"还要再点一次确认"那句换成写入结果, 免得人以为没生效
 					if (op === 'configure' && body.ok === true) setPairError(null);
 					// Luwi 加 (2026-10-15): 写进去了就把草稿清掉 (写的是哪几个值, 回执那一栏里有)
-					if (op === 'configure' && body.ok === true) { setRemoteDraft(''); setTokenDraft(''); setBranchDraft(''); setWorkspaceRootDraft(''); }
+					if (op === 'configure' && body.ok === true) { setRemoteDraft(''); setTokenDraft(''); setBranchDraft(''); }
 					await load();
 				} finally {
 					setBusy(false);
@@ -661,8 +689,9 @@ window.__ModuleLoader__.load({
 					h('div', { className: 'luwi-sync-head-row' },
 						h('span', { className: 'luwi-sync-dot', 'data-on': mount.mounted ? '1' : '0' }),
 						h('span', { className: 'luwi-sync-strong' }, mount.mounted ? t('已挂载') : t('未挂载')),
-						h('span', { className: 'luwi-sync-badge' }, `runner=${mount.runner || '?'}`),
-						h('span', { className: 'luwi-sync-badge' }, `v=${snap.version}`)),
+						h('span', { className: 'luwi-sync-badge', title: t('本机进程 / 手机桥接') }, mount.runner === 'luwi-bridge' ? t('手机桥接') : t('本机进程')),
+						h('span', { className: 'luwi-sync-badge' }, `v=${snap.version}`),
+						renderSyncToggle()),
 					h('div', { className: 'luwi-sync-head-row luwi-sync-dim' },
 						h('span', null, `${t('设备')} ${deviceName}`),
 						h('span', null, `${t('远端')} ${config.remoteState === 'set' ? t('已配置') : t('未配置')}`)),
@@ -702,6 +731,26 @@ window.__ModuleLoader__.load({
 					h('span', { key: `${key}-k` }, key),
 					h('span', { key: `${key}-v`, className: tone }, value === undefined || value === null || value === '' ? '—' : value),
 				];
+			}
+
+			/**
+			 * 同步总开关 (2026-10-24 从仓库卡挪到「已挂载」那一行最右)。
+			 *
+			 * `config.remoteState === 'set'` 就是"同步开着"; 这一颗点下去走 configure 的
+			 * `{ on: !syncOn }`, 与设置页那个开关写的是同一份文件 (改完要重启 host)
+			 * @returns {object} React 元素。
+			 */
+			function renderSyncToggle() {
+				const syncOn = config.remoteState === 'set';
+				const canFlip = config.panelOps === true && channelOpen && !busy && !running && pending === null;
+				return h('button', {
+					type: 'button',
+					className: 'luwi-sync-btn luwi-sync-toggle',
+					'data-on': syncOn ? '1' : '0',
+					disabled: !canFlip,
+					title: t('改了要重启 host 才生效'),
+					onClick: () => setPending({ op: 'configure', target: 'sessions', extra: { on: !syncOn } }),
+				}, syncOn ? t('同步: 开') : t('同步: 关'));
 			}
 
 			/**
@@ -747,9 +796,6 @@ window.__ModuleLoader__.load({
 				const pairingInfo = snap.pairing ?? {};
 				const status = (mirrors[0] && mirrors[0].status) || {};
 				const rows = [];
-				rows.push(...kv(t('配对'), pairingInfo.paired
-					? `${t('已配对')}${pairingInfo.from ? ` · ${pairingInfo.from}` : ''}`
-					: t('未配对 (在最上面的配对卡里生成配对码)')));
 				rows.push(...kv(t('仓库主机'), pairingInfo.repoHost || '—'));
 				rows.push(...kv(t('对话窗口'), `${(config.sessions && config.sessions.currentWindowMinutes) ?? 60} min`));
 				if (status.baseline) {
@@ -994,7 +1040,6 @@ window.__ModuleLoader__.load({
 				const syncOn = config.remoteState === 'set';
 				const hasRemote = syncOn;
 				const canConfigure = writesAllowed && !busy && !running && pending === null;
-				const workspace = config.workspace ?? {};
 				return [
 					h('div', { className: 'luwi-sync-card', key: 'repo' },
 						h('div', { className: 'luwi-sync-card-title' },
@@ -1006,11 +1051,15 @@ window.__ModuleLoader__.load({
 								type: 'text',
 								className: 'luwi-sync-input',
 								placeholder: t('仓库地址'),
-								value: remoteDraft,
+								value: remoteDraft !== '' ? remoteDraft : (config.remoteState === 'set' && !remoteArmed ? MASK : ''),
 								disabled: !writesAllowed,
+								onFocus: () => { if (remoteDraft === '' && config.remoteState === 'set') setRemoteArmed(true); },
+								onBlur: () => { if (remoteDraft === '') setRemoteArmed(false); },
 								onChange: (e) => setRemoteDraft(e.target.value),
 							})),
-						h('div', { className: 'luwi-sync-dim' }, t('留空 = 保持不动 (已配置的地址不回显)')),
+						h('div', { className: 'luwi-sync-dim' }, config.remoteState === 'set'
+							? t('已配置: 小点只是占位, 点一下清空后填新的, 保存才生效')
+							: t('留空 = 保持不动')),
 						// 2026-10-20: 令牌单独一格 —— 手机侧 git 没有 credential helper,
 						// 二维码里带的是拼好的地址 (PC 存干净地址 + 令牌, 手机存拼好的那一份)
 						h('label', { className: 'luwi-sync-field' },
@@ -1018,38 +1067,33 @@ window.__ModuleLoader__.load({
 								type: 'password',
 								className: 'luwi-sync-input',
 								placeholder: t('访问令牌 (私有仓库的 PAT; 留空 = 保持不动)'),
-								value: tokenDraft,
+								value: tokenDraft !== '' ? tokenDraft : (config.hasRemoteToken === true && !tokenArmed ? MASK : ''),
 								disabled: !writesAllowed,
 								autoComplete: 'off',
+								onFocus: () => { if (tokenDraft === '' && config.hasRemoteToken === true) setTokenArmed(true); },
+								onBlur: () => { if (tokenDraft === '') setTokenArmed(false); },
 								onChange: (e) => setTokenDraft(e.target.value),
 							})),
-						h('div', { className: 'luwi-sync-dim' }, `${t('令牌')}: ${config.hasRemoteToken ? t('已保存 (不回显; 留空保持)') : t('还没存')} · ${t('只存本机与应用私有目录, 二维码里会带上拼好的地址')}`),
+						h('div', { className: 'luwi-sync-dim' }, `${t('令牌')}: ${config.hasRemoteToken ? t('已保存') : t('还没存')} · ${t('只存本机与应用私有目录, 二维码里会带上拼好的地址')}`),
 						h('div', { className: 'luwi-sync-dim' }, t('GitHub 令牌 permissions 仅需: Contents —— Read and write')),
-						h('label', { className: 'luwi-sync-field' },
-							h('input', {
-								type: 'text',
-								className: 'luwi-sync-input',
-								placeholder: `${t('分支')} (main)`,
-								value: branchDraft,
-								disabled: !writesAllowed,
-								onChange: (e) => setBranchDraft(e.target.value),
-							})),
-						h('label', { className: 'luwi-sync-field' },
-							h('input', {
-								type: 'text',
-								className: 'luwi-sync-input',
-								placeholder: `${t('工作区根')} (${workspace.root || 'cwd'})`,
-								value: workspaceRootDraft,
-								disabled: !writesAllowed,
-								onChange: (e) => setWorkspaceRootDraft(e.target.value),
-							})),
-						h('div', { className: 'luwi-sync-dim' }, `${t('工作区')}: ${workspace.enabled ? `${workspace.name || ''}${workspace.mirrorDir ? ` · ${workspace.mirrorDir}` : ''}` : t('关')}`),
+						// 2026-10-24: 分支几乎不动, 收进「高级」
+						h('details', { className: 'luwi-sync-adv' },
+							h('summary', { className: 'luwi-sync-dim' }, t('高级')),
+							h('label', { className: 'luwi-sync-field' },
+								h('input', {
+									type: 'text',
+									className: 'luwi-sync-input',
+									placeholder: `${t('分支')} (${config.branch || 'main'})`,
+									value: branchDraft,
+									disabled: !writesAllowed,
+									onChange: (e) => setBranchDraft(e.target.value),
+								}))),
 						h('div', { className: 'luwi-sync-actions' },
 							h('button', {
 								type: 'button',
 								className: 'luwi-sync-btn',
 								'data-primary': '1',
-								disabled: !canConfigure || (remoteDraft.trim() === '' && tokenDraft.trim() === '' && branchDraft.trim() === '' && workspaceRootDraft.trim() === ''),
+								disabled: !canConfigure || (remoteDraft.trim() === '' && tokenDraft.trim() === '' && branchDraft.trim() === ''),
 								onClick: () => setPending({
 									op: 'configure',
 									target: 'sessions',
@@ -1058,17 +1102,10 @@ window.__ModuleLoader__.load({
 										// 令牌单独一格; 与地址一起改时也生成新的配对 id (宿主那一侧判)
 										...(tokenDraft.trim() === '' ? {} : { remoteToken: tokenDraft.trim() }),
 										...(branchDraft.trim() === '' ? {} : { branch: branchDraft.trim() }),
-										...(workspaceRootDraft.trim() === '' ? {} : { workspace: { root: workspaceRootDraft.trim() } }),
 									},
 								}),
 							}, t('保存')),
-							h('button', {
-								type: 'button',
-								className: 'luwi-sync-btn',
-								disabled: !canConfigure,
-								title: t('改了要重启 host 才生效'),
-								onClick: () => setPending({ op: 'configure', target: 'sessions', extra: { on: !syncOn } }),
-							}, syncOn ? t('同步: 关') : t('同步: 开')),
+							// 同步总开关 2026-10-24 挪到顶部「已挂载」那一行 (renderSyncToggle)
 							// Luwi 加 (2026-10-20): 清理仓库会话 —— 只删仓库里那些窗口外的镜像与合并副本,
 							// 本机会话一个字节都不动; 走两次点击的确认条
 							h('button', {
@@ -1140,6 +1177,15 @@ window.__ModuleLoader__.load({
 						? h('div', { className: 'luwi-sync-dim' }, `${t('等待浏览器登录…')} · ${t('在浏览器里完成 GitHub 登录, 然后回来')}`)
 						: (signedIn
 							? h('div', { className: 'luwi-sync-actions' },
+								// Luwi 加 (2026-10-24): 签到 —— 走本机 device_token 打 /api/checkin,
+								// 成功之后宿主顺手刷新权益, 到期那一行当场变
+								h('button', {
+									type: 'button',
+									className: 'luwi-sync-btn',
+									disabled: !writesAllowed || busy,
+									title: t('每天签到送 1 天'),
+									onClick: () => void call('checkin', 'sessions'),
+								}, t('签到')),
 								h('button', {
 									type: 'button',
 									className: 'luwi-sync-btn',
@@ -1205,7 +1251,6 @@ window.__ModuleLoader__.load({
 				const mirror = mirrors.find(m => m.target === target);
 				const writesAllowed = config.panelOps === true && channelOpen;
 				const targetOn = Boolean(mirror && mirror.on);
-				const readDisabled = !channelOpen || busy;
 				return [
 					running ? h('div', { className: 'luwi-sync-card', key: 'running' },
 						h('div', { className: 'luwi-sync-head-row' },
@@ -1229,24 +1274,30 @@ window.__ModuleLoader__.load({
 								'data-danger': '1',
 								disabled: !targetOn || busy || running || pending !== null || !writesAllowed,
 								onClick: () => setPending({ op: 'push', target }),
-							}, t('推送')),
-							h('button', {
-								type: 'button',
-								className: 'luwi-sync-btn',
-								disabled: readDisabled || !targetOn,
-								onClick: () => void call('status', target),
-							}, t('刷新状态'))),
+							}, t('推送'))),
 						!targetOn ? h('div', { className: 'luwi-sync-dim' }, t('这条镜像没开')) : null),
 				];
 			}
 
-			/** 运行结果 (最近一次动作的原始应答)。 */
+			/**
+			 * 运行结果 (最近一次动作的应答)。
+			 *
+			 * 2026-10-24 收成两行: 原来整块是原始 JSON, 一屏花括号, 而人想看的只有
+			 * "成没成、做了什么"。完整 JSON 折进「全部字段」
+			 * @returns {object|null} React 元素。
+			 */
 			function renderAnswer() {
-				return answer === null ? null : h('div', { className: 'luwi-sync-card', key: 'answer' },
+				if (answer === null) return null;
+				const ok = answer.ok === true;
+				const action = typeof answer.action === 'string' ? answer.action : '';
+				const headline = ok ? `${t('成功')}${action === '' ? '' : ` · ${action}`}` : (answer.error ?? t('失败'));
+				return h('div', { className: 'luwi-sync-card', key: 'answer' },
 					h('div', { className: 'luwi-sync-card-title' },
 						h('span', { className: 'luwi-sync-strong' }, t('运行结果')),
-						h('span', { className: answer.ok ? 'luwi-sync-good' : 'luwi-sync-bad' }, answer.ok ? 'ok' : (answer.error ?? 'failed'))),
-					h('pre', { className: 'luwi-sync-pre' }, JSON.stringify(answer, null, 2)));
+						h('span', { className: ok ? 'luwi-sync-good' : 'luwi-sync-bad' }, headline)),
+					h('details', { className: 'luwi-sync-adv' },
+						h('summary', { className: 'luwi-sync-dim' }, t('全部字段')),
+						h('pre', { className: 'luwi-sync-pre' }, JSON.stringify(answer, null, 2))));
 			}
 
 		}

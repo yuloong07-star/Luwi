@@ -169,11 +169,14 @@ test('heartbeat can be started and stopped; ticks call the runner once', async (
   let ticks = 0
   const stop = runner.startHeartbeat({ everyMs: 10, run: () => { ticks += 1; return { ok: true } } })
   assert.equal(typeof tick, 'function')
+  assert.equal((await runner.status()).heartbeatOn, true, 'the readings say the heartbeat is up')
+  assert.equal((await runner.status()).heartbeatMs, 60000)
   tick()
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(ticks, 1)
   stop()
   assert.equal(cleared, 7)
+  assert.equal((await runner.status()).heartbeatOn, false)
 })
 
 test('a disabled p2p section never dials', async () => {

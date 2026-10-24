@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { P2pService } from '../lib/p2p-service.mjs'
 
 function makeRunner(overrides = {}) {
-  const calls = { outbound: 0, inbound: 0, heartbeat: 0, stopped: 0, stopInbound: 0 }
+  const calls = { outbound: 0, inbound: 0, heartbeat: 0, stopped: 0, stopInbound: 0, stopHeartbeat: 0 }
   const runner = {
     deviceId: '',
     peerProvider: null,
@@ -24,6 +24,9 @@ function makeRunner(overrides = {}) {
     startHeartbeat() {
       calls.heartbeat += 1
     },
+    stopHeartbeat() {
+      calls.stopHeartbeat += 1
+    },
     async stop() {
       calls.stopped += 1
     },
@@ -32,7 +35,7 @@ function makeRunner(overrides = {}) {
   return runner
 }
 
-function makeService({ cards = [], runner = makeRunner(), config = { enabled: true, power: 'resident' }, deviceId = 'me', readCards = undefined, trustStore = undefined } = {}) {
+function makeService({ cards = [], runner = makeRunner(), config = { enabled: true, power: 'resident' }, deviceId = 'me', readCards = undefined, trustStore = undefined, periodicPull = undefined } = {}) {
   const writes = []
   const store = trustStore ?? {
     read: async () => ({ v: 1, peers: {} }),
@@ -46,6 +49,7 @@ function makeService({ cards = [], runner = makeRunner(), config = { enabled: tr
     sidecar: {},
     runner,
     trustStore: store,
+    ...(periodicPull === undefined ? {} : { periodicPull }),
   })
   service._writes = writes
   service._store = store
@@ -232,4 +236,58 @@ test('a plan gate that throws fails closed; a missing gate stays permissive', as
   const permissive = makeService({ cards: [PC], runner: makeRunner() })
   assert.equal((await permissive.beforeSync()).ok, true)
   assert.equal((await permissive.status()).plan, null)
+})
+
+// ── 心跳跟着「设置页 -> 周期拉取」这个旋钮 (2026-10-23) ─────────────────────
+
+test('without a periodic pull the resident heartbeat runs; with one it never starts', () => {
+  const alone = makeRunner()
+  const solo = makeService({ runner: alone, periodicPull: () => false })
+  solo.start()
+  assert.equal(alone.calls.inbound, 1)
+  assert.equal(alone.calls.heartbeat, 1)
+
+  const paired = makeRunner()
+  const withPull = makeService({ runner: paired, periodicPull: () => true })
+  withPull.start()
+  assert.equal(paired.calls.inbound, 1, 'the inbound loop still runs for every enabled profile')
+  assert.equal(paired.calls.heartbeat, 0, 'the pull cycle already tries p2p first, so no heartbeat')
+  assert.equal(withPull.syncHeartbeat(), false)
+})
+
+test('turning the periodic pull off starts the heartbeat; turning it on stops it (and it is idempotent)', () => {
+  let minutes = 0
+  const runner = makeRunner()
+  const service = makeService({ runner, periodicPull: () => minutes > 0 })
+  service.start()
+  assert.equal(runner.calls.heartbeat, 1)
+
+  minutes = 5
+  assert.equal(service.syncHeartbeat(), false)
+  assert.equal(runner.calls.stopHeartbeat, 1)
+
+  minutes = 0
+  assert.equal(service.syncHeartbeat(), true)
+  assert.equal(runner.calls.heartbeat, 2)
+
+  service.syncHeartbeat()
+  assert.equal(runner.calls.heartbeat, 2, 'the same state must not re-arm the timer')
+  assert.equal(runner.calls.stopHeartbeat, 1)
+})
+
+test('the heartbeat still belongs to the resident power mode only', () => {
+  const runner = makeRunner()
+  const service = makeService({ runner, config: { enabled: true, power: 'ondemand' }, periodicPull: () => false })
+  service.start()
+  assert.equal(runner.calls.heartbeat, 0)
+})
+
+test('syncHeartbeat before start() is a no-op (the sidecar may still be coming up)', () => {
+  const runner = makeRunner()
+  const service = makeService({ runner, periodicPull: () => false })
+  assert.equal(service.syncHeartbeat(), false)
+  assert.equal(runner.calls.heartbeat, 0)
+
+  service.start()
+  assert.equal(runner.calls.heartbeat, 1, 'start() picks the current periodic-pull state up')
 })
