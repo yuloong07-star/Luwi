@@ -4066,6 +4066,9 @@ const TOOLS = [
                   + ` - ${voiceDelivery.autoShot.last.why}`
                 : ''}`,
             `${voiceReading.count} reply(ies) read aloud`
+              + `${voiceReading.pad
+                ? `, last one padded with "${voiceReading.pad.clip}" (${voiceReading.pad.characters} chars)`
+                : ''}`
               + `${voiceReading.skipped ? `, ${voiceReading.skipped} skipped because read-aloud is off` : ''}`
               + `${voiceReading.reply
                 ? `, last one ${voiceReading.reply.channel ? 'went into' : 'was kept for'} the floating channel`
@@ -5871,6 +5874,30 @@ function readAloudText(markdown) {
   return text.replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').replace(/^ | $/gm, '').trim()
 }
 
+/**
+ * **开口前先垫一句** (2.7.9 批次 9 T13 的用法): 该放哪一段预录填音, 不垫就回 null
+ *
+ * 为什么要垫: 这一轮结束到真的出声之间隔着一次合成 (Edge 那一趟长回答要好几秒), 那几秒里球上已经
+ * 写着「正在说」而人一个音都听不到 —— 预录的填音几十毫秒就响, 正好把那段空白填上 (见应用的 `LwClips`)
+ *
+ * **只按字数分档**: 合成要多久, 宿主这一侧只能从长度估. 一句话就完了的那种合成很快, 垫一声反而平白
+ * 多出一段声音; 长回答才值得垫. 两档挑 `ok` / `thinking`, 因为它们读起来就是"好, …"与"让我想想, …",
+ * 接在回答前面不像拟声词 (`huh` 带疑问语气, 留给"被叫到但还没听清"那种场合, `wait` 同理)
+ *
+ * 判据在 `tools/check-read-aloud-pad.mjs`: 它把这一整段源码抽出去跑真值表, 顺带确认
+ * [startReadAloud] 真的在调它 —— 只留函数不接线, 就是"能垫但没人垫"那个形态
+ */
+const PAD_MIN_CHARS = 20
+const PAD_LONG_CHARS = 80
+
+function padClipFor(text) {
+  // 空白不算字: "好了" 与 "  好了  " 是同一句
+  const chars = Array.from(String(text ?? '').replace(/\s+/g, '')).length
+  if (chars < PAD_MIN_CHARS) return null
+  return chars >= PAD_LONG_CHARS ? 'thinking' : 'ok'
+}
+
+
 /* ── 语音投递 ───────────────────────────────────────────────────────────────
  * 应用那一侧把认出来的话追加进 `$DSH_HOME/voice/inbox.jsonl` (一行一句, 带自增 `seq`), 这一侧
  * 读出来送进会话,
@@ -6516,6 +6543,9 @@ async function voiceReadingsWrite(ctx) {
       why: voiceDelivery.why,
     },
     ledger,
+    // 朗读那一笔账 (念了几次 / 上一次垫的是哪一声): 设备验收要能在没有模型可问的时候 `adb cat` 到
+    // 它 —— 与 `lw_voice op=inbox` 那份回执同一个来源
+    reading: { ...voiceReading },
     workspace: readings.workspace,
     workspaceId: readings.workspaceId ?? '',
     member: readings.member ?? null,
@@ -7253,7 +7283,7 @@ async function voiceDeliver(ctx, line) {
 /* ── 回答念出来 ───────────────────────────────────────────────────────────── */
 
 /** 最近一次朗读的去向, 给 lw_voice 看 */
-const voiceReading = { count: 0, skipped: 0, last: null, error: null }
+const voiceReading = { count: 0, skipped: 0, last: null, pad: null, error: null }
 
 /**
  * 一轮说完才念 (批次 2.3)
@@ -7319,6 +7349,17 @@ function startReadAloud(ctx) {
         voiceReading.count += 1
         voiceReading.last = { at: Date.now(), characters: spoken.length, text: spoken }
         voiceReading.error = null
+        // **开口前先垫一句** (T13, 见 [padClipFor]): 先交一段预录填音, 再交合成 —— 两个都按顺序
+        // 发出去、都不等结果。那一声几十毫秒就响, 而 Edge 那一趟合成长回答要好几秒, 中间那段
+        // 没有声音的空白就是它填的; 短句不垫 (合成本来就快, 多一声反而多余)
+        const pad = padClipFor(spoken)
+        if (pad) {
+          voiceReading.pad = { at: Date.now(), clip: pad, characters: spoken.length }
+          void call('speak', { op: 'clip', clip: pad }).catch((error) => {
+            // 垫音失败不该挡着念: 记一行就继续
+            ctx.logger?.warn?.(`the pad clip did not play: ${error?.message ?? error}`)
+          })
+        }
         // 不 await: 这是 emit 钩子, 念多久都不该把会话的事挡在后面
         return call('speak', { op: 'speak', text: spoken })
       })

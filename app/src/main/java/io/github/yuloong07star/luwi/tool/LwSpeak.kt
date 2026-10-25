@@ -106,6 +106,9 @@ internal object LwSpeak {
         val name = request.stringOrNull("clip") ?: request.stringOrNull("name") ?: ""
         // 音量是 0..1 的线性增益 (与 TTS 那条 100 = 原电平的百分数不是同一个刻度): 填音不调它时就是 1
         val volume = (request.numberOrNull("volume")?.toFloat() ?: 1f).coerceIn(0f, 1f)
+        // 先问一句"垫音跟不跟得上当前的音色与语速" (见 LwClips.follow): 跟不上就在后台重合成,
+        // 这一声仍然放手里现成的那份 —— 垫音不能因为"正在准备"而不出声
+        runCatching { LwClips.follow(context) }
         return LwClips.play(context, name, volume)
     }
 
@@ -210,8 +213,12 @@ internal object LwSpeak {
             // 预录填音 (T13): 带的是哪几段、现在响没响。**顺手把 SoundPool 预载好** —— 插件那侧开工前
             // 会先叫一次 status 把引擎拉起来, 填音也走同一条预热, 于是第一声也是几十毫秒
             runCatching { LwClips.warm(context) }
+            // 改过音色 / 语速之后, 第一趟问 status 就把新那份合成出来 (不挡这一趟的返回)
+            runCatching { LwClips.follow(context) }
             put("clips", LwClips.names(context).joinToString(", "))
             put("clipPlaying", LwClips.playingNow())
+            put("clipsWanted", LwClips.following())
+            put("clipsMade", LwClips.followed(context))
         }
     }
 

@@ -9,8 +9,10 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import io.github.yuloong07star.luwi.voice.VoiceState
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -38,9 +40,23 @@ internal object LwClips {
 
     private const val TAG = "LwClips"
 
-    /** 素材目录 (相对 assets) 与后缀 */
+    /** 跟随指纹存哪儿 (与 SpeakSettings / VoiceSettings 同一个偏好文件, 全 app 一个) */
+    private const val STORE = "luwi"
+
+    /** 上一次合成用的是哪套 音色 + 语速 */
+    private const val FOLLOW_KEY = "clips-follow-key"
+
+    /** 素材目录: `assets/` 里那份是随包的底, `filesDir/clips` 里那份是"跟着设置重新合成"的那份 */
     private const val DIR = "clips"
+
+    /** 随包那份的后缀 (施工单里录的是 ogg) */
     private const val EXT = ".ogg"
+
+    /** 跟随合成出来的那份是 Edge 直接回的 mp3 */
+    private const val GEN_EXT = ".mp3"
+
+    /** 认得的后缀, 三样 SoundPool 都吃 */
+    private val KNOWN_EXT = listOf(".ogg", ".mp3", ".wav")
 
     /** 同时最多几条: 填音是一声接一声, 4 条足够, 再多就互相盖 */
     private const val MAX_STREAMS = 4
@@ -71,15 +87,26 @@ internal object LwClips {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    /** 这份 APK 里带了哪几段 (按名字排好; 目录不在时是空表) */
-    fun names(context: Context): List<String> = runCatching {
-        context.assets.list(DIR)
-            ?.filter { it.endsWith(EXT, ignoreCase = true) }
-            ?.map { it.dropLast(EXT.length) }
-            ?.filter { it.isNotBlank() }
-            ?.sorted()
-            .orEmpty()
-    }.getOrDefault(emptyList())
+    /** 现在能放哪几段: `filesDir/clips` 里那份优先, assets 里那份兜底 (按名字排好) */
+    fun names(context: Context): List<String> {
+        val generated = runCatching {
+            generated(context).listFiles()?.mapNotNull { clipNameOf(it.name) }.orEmpty()
+        }.getOrDefault(emptyList())
+        val shipped = runCatching {
+            context.assets.list(DIR)?.mapNotNull { clipNameOf(it) }.orEmpty()
+        }.getOrDefault(emptyList())
+        return (generated + shipped).filter { it.isNotBlank() }.distinct().sorted()
+    }
+
+    /** 一个文件名算不算素材, 算的话回不带后缀的名字 */
+    private fun clipNameOf(at: String): String? {
+        val name = at.substringAfterLast('/')
+        if (KNOWN_EXT.none { name.endsWith(it, ignoreCase = true) }) return null
+        return name.substringBeforeLast('.').takeIf { it.isNotBlank() }
+    }
+
+    /** 跟随合成出来的那几段放哪 */
+    private fun generated(context: Context): File = File(context.filesDir, DIR)
 
     /**
      * 把四段先读进来 (几十毫秒, 一次)
@@ -91,6 +118,108 @@ internal object LwClips {
         runCatching { pool(context) }
             .onFailure { Log.w(TAG, "the clips would not preload: ${it.message ?: it}") }
     }
+
+    /**
+     * **跟着设置走**: 垫音是预录的, 而主人可以换音色、改语速 —— 那四段随包的 ogg 一换就不是同一个
+     * 人的声音了 (2026-10-24 主人: "这音色是和当前音色一致的吗" → "跟随")
+     *
+     * 做法: 只在 Edge 那条引擎上做, 按当前 音色 + 语速 合成四段到 `filesDir/clips/`, [names] 与
+     * [loadOne] 会优先认那份, assets 那四份退成兜底. 合成一次之后**播放仍然是从内存里放**
+     * (SoundPool 预载), 响应速度一点没变 —— 变的只是"准备"这一步挪到了改设置之后
+     *
+     * 什么时候做: 每次 [play] 与 `op=status` 都问一句, 靠指纹 [fingerprint] 判断要不要重来;
+     * 指纹存偏好 (与其它设置同一个 `luwi` 文件). 失败**静默退回**上一次那份 (或随包那份), 只记一行
+     */
+    fun follow(context: Context) {
+        if (!SpeakSettings.usesEdge()) return
+        val key = fingerprint(SpeakSettings.edgeVoice, SpeakSettings.rate)
+        if (key == storedKey(context)) return
+        if (!synthesizing.compareAndSet(false, true)) return
+        Thread({
+            try {
+                synthesizeAll(context, SpeakSettings.edgeVoice, SpeakSettings.rate, key)
+            } catch (error: Throwable) {
+                Log.w(TAG, "the clips would not follow the settings: ${error.message ?: error}")
+            } finally {
+                synthesizing.set(false)
+            }
+        }, "lw-clips-follow").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * 跟随的那个指纹: 音色或语速一变就不一样
+     *
+     * 算法在 [ClipsKey] (只吃参数的对象), 于是 `ClipsFollowTest` 不必把这一份 object 初始化起来
+     */
+    internal fun fingerprint(voice: String, rate: Float): String = ClipsKey.of(voice, rate)
+
+    /** 四段各自的句子: 与随包那四份同一个说法 (改它等于换台词) */
+    private val TEXTS = linkedMapOf(
+        "ok" to "好",
+        "thinking" to "让我想想",
+        "huh" to "嗯？",
+        "wait" to "等一下",
+    )
+
+    /** 合成本身在后台线程跑, 同一刻只跑一趟 */
+    private val synthesizing = AtomicBoolean(false)
+
+    /**
+     * 四段全成功才换: 半新半旧的垫音 (一句新音色、一句旧音色) 比"还没跟上"更怪
+     *
+     * 先写 `.tmp` 再改名, 于是读的一侧永远看不到半份文件
+     */
+    private fun synthesizeAll(context: Context, voice: String, rate: Float, key: String) {
+        val directory = generated(context).apply { mkdirs() }
+        val made = mutableMapOf<String, File>()
+        TEXTS.forEach { (name, text) ->
+            val bytes = runCatching { LwEdgeTts.bytesOf(text, rate, voice) }.getOrNull()
+            if (bytes == null || bytes.isEmpty()) {
+                Log.w(TAG, "the clip \"$name\" came back empty")
+                return@forEach
+            }
+            val file = File(directory, "$name$GEN_EXT.tmp")
+            runCatching {
+                file.writeBytes(bytes)
+                made[name] = file
+            }
+        }
+        if (made.size < TEXTS.size) {
+            made.values.forEach { runCatching { it.delete() } }
+            Log.w(TAG, "only ${made.size} of ${TEXTS.size} clips were synthesised; keeping the old ones")
+            return
+        }
+        made.forEach { (name, file) ->
+            runCatching { file.renameTo(File(directory, "$name$GEN_EXT")) }
+        }
+        context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+            .edit().putString(FOLLOW_KEY, key).apply()
+        invalidate()
+        Log.i(TAG, "the clips now follow the settings: $key")
+    }
+
+    /** 换掉内存里那一份预载 (生成的文件换了才用) */
+    private fun invalidate() {
+        synchronized(lock) {
+            val old = unwritten
+            unwritten = null
+            ids.clear()
+            durations.clear()
+            // 正在响的时候不 release: 那一声要放完, 旧 pool 交给 GC
+            if (streams.isEmpty()) runCatching { old?.release() }
+        }
+    }
+
+    private fun storedKey(context: Context): String = context
+        .getSharedPreferences(STORE, Context.MODE_PRIVATE)
+        .getString(FOLLOW_KEY, "")
+        .orEmpty()
+
+    /** 读数: 现在这套设置该合成成什么样 ("音色|语速") */
+    internal fun following(): String = fingerprint(SpeakSettings.edgeVoice, SpeakSettings.rate)
+
+    /** 读数: 生成的那份是按哪套设置合成的 (空 = 还没合成过, 放的是随包那四段) */
+    internal fun followed(context: Context): String = storedKey(context)
 
     /** 现在有没有一段填音在响 (读数用; 不算进 `speakingNow`) */
     fun playingNow(): Boolean = synchronized(lock) { streams.isNotEmpty() }
@@ -208,8 +337,23 @@ internal object LwClips {
         }
     }
 
-    /** 读一段素材: 时长先量好 (SoundPool 不提供时长), 再交给 SoundPool 预载 */
+    /** 读一段素材: 跟随合成的那份先、随包的后; 时长先量好 (SoundPool 不提供), 再交给 SoundPool 预载 */
     private fun loadOne(context: Context, sound: SoundPool, name: String, waiting: CountDownLatch) {
+        val generated = generated(context).listFiles()?.firstOrNull { clipNameOf(it.name) == name }
+        if (generated != null) {
+            val length = runCatching { durationOf(generated) }.getOrDefault(0L)
+            val id = runCatching { sound.load(generated.absolutePath, 1) }.getOrDefault(0)
+            if (id <= 0) {
+                Log.w(TAG, "SoundPool would not take ${generated.absolutePath}")
+                waiting.countDown()
+                return
+            }
+            synchronized(lock) {
+                ids[name] = id
+                if (length > 0) durations[name] = length
+            }
+            return
+        }
         val path = "$DIR/$name$EXT"
         val file = runCatching { context.assets.openFd(path) }.getOrNull()
         if (file == null) {
@@ -236,6 +380,17 @@ internal object LwClips {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(file.fileDescriptor, file.startOffset, file.length)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    /** 跟随合成出来那一份的时长 (ms) */
+    private fun durationOf(file: File): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
         } finally {
             runCatching { retriever.release() }

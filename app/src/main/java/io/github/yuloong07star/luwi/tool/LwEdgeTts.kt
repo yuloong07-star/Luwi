@@ -66,6 +66,17 @@ internal object LwEdgeTts {
         }
     }
 
+    /**
+     * **只合成、不播**: 给填音跟随用 (见 `LwClips.follow`)
+     *
+     * 与 [speak] 走同一趟握手、同一个音色与语速, 只是收下的字节交回调用方 —— 那一侧把它落成
+     * `filesDir/clips` 下的 mp3, 于是"垫一句"与"念回答"在听上就是同一个人
+     *
+     * 回来 null = 这次被叫停 (调用方按"没合成出来"处理, 保留旧的那份)
+     */
+    internal fun bytesOf(text: String, speed: Float, voice: String): ByteArray? =
+        synthesize(voice, text, speed)
+
     /** 掐断: 连着的与放着的都要停; 都没在动时回 null */
     fun stop(): String? {
         val held = socket

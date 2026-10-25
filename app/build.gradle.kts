@@ -223,8 +223,11 @@ android {
         // (球上那圈标记 0.378 → 0.65)。这一批在 git 里的开发者标签是 v2.7.0…v2.7.3, 收口时定名 2.7.4
         // 2.7.7: 浮标外观能放人物立绘了 —— `theme/ball.json` 收 `fit` (cover/contain), contain 那一档
         // 不裁圆; 球尺寸 48 → 72 dp; 涟漪窗跟着 96 → 132 dp; peeked/失败/完成 三档都能配素材
-        versionCode = 16
-        versionName = "2.7.8"
+        // 2.7.9: 自动更新提示 / 删捐赠页 (签到那一页不进包, 只留 ⋮ 一行) / docx 与 pptx 进右栏预览 /
+        // 探索预算两条滑块与四项读数 / 无障碍与 OCR 并进特权通道 / 手机锁竖屏 / 设置页 ⋮ 第一条反馈 /
+        // 语音预录填音与只读状态出口 / 同步插件 0.3.5 (扫码配对、P2P 卡、签到) / dsh 升到 0.2.1-rc.3
+        versionCode = 17
+        versionName = "2.7.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
