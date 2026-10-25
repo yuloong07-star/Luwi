@@ -5,7 +5,7 @@
 // - 7 天宽限的两个边界 (差一秒还在宽限, 过一秒就到期)
 // - 时钟回拨防御 (issuedAt 在未来 10 分钟以上 → invalid)
 // - 篡改 payload / 换公钥 都验不过
-// - 配对码与 P2P 两道判据各自的边界 (过期仍可生成配对码)
+// - P2P 收费闸的边界 (active / grace 放行, 其余 P2P_PLAN_REQUIRED); 配对码 2026-10-25 起不认登录
 // - 落地文件读写 (读不到回 null)
 // @module luwi-dsh-sync/test/luwi-license.test
 
@@ -25,7 +25,6 @@ import {
   decodeEntitlement,
   describeStored,
   licensePathOf,
-  loginRequiredForPairing,
   loginUrlOf,
   newLoginState,
   planAllowsP2p,
@@ -76,7 +75,6 @@ test('unset: no file at all', () => {
   const status = statusOf({ stored: null, now: NOW })
   assert.equal(status.state, 'unset')
   assert.equal(status.hasToken, false)
-  assert.equal(loginRequiredForPairing(status), true)
 })
 
 test('active: inside the paid window', () => {
@@ -87,7 +85,6 @@ test('active: inside the paid window', () => {
   assert.equal(status.accountId, 7)
   assert.equal(status.graceUntil, NOW + 3 * 86_400_000 + GRACE_MS)
   assert.equal(planAllowsP2p(status), true)
-  assert.equal(loginRequiredForPairing(status), false)
 })
 
 test('grace: expired but inside the 7-day cushion', () => {
@@ -95,7 +92,6 @@ test('grace: expired but inside the 7-day cushion', () => {
   const status = statusOf({ stored: storedOf(text), now: NOW, publicKey: publicKeyB64 })
   assert.equal(status.state, 'grace')
   assert.equal(planAllowsP2p(status), true)
-  assert.equal(loginRequiredForPairing(status), false)
 })
 
 test('grace boundary: one second before is grace, one second after is expired', () => {
@@ -106,8 +102,6 @@ test('grace boundary: one second before is grace, one second after is expired', 
   assert.equal(last.state, 'grace')
   assert.equal(gone.state, 'expired')
   assert.equal(planAllowsP2p(gone), false)
-  // 过期的人仍然能生成配对码去续费 —— 这是有意留的入口
-  assert.equal(loginRequiredForPairing(gone), false)
 })
 
 test('expired without a subscription (expiresAt === issuedAt)', () => {
@@ -124,7 +118,6 @@ test('invalid: a single flipped character does not verify', () => {
   const broken = head + text.slice(1)
   const status = statusOf({ stored: storedOf(broken), now: NOW, publicKey: publicKeyB64 })
   assert.equal(status.state, 'invalid')
-  assert.equal(loginRequiredForPairing(status), true)
   assert.equal(planAllowsP2p(status), false)
 })
 

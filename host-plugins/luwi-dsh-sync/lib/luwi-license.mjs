@@ -29,7 +29,7 @@ export const GRACE_MS = 7 * 24 * 60 * 60 * 1000
 /** 时钟容差: issuedAt 比本机现在晚 10 分钟以上就判 invalid (防改系统时间白嫖) */
 export const CLOCK_SKEW_MS = 10 * 60 * 1000
 
-/** 权益刷新间隔 (续费 / 签到之后最多这么多小时自动看到) */
+/** 权益刷新间隔 (续费之后最多这么多小时自动看到) */
 export const REFRESH_MS = 6 * 60 * 60 * 1000
 
 /**
@@ -221,15 +221,10 @@ export function planAllowsP2p(status) {
 }
 
 /**
- * 生成配对码要不要先登录: unset 与 invalid 都要 (expired 不要 —— 过期的人仍要能重新配对去续费)
- * @param {object} status
- * @returns {boolean}
+ * 权益文件路径
+ * @param {string} dshHome
+ * @returns {string}
  */
-export function loginRequiredForPairing(status) {
-  return status === null || status.state === 'unset' || status.state === 'invalid'
-}
-
-/** 权益文件路径 */
 export function licensePathOf(dshHome) {
   return join(String(dshHome || ''), 'lw', LICENSE_FILE_NAME)
 }

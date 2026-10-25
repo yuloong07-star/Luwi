@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-25
+
+### Removed
+
+- **Check-in from the panel (2026-10-25).** The site retired check-in entirely (service days are now
+  bought on the tavern page only), so the `签到` button, the `checkin` panel op and the host-side
+  `licenseCheckin()` are gone. `刷新权益` / `退出登录` are untouched.
+
+### Changed
+
+- **Generating a pairing code no longer needs a sign-in (2026-10-25).** `buildPairing()` dropped the
+  `loginRequiredForPairing()` gate and `lib/luwi-license.mjs` dropped that export; the panel button is
+  now enabled as soon as a repository is saved (and the repository has a pairing id). The account row
+  only feeds the P2P plan gate now: `active` / 7-day `grace` pass, everything else answers
+  `P2P_PLAN_REQUIRED`. Sign-in copy on the panel says so.
+
 ## [0.3.5] - 2026-10-24
 
 ### Added

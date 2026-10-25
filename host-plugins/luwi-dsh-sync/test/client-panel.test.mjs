@@ -419,7 +419,7 @@ function buttonsOf(element, out = []) {
   if (Array.isArray(element)) { for (const child of element) buttonsOf(child, out); return out }
   if (typeof element === 'object') {
     if (typeof element.type === 'function') return buttonsOf(element.type(element.props), out)
-    if (element.type === 'button') out.push(element.props ?? {})
+    if (element.type === 'button') out.push({ ...(element.props ?? {}), children: element.children })
     if (Array.isArray(element.children)) for (const child of element.children) buttonsOf(child, out)
   }
   return out
@@ -489,23 +489,29 @@ test('面板渲染: 未登录时生成配对码是灰的, 登录后显示账号�
   }
 
   try {
+    /** 那一颗「生成配对码」按钮的 title (找不到时回 'MISSING', 免得静默通过) */
+    const pairTitleOf = (view) => {
+      const labelOf = (candidate) => Array.isArray(candidate.children) ? candidate.children[0] : candidate.children
+      const button = view.buttons.find(candidate => labelOf(candidate) === '生成配对码' || labelOf(candidate) === '生成中')
+      return button ? button.title : 'MISSING'
+    }
+
     const anonymous = await render(null)
     assert.match(anonymous.text, /未登录/)
     assert.match(anonymous.text, /登录 Luwi 账号/)
-    const blocked = anonymous.buttons.find(button => button.title === '生成配对码前要先登录')
-    assert.ok(blocked, '未登录时那颗按钮要写明原因')
-    assert.equal(blocked.disabled, true, '未登录时不能生成配对码')
+    // 2026-10-25 主人: 取消登录要求 —— 生成配对码与账号无关, 未登录也不许再挂门槛文案
+    assert.equal(pairTitleOf(anonymous), undefined)
 
     const signedIn = await render({ state: 'active', login: 'octo', expiresAt: Date.now() + 86_400_000, hasToken: true })
     assert.match(signedIn.text, /@octo/)
     assert.match(signedIn.text, /退出登录/)
     assert.doesNotMatch(signedIn.text, /登录 Luwi 账号/)
-    assert.equal(signedIn.buttons.some(button => button.title === '生成配对码前要先登录'), false)
+    assert.equal(pairTitleOf(signedIn), undefined)
 
     // 过期的人仍然能生成配对码 (要去续费), 但面板要说清
     const expired = await render({ state: 'expired', login: 'octo', expiresAt: 1, graceUntil: 2, hasToken: true })
     assert.match(expired.text, /已到期, git 同步照旧可用/)
-    assert.equal(expired.buttons.some(button => button.title === '生成配对码前要先登录'), false)
+    assert.equal(pairTitleOf(expired), undefined)
   } finally {
     restoreFetch()
     restore()

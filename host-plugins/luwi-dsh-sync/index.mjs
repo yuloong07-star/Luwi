@@ -138,7 +138,6 @@ import {
   accountRequest,
   clearLicenseFile,
   licensePathOf,
-  loginRequiredForPairing,
   loginUrlOf,
   newLoginState,
   planAllowsP2p,
@@ -1332,7 +1331,7 @@ function applyInner(ctx, config = {}) {
   }
 
   /**
-   * 刷新权益: 续费 / 签到之后由面板点一下, 拿一份新签的凭证 (token 不变)
+   * 刷新权益: 续费之后由面板点一下, 拿一份新签的凭证 (token 不变)
    * @returns {Promise<object>} {ok, license?, error?}
    */
   async function licenseRefresh() {
@@ -1359,36 +1358,6 @@ function applyInner(ctx, config = {}) {
     return { ok: true, license: await readLicenseStatus(true) }
   }
 
-  /**
-   * 签到: 用本机这份 device_token 打官网 POST /api/checkin (2026-10-24)
-   *
-   * 官网那一条认两种门: 浏览器 cookie 与 Authorization: Bearer —— 面板没有 cookie,
-   * 走后者 (与刷新权益同一个 token, 不新增任何凭据)。签到之后顺手刷一次凭证,
-   * 面板上那一行「到期」当场变; 刷新失败不算签到失败 (签到本身已经记在服务端了)
-   * @returns {Promise<object>} {ok, already?, capped?, days?, expiresAt?, error?}
-   */
-  async function licenseCheckin() {
-    const stored = await readLicenseFile(licenseFile)
-    const token = stored && typeof stored.token === 'string' ? stored.token : ''
-    if (token === '') return { ok: false, error: 'not signed in on this machine' }
-    const base = typeof stored.base === 'string' && stored.base !== '' ? stored.base : accountBaseOf()
-    const answer = await accountRequest(base, '/api/checkin', { method: 'POST', token })
-    if (answer.status !== 200 || !answer.body || answer.body.ok !== true) {
-      const reason = answer.error ?? (answer.body && answer.body.error) ?? `HTTP ${answer.status}`
-      return { ok: false, error: `could not check in: ${reason}` }
-    }
-    const already = answer.body.already === true
-    const capped = answer.body.capped === true
-    const refreshed = await licenseRefresh()
-    return {
-      ok: true,
-      already,
-      capped,
-      days: already ? 0 : 1,
-      expiresAt: Number.isFinite(Number(answer.body.expiresAt)) ? Number(answer.body.expiresAt) : undefined,
-      ...(refreshed.ok === true ? {} : { refreshError: refreshed.error }),
-    }
-  }
   // Luwi 加 (2026-10-20): 扫码配对段 (插件只读)。配对 id 决定"这是不是一次新的同步开始":
   // 没有它 = 旧模式 (全量镜像); 有它 = 只同步窗口内/之后有写入的会话, 首次同步清旧
   const pairing = normalizePairing(merged.pairing)
@@ -4282,15 +4251,13 @@ function applyInner(ctx, config = {}) {
   /**
    * 手机配对码: 一份校验过的载荷 + 画好的 SVG (载荷里有仓库口令, 所以**不进快照**, 只在
    * 这一条应答里出现; 要文本得显式点"复制配对文本")。
+   *
+   * 2026-10-25: **不再要求先登录** —— 旧口径是"登录过才能出码" (过期放行), 主人当天改成
+   * "配对与登录无关": 手机上扫码只写仓库/分支/对端这几项, 谁都不需要账号。登录只剩一件事 ——
+   * 给 P2P 那条收费闸提供到期读数 (见 licensePlanGate), 它不在这条路上
    * @returns {Promise<{ok: boolean, payload?: string, svg?: string, summary?: object, error?: string}>} 结果。
    */
   async function buildPairing() {
-    // Luwi 加 (2026-10-23): 生成配对码的前提是"登录过" —— 过期不收这个闸
-    // (过期的人要能重新配对去续费; 收费的闸在 P2P 那一边, 见 licensePlanGate)
-    const licenseStatus = await readLicenseStatus()
-    if (loginRequiredForPairing(licenseStatus)) {
-      return { ok: false, error: 'sign in with a Luwi account first: the pairing card on this panel has the sign-in button' }
-    }
     const tree = await readSyncTree(syncConfigFile)
     const cleanRemote = typeof tree.remote === 'string' ? tree.remote.trim() : resolved.remote.trim()
     if (cleanRemote === '') {
@@ -4434,13 +4401,12 @@ function applyInner(ctx, config = {}) {
     // Luwi 加 (2026-10-20): 配对摘要与"生成配对码"那一条口
     readPairing,
     buildPairing,
-    // Luwi 加 (2026-10-23): 账号登录 (生成配对码的前提) 与权益刷新/退出
+    // Luwi 加 (2026-10-23): 账号登录 (只给 P2P 收费闸供到期) 与权益刷新/退出
     readLicense: () => readLicenseStatus(),
     loginStart: licenseLoginStart,
     loginPoll: licenseLoginPoll,
     logout: licenseLogout,
     refreshLicense: licenseRefresh,
-    checkin: licenseCheckin,
     // Luwi 加 (2026-10-15): 面板的写配置口 (宿主半见 lib/panel-routes.mjs 的 CONFIGURE)
     configure: configureFromPanel,
     // Luwi 加 (2026-10-20): 清理仓库会话 (面板那颗按钮 / 手机的同一块面板都走这一口)

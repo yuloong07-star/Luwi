@@ -176,7 +176,7 @@ window.__ModuleLoader__.load({
 			'手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。': 'Phone: Settings → Sync → scan the pairing code. The QR carries repository credentials, so do not share it.',
 			'请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。': 'Make sure root or Shizuku is running for Luwi, otherwise sync fails.',
 			'手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。': 'Phone: Settings → Sync → scan the pairing code. The QR carries repository credentials, so do not share it. Make sure root or Shizuku is running for Luwi, otherwise sync fails.',
-			// Luwi 加 (2026-10-23): 账号登录 (生成配对码的前提)
+			// Luwi 加 (2026-10-23): 账号登录 (只给 P2P 收费闸供到期; 2026-10-25 起与配对码无关)
 			'账号': 'Account',
 			'登录 Luwi 账号': 'Sign in to Luwi',
 			'已登录': 'Signed in',
@@ -185,8 +185,6 @@ window.__ModuleLoader__.load({
 			'等待浏览器登录…': 'Waiting for the browser…',
 			'登录完这个面板会自己变, 不用回来点': 'This panel updates on its own once the browser finishes; no need to come back and click',
 			'刷新权益': 'Refresh plan',
-			'签到': 'Check in',
-			'每天签到送 1 天': 'Check in once a day for 1 extra day',
 			// 2026-10-24: 面板收口的那几句 (运行方式徽标 / 折叠 / 运行结果摘要 / 已配置的小点)
 			'本机进程': 'Local process',
 			'手机桥接': 'Phone bridge',
@@ -205,11 +203,10 @@ window.__ModuleLoader__.load({
 			'已到期, git 同步照旧可用': 'Expired; git sync still works',
 			'宽限中, 记得续费': 'In the 7-day grace window; remember to renew',
 			'登录信息已失效, 请重新登录': 'The stored sign-in is no longer valid; sign in again',
-			'生成配对码前要先登录': 'Sign in before you can generate a pairing code',
 			'在浏览器里完成 GitHub 登录, 然后回来': 'Finish the GitHub sign-in in the browser, then come back',
 			'登录没有完成': 'Sign-in did not finish',
-			'续费或签到之后点一下刷新': 'After renewing or checking in, press refresh',
-			'账号只用来生成配对码与判定异地同步是否到期; git 同步不需要登录': 'The account only gates the pairing code and the P2P plan; git sync needs no sign-in',
+			'续费之后点一下刷新': 'After renewing, press refresh',
+			'登录只为判定异地同步 (P2P) 是否到期; 生成配对码与 git 同步都不需要登录': 'Sign-in only gates the P2P plan; the pairing code and git sync need no sign-in',
 		};
 
 		/** 当前语言 (apply 时按 locale 服务定一次, 变了就重设)。 */
@@ -1151,7 +1148,8 @@ window.__ModuleLoader__.load({
 				const writesAllowed = config.panelOps === true && channelOpen;
 				const hasRemote = config.remoteState === 'set';
 				const pairSummary = snap.pairing ?? {};
-				// Luwi 加 (2026-10-23): 账号那一行 —— 生成配对码的前提是登录过 (过期仍放行, 好让人去续费)
+				// Luwi 加 (2026-10-23): 账号那一行 —— 2026-10-25 起只用来判定 P2P 是否到期,
+				// 配对码不再看这里 (主人当天: 取消登录要求)
 				const license = snap.license ?? { state: 'unset' };
 				const signedIn = license.state === 'active' || license.state === 'grace' || license.state === 'expired';
 				const expiry = Number.isFinite(license.expiresAt) ? new Date(license.expiresAt).toLocaleDateString() : '';
@@ -1177,20 +1175,12 @@ window.__ModuleLoader__.load({
 						? h('div', { className: 'luwi-sync-dim' }, `${t('等待浏览器登录…')} · ${t('在浏览器里完成 GitHub 登录, 然后回来')}`)
 						: (signedIn
 							? h('div', { className: 'luwi-sync-actions' },
-								// Luwi 加 (2026-10-24): 签到 —— 走本机 device_token 打 /api/checkin,
-								// 成功之后宿主顺手刷新权益, 到期那一行当场变
+								// 2026-10-25 签到下线: 这一格只剩刷新权益与退出登录
 								h('button', {
 									type: 'button',
 									className: 'luwi-sync-btn',
 									disabled: !writesAllowed || busy,
-									title: t('每天签到送 1 天'),
-									onClick: () => void call('checkin', 'sessions'),
-								}, t('签到')),
-								h('button', {
-									type: 'button',
-									className: 'luwi-sync-btn',
-									disabled: !writesAllowed || busy,
-									title: t('续费或签到之后点一下刷新'),
+									title: t('续费之后点一下刷新'),
 									onClick: () => void call('license-refresh', 'sessions'),
 								}, t('刷新权益')),
 								h('button', {
@@ -1205,7 +1195,7 @@ window.__ModuleLoader__.load({
 									className: 'luwi-sync-btn',
 									'data-primary': '1',
 									disabled: !writesAllowed || loginPending,
-									title: t('账号只用来生成配对码与判定异地同步是否到期; git 同步不需要登录'),
+									title: t('登录只为判定异地同步 (P2P) 是否到期; 生成配对码与 git 同步都不需要登录'),
 									onClick: () => void startLogin(),
 								}, t('登录 Luwi 账号')))),
 					h('div', { className: 'luwi-sync-dim' }, t('手机: 设置 → 同步 → 扫码配对。二维码里有仓库凭据, 别外传。请确保 root 或 Shizuku 在 Luwi 上正常运行, 否则同步会失败。')),
@@ -1216,8 +1206,8 @@ window.__ModuleLoader__.load({
 							type: 'button',
 							className: 'luwi-sync-btn',
 							'data-primary': '1',
-							disabled: !writesAllowed || busy || !hasRemote || !signedIn,
-							title: !signedIn ? t('生成配对码前要先登录') : (hasRemote ? undefined : t('先保存仓库地址')),
+							disabled: !writesAllowed || busy || !hasRemote,
+							title: hasRemote ? undefined : t('先保存仓库地址'),
 							onClick: () => void call('pair', 'sessions'),
 						}, busy ? t('生成中') : t('生成配对码'))),
 					pair === null ? null : h('div', { className: 'luwi-sync-pair' },
